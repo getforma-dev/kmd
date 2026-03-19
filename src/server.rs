@@ -39,6 +39,7 @@ pub fn build_router(state: AppState) -> Router {
         // Port routes
         .route("/api/ports", get(api_ports_handler))
         .route("/api/ports/scan", post(api_ports_scan_handler))
+        .route("/api/ports/hidden", get(api_ports_hidden_get).post(api_ports_hidden_set))
         .route("/api/ports/{port}/kill", post(api_port_kill_handler));
 
     Router::new()
@@ -321,13 +322,64 @@ async fn api_ports_scan_handler(State(state): State<AppState>) -> impl IntoRespo
 }
 
 /// `POST /api/ports/:port/kill` — Kill the process listening on a port.
+/// Returns { ok: true, confirmed: true } if verified dead,
+/// { ok: true, confirmed: false } if SIGTERM sent but process may linger,
+/// or { error: "..." } on failure.
 async fn api_port_kill_handler(Path(port): Path<u16>) -> impl IntoResponse {
     match ports::kill_port(port).await {
-        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(confirmed) => Json(serde_json::json!({
+            "ok": true,
+            "confirmed": confirmed,
+        }))
+        .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": err })),
         )
             .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hidden ports persistence (.kmd/ports.json)
+// ---------------------------------------------------------------------------
+
+fn ports_json_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(".kmd/ports.json")
+}
+
+fn read_hidden_ports() -> Vec<u16> {
+    let path = ports_json_path();
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn write_hidden_ports(hidden: &[u16]) {
+    let path = ports_json_path();
+    if let Ok(json) = serde_json::to_string_pretty(hidden) {
+        let _ = std::fs::write(&path, format!("{json}\n"));
+    }
+}
+
+/// `GET /api/ports/hidden` — Return the list of hidden port numbers.
+async fn api_ports_hidden_get() -> impl IntoResponse {
+    let hidden = read_hidden_ports();
+    Json(serde_json::json!({ "hidden": hidden }))
+}
+
+/// `POST /api/ports/hidden` — Set the hidden ports list.
+/// Body: { "hidden": [5433, 5434] }
+async fn api_ports_hidden_set(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    if let Some(arr) = body.get("hidden").and_then(|v| v.as_array()) {
+        let hidden: Vec<u16> = arr
+            .iter()
+            .filter_map(|v| v.as_u64().map(|n| n as u16))
+            .collect();
+        write_hidden_ports(&hidden);
+        Json(serde_json::json!({ "ok": true, "hidden": hidden }))
+    } else {
+        Json(serde_json::json!({ "error": "Expected { hidden: [port, ...] }" }))
     }
 }

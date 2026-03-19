@@ -43,8 +43,10 @@ pub struct PortInfo {
     pub process_name: Option<String>,
     /// Full command line (e.g. "node ./node_modules/.bin/vite --port 5173")
     pub command: Option<String>,
-    /// Seconds since this port was first seen active (across scan cycles)
+    /// Seconds since the process actually started (from OS, not from when kmd noticed it)
     pub uptime_secs: Option<u64>,
+    /// Auto-detected category: "dev", "infra", "tool"
+    pub category: Option<String>,
 }
 
 /// Axum handler: upgrade an HTTP request to a WebSocket connection.

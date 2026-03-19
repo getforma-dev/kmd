@@ -1,4 +1,4 @@
-import { h, createSignal, createEffect, createShow, onCleanup } from '@getforma/core';
+import { h, createSignal, createEffect, onCleanup } from '@getforma/core';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -11,6 +11,7 @@ interface PortInfo {
   process_name: string | null;
   command: string | null;
   uptime_secs: number | null;
+  category: string | null;
 }
 
 interface WSMessage {
@@ -27,11 +28,31 @@ interface WSMessage {
 function formatUptime(secs: number | null): string {
   if (secs == null || secs < 0) return '';
   if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-  const h = Math.floor(secs / 3600);
+  if (secs < 3600) {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  }
+  const hrs = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
-  return `${h}h ${m}m`;
+  return m > 0 ? `${hrs}h ${m}m` : `${hrs}h`;
 }
+
+const CATEGORY_LABELS: Record<string, string> = {
+  dev: 'Dev Servers',
+  infra: 'Infrastructure',
+  tool: 'Tools',
+  system: 'System',
+};
+
+const CATEGORY_COLORS: Record<string, string> = {
+  dev: 'var(--accent, var(--gruvbox-yellow))',
+  infra: 'var(--gruvbox-blue, #83a598)',
+  tool: 'var(--gruvbox-gray, #928374)',
+  system: 'var(--gruvbox-gray, #665c54)',
+};
+
+const CATEGORY_ORDER = ['dev', 'infra', 'tool', 'system'];
 
 // ---------------------------------------------------------------------------
 // PortsPage
@@ -39,9 +60,16 @@ function formatUptime(secs: number | null): string {
 
 export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void) }) {
   const [ports, setPorts] = createSignal<PortInfo[]>([]);
+  const [hiddenPorts, setHiddenPorts] = createSignal<number[]>([]);
   const [killingPort, setKillingPort] = createSignal<number | null>(null);
-  const [showAll, setShowAll] = createSignal(false);
+  const [killResult, setKillResult] = createSignal<{ port: number; success: boolean; error?: string } | null>(null);
+  const [showHidden, setShowHidden] = createSignal(false);
+  const [showSystem, setShowSystem] = createSignal(false);
   const [scanning, setScanning] = createSignal(false);
+
+  // -------------------------------------------------------------------------
+  // WS + initial fetch
+  // -------------------------------------------------------------------------
 
   function handleWsMessage(msg: WSMessage) {
     if (msg.type === 'ports' && msg.data && Array.isArray(msg.data.ports)) {
@@ -56,28 +84,18 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
 
   fetch('/api/ports')
     .then((r) => r.json())
-    .then((data: { ports: PortInfo[] }) => {
-      setPorts(data.ports);
-    })
-    .catch((err) => {
-      console.error('[kmd] Failed to fetch ports:', err);
-    });
+    .then((data: { ports: PortInfo[] }) => setPorts(data.ports))
+    .catch((err) => console.error('[kmd] Failed to fetch ports:', err));
 
-  function killPort(port: number) {
-    setKillingPort(port);
-    fetch(`/api/ports/${port}/kill`, { method: 'POST' })
-      .then((r) => r.json())
-      .then((data: { ok?: boolean; error?: string }) => {
-        if (data.error) {
-          console.error('[kmd] Failed to kill port:', data.error);
-        }
-        setKillingPort(null);
-      })
-      .catch((err) => {
-        console.error('[kmd] Failed to kill port:', err);
-        setKillingPort(null);
-      });
-  }
+  // Load hidden ports
+  fetch('/api/ports/hidden')
+    .then((r) => r.json())
+    .then((data: { hidden: number[] }) => setHiddenPorts(data.hidden || []))
+    .catch(() => {});
+
+  // -------------------------------------------------------------------------
+  // Actions
+  // -------------------------------------------------------------------------
 
   function scanNow() {
     setScanning(true);
@@ -87,152 +105,296 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
         setPorts(data.ports);
         setScanning(false);
       })
+      .catch(() => setScanning(false));
+  }
+
+  function killPort(port: number) {
+    setKillingPort(port);
+    setKillResult(null);
+    fetch(`/api/ports/${port}/kill`, { method: 'POST' })
+      .then((r) => r.json())
+      .then((data: { ok?: boolean; confirmed?: boolean; error?: string }) => {
+        setKillingPort(null);
+        if (data.error) {
+          setKillResult({ port, success: false, error: data.error });
+        } else if (data.confirmed) {
+          setKillResult({ port, success: true });
+          // Refresh ports after successful kill
+          setTimeout(() => scanNow(), 500);
+          // Clear success message after 3s
+          setTimeout(() => {
+            if (killResult()?.port === port) setKillResult(null);
+          }, 3000);
+        } else {
+          setKillResult({ port, success: false, error: 'Process did not respond to kill signal' });
+        }
+      })
       .catch((err) => {
-        console.error('[kmd] Scan failed:', err);
-        setScanning(false);
+        setKillingPort(null);
+        setKillResult({ port, success: false, error: String(err) });
       });
   }
 
+  function hidePort(port: number) {
+    const updated = [...hiddenPorts(), port];
+    setHiddenPorts(updated);
+    fetch('/api/ports/hidden', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden: updated }),
+    }).catch(() => {});
+  }
+
+  function unhidePort(port: number) {
+    const updated = hiddenPorts().filter((p) => p !== port);
+    setHiddenPorts(updated);
+    fetch('/api/ports/hidden', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden: updated }),
+    }).catch(() => {});
+  }
+
   // -------------------------------------------------------------------------
-  // Active ports section (cards)
+  // Render containers
   // -------------------------------------------------------------------------
 
-  const activeContainer = document.createElement('div');
-  activeContainer.style.cssText = 'display: flex; flex-direction: column; gap: 8px;';
-
-  // -------------------------------------------------------------------------
-  // Inactive ports section (compact list)
-  // -------------------------------------------------------------------------
-
-  const inactiveContainer = document.createElement('div');
-  inactiveContainer.style.cssText = 'display: flex; flex-wrap: wrap; gap: 8px; padding-top: 8px;';
-
-  // -------------------------------------------------------------------------
-  // Reactive rendering
-  // -------------------------------------------------------------------------
+  const mainContainer = document.createElement('div');
+  const hiddenContainer = document.createElement('div');
+  hiddenContainer.style.cssText = 'margin-top: 12px;';
 
   createEffect(() => {
     const portList = ports();
+    const hidden = hiddenPorts();
     const killing = killingPort();
-    const showInactive = showAll();
+    const result = killResult();
+    const showHid = showHidden();
 
-    const active = portList.filter((p) => p.active);
-    const inactive = portList.filter((p) => !p.active);
+    const showSys = showSystem();
+    const visible = portList.filter((p) => !hidden.includes(p.port));
+    const hiddenList = portList.filter((p) => hidden.includes(p.port));
 
-    // --- Active port cards ---
-    activeContainer.innerHTML = '';
+    // Group visible ports by category
+    const groups: Record<string, PortInfo[]> = {};
+    for (const p of visible) {
+      const cat = p.category || 'dev';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(p);
+    }
 
-    if (active.length === 0) {
+    mainContainer.innerHTML = '';
+
+    if (visible.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'color: var(--gruvbox-gray); font-size: 13px; padding: 20px 0;';
       empty.textContent = 'No active ports detected';
-      activeContainer.appendChild(empty);
+      mainContainer.appendChild(empty);
     }
 
-    for (const p of active) {
-      const card = document.createElement('div');
-      card.style.cssText = `
-        background: var(--gruvbox-bg-soft);
-        border: 1px solid var(--gruvbox-border);
-        border-left: 3px solid var(--gruvbox-green);
-        border-radius: 4px;
-        padding: 12px 16px;
+    // Render each category group
+    for (const cat of CATEGORY_ORDER) {
+      const catPorts = groups[cat];
+      if (!catPorts || catPorts.length === 0) continue;
+
+      // System category: collapsed toggle
+      if (cat === 'system' && !showSys) {
+        const toggle = document.createElement('button');
+        toggle.className = 'btn btn-ghost';
+        toggle.style.cssText = 'font-size: 10px; padding: 3px 8px; margin-top: 8px;';
+        toggle.textContent = `Show ${catPorts.length} system port${catPorts.length === 1 ? '' : 's'}`;
+        toggle.onclick = () => setShowSystem(true);
+        mainContainer.appendChild(toggle);
+        continue;
+      }
+
+      const section = document.createElement('div');
+      section.style.cssText = 'margin-bottom: 16px;';
+
+      // Category header
+      const header = document.createElement('div');
+      header.style.cssText = `
+        font-family: var(--font-mono, var(--font-code));
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: ${CATEGORY_COLORS[cat] || 'var(--gruvbox-gray)'};
+        margin-bottom: 6px;
+        padding-left: 2px;
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 8px;
       `;
+      header.textContent = `${CATEGORY_LABELS[cat] || cat} · ${catPorts.length}`;
 
-      // Status dot
-      const dot = document.createElement('span');
-      dot.className = 'status-dot active';
-      card.appendChild(dot);
-
-      // Port info block
-      const info = document.createElement('div');
-      info.style.cssText = 'flex: 1; min-width: 0;';
-
-      // Port number as clickable link
-      const portLink = document.createElement('a');
-      portLink.href = `http://localhost:${p.port}`;
-      portLink.target = '_blank';
-      portLink.rel = 'noopener';
-      portLink.style.cssText = `
-        font-family: var(--font-mono, var(--font-code));
-        font-size: 15px;
-        font-weight: 600;
-        color: var(--accent, var(--gruvbox-yellow));
-        text-decoration: none;
-      `;
-      portLink.textContent = `:${p.port}`;
-      portLink.onmouseenter = () => { portLink.style.textDecoration = 'underline'; };
-      portLink.onmouseleave = () => { portLink.style.textDecoration = 'none'; };
-      info.appendChild(portLink);
-
-      // Process name + command line
-      if (p.process_name || p.command) {
-        const cmdLine = document.createElement('div');
-        cmdLine.style.cssText = 'font-size: 12px; color: var(--gruvbox-gray); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-        // Show command if available (more useful), fall back to process name
-        cmdLine.textContent = p.command || p.process_name || '';
-        cmdLine.title = p.command || p.process_name || '';
-        info.appendChild(cmdLine);
+      if (cat === 'system') {
+        const collapseBtn = document.createElement('button');
+        collapseBtn.className = 'btn btn-ghost';
+        collapseBtn.style.cssText = 'font-size: 9px; padding: 1px 6px;';
+        collapseBtn.textContent = 'collapse';
+        collapseBtn.onclick = () => setShowSystem(false);
+        header.appendChild(collapseBtn);
       }
 
-      card.appendChild(info);
+      section.appendChild(header);
 
-      // PID badge
-      if (p.pid != null) {
-        const pidBadge = document.createElement('span');
-        pidBadge.style.cssText = `
-          font-family: var(--font-mono, var(--font-code));
-          font-size: 10px;
-          color: var(--gruvbox-gray);
-          background: var(--gruvbox-bg-hard);
-          padding: 2px 6px;
-          border-radius: 2px;
-        `;
-        pidBadge.textContent = `PID ${p.pid}`;
-        card.appendChild(pidBadge);
-      }
+      // Port cards
+      const cards = document.createElement('div');
+      cards.style.cssText = 'display: flex; flex-direction: column; gap: 6px;';
 
-      // Uptime
-      if (p.uptime_secs != null && p.uptime_secs > 0) {
-        const uptime = document.createElement('span');
-        uptime.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); white-space: nowrap;';
-        uptime.textContent = formatUptime(p.uptime_secs);
-        card.appendChild(uptime);
-      }
-
-      // Kill button
-      const killBtn = document.createElement('button');
-      killBtn.className = 'btn btn-danger';
-      killBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; white-space: nowrap;';
-      killBtn.textContent = killing === p.port ? 'Killing…' : 'Kill';
-      killBtn.disabled = killing === p.port;
-      killBtn.onclick = () => killPort(p.port);
-      card.appendChild(killBtn);
-
-      activeContainer.appendChild(card);
-    }
-
-    // --- Inactive ports (compact pills) ---
-    inactiveContainer.innerHTML = '';
-
-    if (showInactive && inactive.length > 0) {
-      for (const p of inactive) {
-        const pill = document.createElement('span');
-        pill.style.cssText = `
-          font-family: var(--font-mono, var(--font-code));
-          font-size: 11px;
-          color: var(--gruvbox-gray);
+      for (const p of catPorts) {
+        const card = document.createElement('div');
+        const borderColor = cat === 'dev' ? 'var(--gruvbox-green)' : cat === 'infra' ? 'var(--gruvbox-blue, #83a598)' : 'var(--gruvbox-gray)';
+        card.style.cssText = `
           background: var(--gruvbox-bg-soft);
           border: 1px solid var(--gruvbox-border);
-          border-radius: 3px;
-          padding: 2px 8px;
-          opacity: 0.6;
+          border-left: 3px solid ${borderColor};
+          border-radius: 4px;
+          padding: 10px 14px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
         `;
-        pill.textContent = String(p.port);
-        inactiveContainer.appendChild(pill);
+
+        // Kill result feedback
+        if (result && result.port === p.port) {
+          if (result.success) {
+            card.style.opacity = '0.4';
+            card.style.transition = 'opacity 0.5s ease';
+          } else {
+            card.style.borderColor = 'var(--gruvbox-red)';
+          }
+        }
+
+        // Port link
+        const portLink = document.createElement('a');
+        portLink.href = `http://localhost:${p.port}`;
+        portLink.target = '_blank';
+        portLink.rel = 'noopener';
+        portLink.style.cssText = `
+          font-family: var(--font-mono, var(--font-code));
+          font-size: 14px;
+          font-weight: 600;
+          color: var(--accent, var(--gruvbox-yellow));
+          text-decoration: none;
+          min-width: 60px;
+        `;
+        portLink.textContent = `:${p.port}`;
+        portLink.onmouseenter = () => { portLink.style.textDecoration = 'underline'; };
+        portLink.onmouseleave = () => { portLink.style.textDecoration = 'none'; };
+        card.appendChild(portLink);
+
+        // Process info
+        const info = document.createElement('div');
+        info.style.cssText = 'flex: 1; min-width: 0;';
+
+        if (p.process_name) {
+          const name = document.createElement('div');
+          name.style.cssText = 'font-size: 13px; color: var(--gruvbox-fg);';
+          name.textContent = p.process_name;
+          info.appendChild(name);
+        }
+        if (p.command) {
+          const cmd = document.createElement('div');
+          cmd.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;';
+          cmd.textContent = p.command;
+          cmd.title = p.command;
+          info.appendChild(cmd);
+        }
+
+        // Error message for failed kill
+        if (result && result.port === p.port && !result.success && result.error) {
+          const err = document.createElement('div');
+          err.style.cssText = 'font-size: 11px; color: var(--gruvbox-red); margin-top: 2px;';
+          err.textContent = result.error;
+          info.appendChild(err);
+        }
+
+        card.appendChild(info);
+
+        // Uptime
+        if (p.uptime_secs != null && p.uptime_secs > 0) {
+          const uptime = document.createElement('span');
+          uptime.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); white-space: nowrap; font-family: var(--font-mono, var(--font-code));';
+          uptime.textContent = formatUptime(p.uptime_secs);
+          card.appendChild(uptime);
+        }
+
+        // PID
+        if (p.pid != null) {
+          const pidBadge = document.createElement('span');
+          pidBadge.style.cssText = 'font-family: var(--font-mono, var(--font-code)); font-size: 10px; color: var(--gruvbox-gray); background: var(--gruvbox-bg-hard); padding: 1px 5px; border-radius: 2px;';
+          pidBadge.textContent = String(p.pid);
+          card.appendChild(pidBadge);
+        }
+
+        // Action buttons
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display: flex; gap: 4px;';
+
+        // Hide button
+        const hideBtn = document.createElement('button');
+        hideBtn.className = 'btn btn-ghost';
+        hideBtn.style.cssText = 'padding: 2px 6px; font-size: 10px;';
+        hideBtn.textContent = 'Hide';
+        hideBtn.onclick = () => hidePort(p.port);
+        actions.appendChild(hideBtn);
+
+        // Kill button
+        const killBtn = document.createElement('button');
+        killBtn.className = 'btn btn-danger';
+        killBtn.style.cssText = 'padding: 2px 8px; font-size: 10px;';
+        killBtn.textContent = killing === p.port ? 'Killing…' : 'Kill';
+        killBtn.disabled = killing === p.port;
+        killBtn.onclick = () => killPort(p.port);
+        actions.appendChild(killBtn);
+
+        card.appendChild(actions);
+        cards.appendChild(card);
+      }
+
+      section.appendChild(cards);
+      mainContainer.appendChild(section);
+    }
+
+    // --- Hidden ports section ---
+    hiddenContainer.innerHTML = '';
+
+    if (hiddenList.length > 0) {
+      const toggle = document.createElement('button');
+      toggle.className = 'btn btn-ghost';
+      toggle.style.cssText = 'font-size: 10px; padding: 3px 8px; margin-bottom: 8px;';
+      toggle.textContent = showHid
+        ? `Hide ${hiddenList.length} hidden port${hiddenList.length === 1 ? '' : 's'}`
+        : `Show ${hiddenList.length} hidden port${hiddenList.length === 1 ? '' : 's'}`;
+      toggle.onclick = () => setShowHidden(!showHid);
+      hiddenContainer.appendChild(toggle);
+
+      if (showHid) {
+        const list = document.createElement('div');
+        list.style.cssText = 'display: flex; flex-wrap: wrap; gap: 6px;';
+
+        for (const p of hiddenList) {
+          const pill = document.createElement('span');
+          pill.style.cssText = `
+            font-family: var(--font-mono, var(--font-code));
+            font-size: 11px;
+            color: var(--gruvbox-gray);
+            background: var(--gruvbox-bg-soft);
+            border: 1px solid var(--gruvbox-border);
+            border-radius: 3px;
+            padding: 2px 8px;
+            cursor: pointer;
+            opacity: 0.6;
+          `;
+          pill.textContent = `:${p.port} ${p.process_name || ''}`.trim();
+          pill.title = `Click to unhide port ${p.port}`;
+          pill.onclick = () => unhidePort(p.port);
+          pill.onmouseenter = () => { pill.style.opacity = '1'; };
+          pill.onmouseleave = () => { pill.style.opacity = '0.6'; };
+          list.appendChild(pill);
+        }
+
+        hiddenContainer.appendChild(list);
       }
     }
   });
@@ -242,40 +404,21 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   // -------------------------------------------------------------------------
 
   return h('div', { style: 'padding: 0;' },
-    // Active ports section
-    h('div', { style: 'margin-bottom: 20px;' },
-      h('div', {
-        style: 'display: flex; align-items: center; gap: 12px; margin-bottom: 8px;',
-      },
-        h('span', {
-          style: 'font-family: var(--font-mono, var(--font-code)); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray);',
-        }, () => {
-          const active = ports().filter((p) => p.active);
-          return `Active · ${active.length}`;
-        }),
-        h('button', {
-          class: 'btn btn-ghost',
-          style: 'font-size: 10px; padding: 2px 8px;',
-          onClick: () => scanNow(),
-          disabled: () => scanning(),
-        }, () => scanning() ? 'Scanning…' : 'Scan now'),
-      ),
-      activeContainer,
-    ),
-
-    // Monitored ports toggle + list
-    h('div', null,
+    // Header with scan button
+    h('div', {
+      style: 'display: flex; align-items: center; gap: 12px; margin-bottom: 12px;',
+    },
       h('button', {
         class: 'btn btn-ghost',
-        style: 'font-size: 11px; padding: 4px 8px;',
-        onClick: () => setShowAll(!showAll()),
-      }, () => {
-        const inactive = ports().filter((p) => !p.active);
-        return showAll()
-          ? `Hide ${inactive.length} monitored ports`
-          : `Show ${inactive.length} monitored ports`;
-      }),
-      inactiveContainer,
+        style: 'font-size: 10px; padding: 3px 10px;',
+        onClick: () => scanNow(),
+        disabled: () => scanning(),
+      }, () => scanning() ? 'Scanning…' : 'Scan now'),
+      h('span', {
+        style: 'font-size: 11px; color: var(--gruvbox-gray);',
+      }, 'Auto-refreshes every 5s'),
     ),
+    mainContainer,
+    hiddenContainer,
   );
 }

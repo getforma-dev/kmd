@@ -292,8 +292,9 @@ test.describe('Port Monitor', () => {
       resp => resp.url().includes('/api/ports') && resp.status() === 200,
       { timeout: 5000 },
     );
-    // Should show at least one active port (kmd itself on 4444)
-    await expect(page.locator('.status-dot.active').first()).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(1000);
+    // Should show at least one active port link (kmd itself on 4444)
+    await expect(page.locator('a[href*="localhost"]').first()).toBeVisible({ timeout: 5000 });
   });
 
   test('ports API returns port 4444 with command and uptime', async ({ page }) => {

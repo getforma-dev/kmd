@@ -1,113 +1,154 @@
 //! Port monitoring service.
 //!
-//! Discovers ALL listening TCP ports on localhost (not a hardcoded list),
-//! identifies which processes own them, tracks uptime, and provides
-//! the ability to kill processes by port.
+//! Discovers ALL listening TCP ports on localhost via `lsof`,
+//! identifies processes, reads real uptime from the OS,
+//! auto-categorizes by process type, and supports kill with
+//! confirmation.
 
 use crate::ws::PortInfo;
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::Instant;
 
-/// Tracks when ports were first seen active (for uptime calculation).
-static PORT_FIRST_SEEN: Mutex<Option<HashMap<u16, Instant>>> = Mutex::new(None);
+/// Auto-categorize a port based on process name and command line.
+/// Returns: "dev", "infra", "tool", or "system".
+fn categorize(info: &PortInfo) -> &'static str {
+    let name = info.process_name.as_deref().unwrap_or("");
+    let cmd = info.command.as_deref().unwrap_or("");
+    let lower_name = name.to_lowercase();
+    let lower_cmd = cmd.to_lowercase();
 
-fn get_first_seen() -> std::sync::MutexGuard<'static, Option<HashMap<u16, Instant>>> {
-    PORT_FIRST_SEEN.lock().unwrap()
+    // Infrastructure: databases, message queues, caches
+    if lower_name.contains("postgres")
+        || lower_name.contains("mysql")
+        || lower_name.contains("mongod")
+        || lower_name.contains("redis")
+        || lower_name.contains("memcached")
+        || lower_name.contains("elasticsearch")
+        || lower_name.contains("kafka")
+        || lower_name.contains("rabbitmq")
+        || lower_name.contains("nats")
+        || lower_name.contains("docker")
+        || lower_name.contains("containerd")
+        || lower_name.contains("com.docker")
+        || lower_cmd.contains("docker")
+        || lower_cmd.contains("postgres")
+        || lower_cmd.contains("mysql")
+        || lower_cmd.contains("redis-server")
+        || lower_cmd.contains("mongod")
+    {
+        return "infra";
+    }
+
+    // Tools: kmd itself, dev utilities
+    if lower_name.contains("kmd")
+        || lower_cmd.contains("/kmd")
+        || lower_cmd.contains("kmd ")
+    {
+        return "tool";
+    }
+
+    // System / non-dev: OS services, desktop apps, IDE internals
+    if lower_cmd.starts_with("/system/")
+        || lower_cmd.starts_with("/usr/libexec/")
+        || lower_cmd.starts_with("/library/application support/")
+        || lower_name.contains("controlcenter")
+        || lower_name.contains("rapportd")
+        || lower_name.contains("sharingd")
+        || lower_name.contains("code helper")
+        || lower_name.contains("cursor helper")
+        || lower_name.contains("adobe")
+        || lower_name.contains("onedrive")
+        || lower_name.contains("dropbox")
+        || lower_name.contains("spotify")
+        || lower_name.contains("slack helper")
+        || lower_name.contains("chrome helper")
+        || lower_name.contains("lghub")
+        || lower_name.contains("razer")
+        || lower_name == "stable" // Warp terminal IPC
+    {
+        return "system";
+    }
+
+    // Dev servers: everything else (node, vite, cargo, python, go, etc.)
+    "dev"
 }
 
-/// Process names that are definitely not dev tools — filter these out.
-const SYSTEM_PROCESSES: &[&str] = &[
-    // macOS system services
-    "ControlCenter",
-    "rapportd",
-    "sharingd",
-    "AirPlayXPCHelper",
-    "WiFiAgent",
-    "bluetoothd",
-    "identityservicesd",
-    "com.apple.",
-    // IDE internal processes (not user-launched servers)
-    "Code Helper (Plugin)",
-    "Code Helper (Renderer)",
-    "Code Helper (GPU)",
-    "Code Helper",
-    "Cursor Helper",
-    // Cloud sync / desktop apps
-    "Adobe Desktop Service",
-    "AdobeResourceSynchronizer",
-    "Creative Cloud",
-    "OneDrive Sync Service",
-    "OneDriveStandaloneUpdater",
-    "Dropbox",
-    "Google Chrome Helper",
-    "Spotify Helper",
-    "Slack Helper",
-    // Peripherals
-    "lghub_agent",
-    "RazerGameManagerService",
-    // Terminal internals (Warp uses a port for IPC)
-    "stable", // Warp terminal
-];
-
-/// Check if a process looks like a system/non-dev service.
-fn is_system_process(info: &PortInfo) -> bool {
-    if let Some(name) = &info.process_name {
-        for sys in SYSTEM_PROCESSES {
-            if name.contains(sys) {
-                return true;
-            }
-        }
-    }
-    if let Some(cmd) = &info.command {
-        // Filter Apple system services
-        if cmd.starts_with("/System/") || cmd.starts_with("/usr/libexec/") {
-            return true;
-        }
-    }
-    false
-}
-
-/// Discover all listening TCP ports on localhost and return their info.
-///
-/// Uses `lsof -i TCP -sTCP:LISTEN -n -P` to find every listening port,
-/// enriches each with process name, command line, and uptime, then
-/// filters out known system services to reduce noise.
+/// Discover all listening TCP ports, enrich with real uptime + category.
 pub async fn scan_ports() -> Vec<PortInfo> {
     let raw = discover_all_listening_ports().await;
-    let now = Instant::now();
 
-    let mut first_seen = get_first_seen();
-    let map = first_seen.get_or_insert_with(HashMap::new);
-
-    let mut active_ports: std::collections::HashSet<u16> = std::collections::HashSet::new();
     let mut results: Vec<PortInfo> = Vec::new();
 
     for mut info in raw {
-        // Skip known system processes
-        if is_system_process(&info) {
-            continue;
+        // Real uptime from the OS
+        if let Some(pid) = info.pid {
+            info.uptime_secs = get_process_uptime(pid);
         }
 
-        active_ports.insert(info.port);
-        let started = map.entry(info.port).or_insert(now);
-        info.uptime_secs = Some(now.duration_since(*started).as_secs());
+        // Auto-categorize
+        info.category = Some(categorize(&info).to_string());
+
         results.push(info);
     }
 
-    // Remove ports that are no longer active from the uptime tracker
-    map.retain(|port, _| active_ports.contains(port));
-
-    // Sort by port number for stable display
     results.sort_by_key(|p| p.port);
     results
+}
+
+/// Get real process uptime by reading elapsed time from `ps -o etime=`.
+///
+/// Output format: "MM:SS", "HH:MM:SS", or "DD-HH:MM:SS".
+#[cfg(unix)]
+fn get_process_uptime(pid: u32) -> Option<u64> {
+    let output = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "etime="])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    parse_etime(&s)
+}
+
+/// Parse ps etime format: "MM:SS", "HH:MM:SS", or "DD-HH:MM:SS" → seconds.
+fn parse_etime(s: &str) -> Option<u64> {
+    let (days, rest) = if let Some((d, r)) = s.split_once('-') {
+        (d.parse::<u64>().ok()?, r)
+    } else {
+        (0, s)
+    };
+
+    let parts: Vec<&str> = rest.split(':').collect();
+    let secs = match parts.len() {
+        2 => {
+            // MM:SS
+            let m = parts[0].parse::<u64>().ok()?;
+            let s = parts[1].parse::<u64>().ok()?;
+            m * 60 + s
+        }
+        3 => {
+            // HH:MM:SS
+            let h = parts[0].parse::<u64>().ok()?;
+            let m = parts[1].parse::<u64>().ok()?;
+            let s = parts[2].parse::<u64>().ok()?;
+            h * 3600 + m * 60 + s
+        }
+        _ => return None,
+    };
+
+    Some(days * 86400 + secs)
+}
+
+#[cfg(not(unix))]
+fn get_process_uptime(_pid: u32) -> Option<u64> {
+    None
 }
 
 /// Parse `lsof` output to discover all listening TCP ports.
 #[cfg(unix)]
 async fn discover_all_listening_ports() -> Vec<PortInfo> {
-    // lsof -i TCP -sTCP:LISTEN -n -P gives us all TCP listeners
-    // -n = no hostname resolution, -P = no port name resolution (show numbers)
     let output = tokio::process::Command::new("lsof")
         .args(["-i", "TCP", "-sTCP:LISTEN", "-n", "-P", "-F", "pcn"])
         .output()
@@ -116,15 +157,11 @@ async fn discover_all_listening_ports() -> Vec<PortInfo> {
     let stdout = match output {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
         _ => {
-            // Fallback: if lsof fails, return empty
             tracing::warn!("lsof failed, port discovery unavailable");
             return Vec::new();
         }
     };
 
-    // Parse lsof -F output format:
-    // p<pid>\n  c<command>\n  n<address>\n  (repeating)
-    // Each entry starts with p (pid), then c (command name), then n (network address)
     let mut results: HashMap<u16, PortInfo> = HashMap::new();
     let mut current_pid: Option<u32> = None;
     let mut current_name: Option<String> = None;
@@ -145,16 +182,11 @@ async fn discover_all_listening_ports() -> Vec<PortInfo> {
                 current_name = Some(value.to_string());
             }
             b'n' => {
-                // value is like "127.0.0.1:3000" or "*:4444" or "[::1]:8080"
                 if let Some(port) = parse_port_from_address(value) {
-                    // Only include if not already seen (first entry wins — has the PID)
                     if !results.contains_key(&port) {
                         let pid = current_pid;
                         let process_name = current_name.clone();
-                        let command = match pid {
-                            Some(p) => get_process_command_sync(p),
-                            None => None,
-                        };
+                        let command = pid.and_then(get_process_command_sync);
 
                         results.insert(port, PortInfo {
                             port,
@@ -163,6 +195,7 @@ async fn discover_all_listening_ports() -> Vec<PortInfo> {
                             process_name,
                             command,
                             uptime_secs: None,
+                            category: None,
                         });
                     }
                 }
@@ -179,15 +212,11 @@ async fn discover_all_listening_ports() -> Vec<PortInfo> {
     Vec::new()
 }
 
-/// Extract port number from an lsof address string.
-/// Handles: "127.0.0.1:3000", "*:4444", "[::1]:8080", "localhost:5173"
 fn parse_port_from_address(addr: &str) -> Option<u16> {
-    // Port is always after the last ':'
     let port_str = addr.rsplit(':').next()?;
     port_str.parse::<u16>().ok()
 }
 
-/// Get the full command line for a PID synchronously (called during lsof parsing).
 #[cfg(unix)]
 fn get_process_command_sync(pid: u32) -> Option<String> {
     let output = std::process::Command::new("ps")
@@ -209,7 +238,6 @@ fn get_process_command_sync(pid: u32) -> Option<String> {
     }
 }
 
-/// Identify which process is listening on a specific port (used by kill_port).
 #[cfg(unix)]
 async fn identify_process(port: u16) -> Option<u32> {
     let output = tokio::process::Command::new("lsof")
@@ -229,25 +257,62 @@ async fn identify_process(port: u16) -> Option<u32> {
     }
 }
 
-/// Kill the process listening on a given port.
-pub async fn kill_port(port: u16) -> Result<(), String> {
+/// Kill a process on a port. Returns Ok(true) if confirmed dead,
+/// Ok(false) if SIGTERM sent but process may still be alive.
+pub async fn kill_port(port: u16) -> Result<bool, String> {
     #[cfg(unix)]
     {
         let pid = identify_process(port).await;
         match pid {
             Some(p) => {
+                // Send SIGTERM
                 let output = tokio::process::Command::new("kill")
                     .args(["-TERM", &p.to_string()])
                     .output()
                     .await
                     .map_err(|e| format!("Failed to run kill: {e}"))?;
 
-                if output.status.success() {
-                    tracing::info!("Sent SIGTERM to PID {p} on port {port}");
-                    Ok(())
-                } else {
+                if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    Err(format!("kill failed: {}", stderr.trim()))
+                    return Err(format!("kill failed: {}", stderr.trim()));
+                }
+
+                tracing::info!("Sent SIGTERM to PID {p} on port {port}");
+
+                // Wait up to 3 seconds to confirm the process actually died
+                for _ in 0..6 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    // Check if the process is still alive
+                    let check = tokio::process::Command::new("kill")
+                        .args(["-0", &p.to_string()])
+                        .output()
+                        .await;
+                    match check {
+                        Ok(out) if !out.status.success() => {
+                            // Process is gone
+                            return Ok(true);
+                        }
+                        _ => continue,
+                    }
+                }
+
+                // Still alive after 3s — try SIGKILL
+                tracing::warn!("PID {p} didn't die after SIGTERM, sending SIGKILL");
+                let _ = tokio::process::Command::new("kill")
+                    .args(["-KILL", &p.to_string()])
+                    .output()
+                    .await;
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                // Final check
+                let check = tokio::process::Command::new("kill")
+                    .args(["-0", &p.to_string()])
+                    .output()
+                    .await;
+                match check {
+                    Ok(out) if !out.status.success() => Ok(true),
+                    _ => Ok(false), // Still alive somehow
                 }
             }
             None => Err(format!("No process found listening on port {port}")),
