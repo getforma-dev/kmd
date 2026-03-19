@@ -49,13 +49,32 @@ export function TerminalPage() {
     for (const id of ids) {
       const idx = ids.indexOf(id) + 1;
       const isActive = id === active;
-      const tab = document.createElement('button');
-      tab.className = 'btn btn-ghost';
-      tab.style.cssText = `padding: 2px 8px; font-size: 11px; font-family: var(--font-mono); flex-shrink: 0; ${
+
+      const tab = document.createElement('div');
+      tab.style.cssText = `display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0;`;
+
+      const tabBtn = document.createElement('button');
+      tabBtn.className = 'btn btn-ghost';
+      tabBtn.style.cssText = `padding: 2px 8px; font-size: 11px; font-family: var(--font-mono); ${
         isActive ? 'border-color: var(--accent); color: var(--accent);' : ''
       }`;
-      tab.textContent = `${idx}`;
-      tab.addEventListener('click', () => switchToSession(id));
+      tabBtn.textContent = `${idx}`;
+      tabBtn.addEventListener('click', () => switchToSession(id));
+      tab.appendChild(tabBtn);
+
+      // Close button (X) on each tab
+      const closeBtn = document.createElement('button');
+      closeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 10px; padding: 0 2px; opacity: 0.5; line-height: 1;';
+      closeBtn.textContent = '×';
+      closeBtn.title = 'Close terminal';
+      closeBtn.onmouseenter = () => { closeBtn.style.opacity = '1'; closeBtn.style.color = 'var(--gruvbox-red)'; };
+      closeBtn.onmouseleave = () => { closeBtn.style.opacity = '0.5'; closeBtn.style.color = 'var(--gruvbox-gray)'; };
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        killSession(id);
+      });
+      tab.appendChild(closeBtn);
+
       tabBar.appendChild(tab);
     }
 
@@ -86,6 +105,36 @@ export function TerminalPage() {
         entry.fit.fit();
         entry.term.focus();
       });
+    }
+  }
+
+  function killSession(id: string) {
+    const entry = sessionMap.get(id);
+    if (!entry) return;
+
+    // Close WebSocket (this kills the PTY session on the server)
+    entry.ws.close();
+    entry.term.dispose();
+    window.removeEventListener('resize', entry.resizeHandler);
+
+    // Remove container from DOM
+    if (entry.container.parentElement) {
+      entry.container.parentElement.removeChild(entry.container);
+    }
+
+    sessionMap.delete(id);
+    setSessions((prev) => prev.filter((s) => s !== id));
+
+    // If this was the active session, switch to another or create new
+    if (activeSession() === id) {
+      const remaining = sessions();
+      if (remaining.length > 0) {
+        switchToSession(remaining[remaining.length - 1]);
+      } else {
+        setActiveSession(null);
+        // Auto-create a new session so there's always one
+        createSession();
+      }
     }
   }
 

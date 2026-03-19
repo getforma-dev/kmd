@@ -366,11 +366,16 @@ function App() {
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
       }),
     },
-    {
-      match: 'terminal' as Route,
-      render: () => TerminalPage(),
-    },
   ]);
+
+  // Terminal page is mounted OUTSIDE createSwitch so it survives tab switches.
+  // We show/hide it based on route instead of letting createSwitch destroy it.
+  const terminalPageEl = TerminalPage();
+  const terminalWrapper = h('div', {
+    style: () => route() === 'terminal'
+      ? 'flex: 1; display: flex; flex-direction: column; overflow: hidden;'
+      : 'display: none;',
+  }, terminalPageEl) as HTMLElement;
 
   // Hamburger icon (3 lines)
   function HamburgerButton() {
@@ -402,9 +407,13 @@ function App() {
           h('kbd', { class: 'kbd' }, () => isMac ? '\u2318K' : 'Ctrl+K'),
         ),
       ),
-      h('div', { class: 'main-content slide-in' },
+      h('div', {
+        class: 'main-content slide-in',
+        style: () => route() === 'terminal' ? 'display: none;' : '',
+      },
         pageContent,
       ),
+      terminalWrapper,
     ),
     // Command palette overlay
     createShow(
