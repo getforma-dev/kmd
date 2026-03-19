@@ -473,7 +473,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         countSpan.textContent = `${rec.count}`;
         pill.appendChild(countSpan);
 
-        pill.onclick = () => runScript(rec.root, rec.pkg, rec.script);
+        pill.onclick = () => runScriptDebounced(rec.root, rec.pkg, rec.script);
         pillRow.appendChild(pill);
       }
 
@@ -484,45 +484,140 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   }
 
   // -------------------------------------------------------------------------
-  // Package cards -- top section
+  // Package filter
+  // -------------------------------------------------------------------------
+  const [packageFilter, setPackageFilter] = createSignal('');
+
+  // Track which packages are expanded (by key "root:path")
+  const expandedPackages = new Set<string>();
+  const [expandVersion, setExpandVersion] = createSignal(0);
+
+  // Track running scripts to show state on buttons: "root:path:script" -> true
+  const runningScripts = new Set<string>();
+  const [runningVersion, setRunningVersion] = createSignal(0);
+
+  // Debounce: track last run time per script to prevent spam
+  const lastRunTime = new Map<string, number>();
+  const RUN_DEBOUNCE_MS = 2000;
+
+  function togglePackage(key: string) {
+    if (expandedPackages.has(key)) {
+      expandedPackages.delete(key);
+    } else {
+      expandedPackages.add(key);
+    }
+    setExpandVersion((v) => v + 1);
+  }
+
+  // Wrap runScript with debounce + running state
+  const originalRunScript = runScript;
+  function runScriptDebounced(root: string, packagePath: string, scriptName: string) {
+    const key = `${root}:${packagePath}:${scriptName}`;
+    const now = Date.now();
+    const last = lastRunTime.get(key) || 0;
+    if (now - last < RUN_DEBOUNCE_MS) return; // debounce
+    lastRunTime.set(key, now);
+    runningScripts.add(key);
+    setRunningVersion((v) => v + 1);
+    originalRunScript(root, packagePath, scriptName);
+    // Clear running state after debounce period
+    setTimeout(() => {
+      runningScripts.delete(key);
+      setRunningVersion((v) => v + 1);
+    }, RUN_DEBOUNCE_MS);
+  }
+
+  // -------------------------------------------------------------------------
+  // Package cards -- collapsible, filterable
   // -------------------------------------------------------------------------
 
   function PackageCard(pkg: PackageScripts, rootPath: string) {
-    return h('div', {
-      style: 'background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: var(--radius-lg); padding: var(--space-md); display: flex; flex-direction: column; gap: var(--space-sm);',
-    },
-      // Package name + path
-      h('div', { style: 'display: flex; align-items: baseline; gap: var(--space-sm);' },
-        h('span', {
-          style: 'font-weight: 600; font-size: 14px; color: var(--gruvbox-fg);',
-        }, pkg.name),
-        h('span', {
-          style: 'font-size: 11px; color: var(--gruvbox-gray); font-family: var(--font-code);',
-        }, pkg.path === '.' ? 'root' : pkg.path),
-      ),
-      // Script buttons
-      h('div', {
-        style: 'display: flex; flex-wrap: wrap; gap: var(--space-xs);',
-      },
-        ...pkg.scripts.map((script) =>
-          h('button', {
-            class: 'btn btn-ghost',
-            title: script.command,
-            onClick: () => runScript(rootPath, pkg.path, script.name),
-            style: 'font-family: var(--font-code); font-size: 12px; padding: 4px 8px;',
-          },
-            h('svg', {
-              viewBox: '0 0 24 24',
-              fill: 'currentColor',
-              style: 'width: 12px; height: 12px; opacity: 0.6;',
-            },
-              h('path', { d: 'M8 5v14l11-7L8 5z' }),
-            ),
-            script.name,
-          )
-        ),
-      ),
-    );
+    const pkgKey = `${rootPath}:${pkg.path}`;
+
+    const headerEl = document.createElement('div');
+    headerEl.style.cssText = `
+      display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+      cursor: pointer; user-select: none; border-radius: 4px;
+      background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border);
+    `;
+    headerEl.onmouseenter = () => { headerEl.style.background = 'var(--gruvbox-bg-hard)'; };
+    headerEl.onmouseleave = () => { headerEl.style.background = 'var(--gruvbox-bg-soft)'; };
+
+    // Chevron
+    const chevron = document.createElement('span');
+    chevron.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); transition: transform 0.15s ease; width: 12px; text-align: center;';
+
+    // Package name
+    const nameEl = document.createElement('span');
+    nameEl.style.cssText = 'font-weight: 600; font-size: 13px; color: var(--gruvbox-fg); flex: 1;';
+    nameEl.textContent = pkg.name;
+
+    // Path
+    const pathEl = document.createElement('span');
+    pathEl.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); font-family: var(--font-code);';
+    pathEl.textContent = pkg.path === '.' ? '' : pkg.path;
+
+    // Script count badge
+    const badge = document.createElement('span');
+    badge.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); font-family: var(--font-code); background: var(--gruvbox-bg-hard); padding: 1px 6px; border-radius: 2px;';
+    badge.textContent = `${pkg.scripts.length}`;
+
+    headerEl.appendChild(chevron);
+    headerEl.appendChild(nameEl);
+    if (pathEl.textContent) headerEl.appendChild(pathEl);
+    headerEl.appendChild(badge);
+
+    // Scripts container (expandable)
+    const scriptsEl = document.createElement('div');
+    scriptsEl.style.cssText = 'display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 8px 32px;';
+
+    for (const script of pkg.scripts) {
+      const scriptKey = `${rootPath}:${pkg.path}:${script.name}`;
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-ghost';
+      btn.title = script.command;
+      btn.style.cssText = 'font-family: var(--font-code); font-size: 12px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 4px;';
+
+      const icon = document.createElement('span');
+      icon.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" style="width:12px;height:12px;opacity:0.6"><path d="M8 5v14l11-7L8 5z"/></svg>';
+      btn.appendChild(icon.firstChild!);
+      btn.appendChild(document.createTextNode(script.name));
+
+      btn.onclick = () => runScriptDebounced(rootPath, pkg.path, script.name);
+      scriptsEl.appendChild(btn);
+    }
+
+    // Container
+    const card = document.createElement('div');
+
+    // Reactively update expand state + running buttons
+    createEffect(() => {
+      expandVersion(); // subscribe
+      runningVersion(); // subscribe
+      const isExpanded = expandedPackages.has(pkgKey);
+      chevron.textContent = isExpanded ? '▾' : '▸';
+      scriptsEl.style.display = isExpanded ? 'flex' : 'none';
+
+      // Update button states
+      for (const btn of scriptsEl.querySelectorAll('button') as NodeListOf<HTMLButtonElement>) {
+        const scriptName = btn.textContent?.trim() || '';
+        const key = `${rootPath}:${pkg.path}:${scriptName}`;
+        if (runningScripts.has(key)) {
+          btn.disabled = true;
+          btn.style.opacity = '0.5';
+        } else {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+        }
+      }
+    });
+
+    headerEl.onclick = () => togglePackage(pkgKey);
+
+    card.appendChild(headerEl);
+    card.appendChild(scriptsEl);
+
+    return card;
   }
 
   // -------------------------------------------------------------------------
@@ -814,44 +909,82 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       // Feature 7: Recents
       RecentsSection(),
 
+      // Package filter input
+      h('div', { style: 'margin-bottom: var(--space-sm);' },
+        h('input', {
+          class: 'search-input',
+          type: 'text',
+          placeholder: 'Filter packages...',
+          style: 'max-width: 280px; font-size: 12px; padding: 4px 8px;',
+          onInput: (e: Event) => setPackageFilter((e.target as HTMLInputElement).value),
+        }),
+      ),
+
       createShow(
         () => loading(),
         () => h('div', {
           style: 'color: var(--gruvbox-gray); font-size: 14px; padding: var(--space-md);',
         }, 'Discovering scripts...'),
-        () => createShow(
-          () => allPackages().length > 0,
-          () => {
-            // Single root: render flat grid (identical to old behavior)
-            // Multi-root: render grouped with root headers
-            if (!isMultiRoot()) {
-              const pkgs = allPackages();
-              return h('div', {
-                style: 'display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-md);',
-              },
-                ...pkgs.map((pkg) => PackageCard(pkg, rootScripts()[0].path)),
-              );
+        () => {
+          // Build the filtered package list imperatively so it reacts to filter signal
+          const pkgContainer = document.createElement('div');
+
+          createEffect(() => {
+            const filter = packageFilter().toLowerCase();
+            const roots = rootScripts();
+            const multiRoot = isMultiRoot();
+
+            pkgContainer.innerHTML = '';
+
+            for (const root of roots) {
+              const filtered = filter
+                ? root.packages.filter(
+                    (p) =>
+                      p.name.toLowerCase().includes(filter) ||
+                      p.path.toLowerCase().includes(filter) ||
+                      p.scripts.some((s) => s.name.toLowerCase().includes(filter))
+                  )
+                : root.packages;
+
+              if (filtered.length === 0) continue;
+
+              if (multiRoot) {
+                const header = document.createElement('div');
+                header.style.cssText = 'font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.1em; padding: 0 0 var(--space-sm) 0;';
+                header.textContent = root.name;
+                pkgContainer.appendChild(header);
+              }
+
+              const grid = document.createElement('div');
+              grid.style.cssText = 'display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px;';
+
+              for (const pkg of filtered) {
+                const card = PackageCard(pkg, root.path);
+                if (card instanceof Node) {
+                  grid.appendChild(card);
+                }
+              }
+
+              pkgContainer.appendChild(grid);
             }
 
-            // Multi-root: show root group headers
-            return h('div', {
-              style: 'display: flex; flex-direction: column; gap: var(--space-lg);',
-            },
-              ...rootScripts()
-                .filter((root) => root.packages.length > 0)
-                .map((root) =>
-                  h('div', null,
-                    RootHeader(root.name),
-                    h('div', {
-                      style: 'display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-md);',
-                    },
-                      ...root.packages.map((pkg) => PackageCard(pkg, root.path)),
-                    ),
-                  )
-                ),
-            );
-          },
-          () => h('div', {
+            if (pkgContainer.children.length === 0 && filter) {
+              const noMatch = document.createElement('div');
+              noMatch.style.cssText = 'color: var(--gruvbox-gray); font-size: 13px; padding: var(--space-md);';
+              noMatch.textContent = `No packages matching "${filter}"`;
+              pkgContainer.appendChild(noMatch);
+            }
+          });
+
+          return allPackages().length > 0
+            ? pkgContainer
+            : null;
+        },
+      ),
+
+      createShow(
+        () => !loading() && allPackages().length === 0,
+        () => h('div', {
             style: 'color: var(--gruvbox-gray); font-size: 13px; padding: var(--space-xl) var(--space-md); text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);',
           },
             h('svg', {
@@ -866,7 +999,6 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
               style: 'font-size: 11px; color: var(--gruvbox-disabled);',
             }, 'Run kmd from a project directory with a package.json'),
           ),
-        ),
       ),
     ),
 
