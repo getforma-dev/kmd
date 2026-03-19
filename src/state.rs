@@ -49,8 +49,6 @@ pub struct AppStateInner {
     pub broadcast_tx: broadcast::Sender<ServerMessage>,
     /// Map of running child processes keyed by a unique ID.
     pub processes: Mutex<HashMap<String, RunningProcess>>,
-    /// The project root directory (where .kmd/ lives).
-    pub project_root: PathBuf,
     /// Workspace name.
     pub workspace_name: String,
     /// Resolved workspace roots.
@@ -96,7 +94,6 @@ impl AppState {
                 db: Mutex::new(conn),
                 broadcast_tx,
                 processes: Mutex::new(HashMap::new()),
-                project_root,
                 workspace_name: ws_config.name,
                 roots,
             }),
@@ -116,11 +113,6 @@ impl AppState {
     /// Access the process map (locks the mutex).
     pub fn processes(&self) -> std::sync::MutexGuard<'_, HashMap<String, RunningProcess>> {
         self.inner.processes.lock().expect("Process mutex poisoned")
-    }
-
-    /// Get the project root path (where .kmd/ lives).
-    pub fn project_root(&self) -> &PathBuf {
-        &self.inner.project_root
     }
 
     /// Get the workspace name.

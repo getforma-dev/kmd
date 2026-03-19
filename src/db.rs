@@ -98,7 +98,9 @@ pub fn read_config(project_root: &Path) -> KmdConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KmdConfig {
+    /// Reserved for future use — multi-path include patterns.
     #[serde(default = "default_include")]
+    #[allow(dead_code)]
     pub include: Vec<String>,
     #[serde(default)]
     pub exclude: Vec<String>,
