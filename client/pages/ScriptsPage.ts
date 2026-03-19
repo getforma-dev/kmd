@@ -163,6 +163,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   // Store output lines per process: processId -> lines
   const processOutputMap = new Map<string, TerminalLine[]>();
 
+  // Track labels (scriptName) for processes so we always have a name, even after exit
+  const processLabelMap = new Map<string, string>();
+
   // Track process metadata for history
   const processMetaMap = new Map<string, { scriptName: string; packagePath: string; startTime: number }>();
 
@@ -271,7 +274,6 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       // Remove from active processes
       setActiveProcesses((procs) => {
         const updated = procs.filter((p) => p.id !== pid);
-        // Persist tab state (process finished, but keep its output visible)
         saveProcessTabs(updated, processOutputMap, selectedProcessId());
         return updated;
       });
@@ -280,6 +282,24 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       if (selectedProcessId() === pid && !viewingHistoryId()) {
         setOutputVersion((v) => v + 1);
       }
+
+      // Auto-remove the dead tab after 2s — it's in history now
+      setTimeout(() => {
+        // Only clean up if this process is no longer active
+        if (!activeProcesses().some((p) => p.id === pid)) {
+          processOutputMap.delete(pid);
+          processLabelMap.delete(pid);
+          // If this was the selected tab, deselect
+          if (selectedProcessId() === pid && !viewingHistoryId()) {
+            // Select the next available active process, or null
+            const remaining = activeProcesses();
+            setSelectedProcessId(remaining.length > 0 ? remaining[0].id : null);
+          }
+          setTabsVersion((v) => v + 1);
+          setOutputVersion((v) => v + 1);
+          saveProcessTabs(activeProcesses(), processOutputMap, selectedProcessId());
+        }
+      }, 2000);
     }
   }
 
@@ -352,8 +372,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
             { type: 'system', text: '' },
           ]);
 
-          // Track metadata for history
+          // Track metadata for history + label for tab display
           processMetaMap.set(pid, { scriptName, packagePath, startTime: Date.now() });
+          processLabelMap.set(pid, scriptName);
 
           // Add to active processes
           setActiveProcesses((procs) => [
@@ -519,10 +540,21 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       // Clear existing tabs
       tabsContainer.innerHTML = '';
 
-      // Build tabs for all processes with output
-      for (const [pid] of processOutputMap) {
+      // Build tabs only for active processes (dead processes go to history)
+      // Also show any process that still has output and is selected
+      const visiblePids = new Set<string>();
+      for (const proc of active) {
+        visiblePids.add(proc.id);
+      }
+      // Keep the selected tab visible even if the process just died
+      // (so the user can see the exit message before it moves to history)
+      if (selected && processOutputMap.has(selected)) {
+        visiblePids.add(selected);
+      }
+
+      for (const pid of visiblePids) {
         const proc = active.find((p) => p.id === pid);
-        const label = proc ? proc.scriptName : pid.slice(0, 8);
+        const label = proc ? proc.scriptName : (processLabelMap.get(pid) || pid.slice(0, 8));
         const isActive = !!proc;
         const isSelected = pid === selected && !historyId;
 
@@ -640,7 +672,22 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         setHistory([]);
         setViewingHistoryId(null);
         setShowHistory(false);
+        // Also clean up dead process tabs (only keep active ones)
+        const active = activeProcesses();
+        const activeIds = new Set(active.map((p) => p.id));
+        for (const pid of [...processOutputMap.keys()]) {
+          if (!activeIds.has(pid)) {
+            processOutputMap.delete(pid);
+            processLabelMap.delete(pid);
+          }
+        }
+        // Reset selection if the selected process was dead
+        if (selectedProcessId() && !activeIds.has(selectedProcessId()!)) {
+          setSelectedProcessId(active.length > 0 ? active[0].id : null);
+        }
+        setTabsVersion((v) => v + 1);
         setOutputVersion((v) => v + 1);
+        saveProcessTabs(active, processOutputMap, selectedProcessId());
       };
       titleRow.appendChild(clearBtn);
 
