@@ -308,7 +308,7 @@ export function TerminalPage() {
   return h(
     'div',
     {
-      style: 'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
+      style: 'display: flex; flex-direction: column; height: 100%; overflow: hidden;',
     },
     tabBar,
     terminalsParent,
