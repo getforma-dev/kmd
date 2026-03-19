@@ -97,7 +97,11 @@ function slugify(text: string): string {
 // DocsPage
 // ---------------------------------------------------------------------------
 
-export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void) }) {
+export function DocsPage(props?: {
+  onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void);
+  focusMode?: () => boolean;
+  setFocusMode?: (v: boolean) => void;
+}) {
   // State signals
   const [roots, setRoots] = createSignal<RootTreeData[]>([]);
   const [selectedPath, setSelectedPath] = createSignal('');
@@ -112,7 +116,11 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   const [docLoading, setDocLoading] = createSignal(false);
   const [tocEntries, setTocEntries] = createSignal<TocEntry[]>([]);
   const [activeTocId, setActiveTocId] = createSignal('');
-  const [focusMode, setFocusMode] = createSignal(false);
+
+  // Focus mode can be passed in from parent or created locally
+  const [focusMode, setFocusMode] = props?.focusMode
+    ? [props.focusMode, props.setFocusMode!]
+    : createSignal(false);
 
   // Debounce timer
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -661,16 +669,6 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   // Right panel: markdown content with breadcrumb and TOC
   // -------------------------------------------------------------------------
 
-  // Focus mode toggle button
-  function FocusModeToggle() {
-    return h('button', {
-      class: 'btn btn-ghost',
-      style: 'padding: 2px 6px; font-size: 10px; white-space: nowrap;',
-      onClick: () => setFocusMode(!focusMode()),
-      title: () => focusMode() ? 'Exit focus mode' : 'Focus mode — hide sidebars',
-    }, () => focusMode() ? 'Exit focus' : 'Focus');
-  }
-
   function RightPanel() {
     return h('div', { class: 'doc-content-area', style: 'flex: 1; overflow-y: auto; min-width: 0; display: flex;' },
       // Main content column
@@ -713,12 +711,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
                 }, 'Copy path'),
               ),
               () => h('div', null,
-                h('div', {
-                  style: 'display: flex; align-items: center; justify-content: space-between; padding: 4px 0; position: sticky; top: 0; z-index: 10; background: var(--gruvbox-bg); margin-bottom: 4px;',
-                },
-                  Breadcrumb(),
-                  FocusModeToggle(),
-                ),
+                Breadcrumb(),
                 h('div', {
                   class: 'markdown-body fade-in',
                   style: () => focusMode() ? 'max-width: 900px; margin: 0 auto;' : '',

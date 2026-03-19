@@ -139,10 +139,19 @@ function applyTheme(theme: string) {
 function App() {
   const [route, setRoute] = createSignal<Route>(parseRoute(location.hash));
   const [workspaceName, setWorkspaceName] = createSignal('K.md');
-  const [sidebarOpen, setSidebarOpen] = createSignal(true);
+  const [sidebarOpen, setSidebarOpen] = createSignal(localStorage.getItem('kmd:sidebar') !== 'closed');
   const [paletteOpen, setPaletteOpen] = createSignal(false);
   const [helpOpen, setHelpOpen] = createSignal(false);
+  const [focusMode, setFocusMode] = createSignal(localStorage.getItem('kmd:focusMode') === 'true');
   const [theme, setTheme] = createSignal(getInitialTheme());
+
+  // Persist sidebar and focus state
+  createEffect(() => {
+    localStorage.setItem('kmd:sidebar', sidebarOpen() ? 'open' : 'closed');
+  });
+  createEffect(() => {
+    localStorage.setItem('kmd:focusMode', focusMode() ? 'true' : 'false');
+  });
 
   // Apply initial theme
   applyTheme(theme());
@@ -332,6 +341,8 @@ function App() {
       match: 'docs' as Route,
       render: () => DocsPage({
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
+        focusMode,
+        setFocusMode,
       }),
     },
     {
@@ -369,6 +380,16 @@ function App() {
       h('div', { class: 'main-header' },
         HamburgerButton(),
         h('h1', null, () => PAGE_TITLES[route()]),
+        // Focus mode toggle — only visible on Docs page
+        createShow(
+          () => route() === 'docs',
+          () => h('button', {
+            class: 'btn btn-ghost',
+            style: 'padding: 2px 8px; font-size: 10px; margin-left: auto;',
+            onClick: () => setFocusMode(!focusMode()),
+          }, () => focusMode() ? 'Exit focus' : 'Focus'),
+          () => h('span', { style: 'margin-left: auto;' }),
+        ),
         h('button', {
           class: 'kbd-hints palette-trigger',
           onClick: () => setPaletteOpen(true),
