@@ -38,6 +38,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/processes/{id}/kill", post(api_process_kill_handler))
         // Port routes
         .route("/api/ports", get(api_ports_handler))
+        .route("/api/ports/scan", post(api_ports_scan_handler))
         .route("/api/ports/{port}/kill", post(api_port_kill_handler));
 
     Router::new()
@@ -304,6 +305,18 @@ async fn api_process_kill_handler(
 /// `GET /api/ports` — Scan common dev ports and return their status.
 async fn api_ports_handler() -> impl IntoResponse {
     let port_list = ports::scan_ports().await;
+    Json(serde_json::json!({ "ports": port_list }))
+}
+
+/// `POST /api/ports/scan` — Trigger an immediate port scan and broadcast results.
+async fn api_ports_scan_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let port_list = ports::scan_ports().await;
+    // Broadcast to all WS clients immediately
+    let _ = state
+        .broadcast_tx()
+        .send(crate::ws::ServerMessage::Ports {
+            ports: port_list.clone(),
+        });
     Json(serde_json::json!({ "ports": port_list }))
 }
 

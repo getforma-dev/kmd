@@ -41,6 +41,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   const [ports, setPorts] = createSignal<PortInfo[]>([]);
   const [killingPort, setKillingPort] = createSignal<number | null>(null);
   const [showAll, setShowAll] = createSignal(false);
+  const [scanning, setScanning] = createSignal(false);
 
   function handleWsMessage(msg: WSMessage) {
     if (msg.type === 'ports' && msg.data && Array.isArray(msg.data.ports)) {
@@ -75,6 +76,20 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
       .catch((err) => {
         console.error('[kmd] Failed to kill port:', err);
         setKillingPort(null);
+      });
+  }
+
+  function scanNow() {
+    setScanning(true);
+    fetch('/api/ports/scan', { method: 'POST' })
+      .then((r) => r.json())
+      .then((data: { ports: PortInfo[] }) => {
+        setPorts(data.ports);
+        setScanning(false);
+      })
+      .catch((err) => {
+        console.error('[kmd] Scan failed:', err);
+        setScanning(false);
       });
   }
 
@@ -230,11 +245,21 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
     // Active ports section
     h('div', { style: 'margin-bottom: 20px;' },
       h('div', {
-        style: 'font-family: var(--font-mono, var(--font-code)); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray); margin-bottom: 8px;',
-      }, () => {
-        const active = ports().filter((p) => p.active);
-        return `Active · ${active.length}`;
-      }),
+        style: 'display: flex; align-items: center; gap: 12px; margin-bottom: 8px;',
+      },
+        h('span', {
+          style: 'font-family: var(--font-mono, var(--font-code)); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray);',
+        }, () => {
+          const active = ports().filter((p) => p.active);
+          return `Active · ${active.length}`;
+        }),
+        h('button', {
+          class: 'btn btn-ghost',
+          style: 'font-size: 10px; padding: 2px 8px;',
+          onClick: () => scanNow(),
+          disabled: () => scanning(),
+        }, () => scanning() ? 'Scanning…' : 'Scan now'),
+      ),
       activeContainer,
     ),
 
