@@ -38,6 +38,7 @@ pub enum ServerMessage {
 #[derive(Debug, Clone, Serialize)]
 pub struct PortInfo {
     pub port: u16,
+    pub active: bool,
     pub pid: Option<u32>,
     pub process_name: Option<String>,
 }

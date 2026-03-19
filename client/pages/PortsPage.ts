@@ -6,6 +6,7 @@ import { h, createSignal, createEffect, onCleanup } from '@getforma/core';
 
 interface PortInfo {
   port: number;
+  active: boolean;
   pid: number | null;
   process_name: string | null;
 }
@@ -85,7 +86,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
     tbody.innerHTML = '';
 
     for (const p of portList) {
-      const isActive = p.pid !== null || p.process_name !== null;
+      const isActive = p.active;
 
       const tr = document.createElement('tr');
 

@@ -48,6 +48,7 @@ async fn probe_port(port: u16) -> PortInfo {
     if !is_open {
         return PortInfo {
             port,
+            active: false,
             pid: None,
             process_name: None,
         };
@@ -58,6 +59,7 @@ async fn probe_port(port: u16) -> PortInfo {
 
     PortInfo {
         port,
+        active: true,
         pid,
         process_name,
     }

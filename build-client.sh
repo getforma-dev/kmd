@@ -22,4 +22,8 @@ npx esbuild client/app.ts \
 cp client/index.html dist/client/index.html
 cp client/styles/dev.css dist/client/dev.css
 
+# Copy vendored libraries (mermaid.js for offline diagram rendering)
+mkdir -p dist/client/vendor
+cp client/vendor/mermaid.min.js dist/client/vendor/mermaid.min.js
+
 echo "Client build complete -> dist/client/"
