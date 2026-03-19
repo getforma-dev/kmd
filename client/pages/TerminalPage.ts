@@ -270,20 +270,29 @@ export function TerminalPage() {
     updateTabBar();
   });
 
-  // Fit active terminal when parent resizes
-  const resizeObserver = new ResizeObserver(() => {
-    const active = activeSession();
-    if (active) {
-      const entry = sessionMap.get(active);
-      if (entry) {
-        entry.fit.fit();
+  // Fit active terminal when parent resizes + create first session when visible
+  const resizeObserver = new ResizeObserver((entries) => {
+    const rect = entries[0]?.contentRect;
+    if (rect && rect.width > 0 && rect.height > 0) {
+      // Container is visible and has size
+      if (!firstSessionCreated) {
+        firstSessionCreated = true;
+        createSession();
+      }
+      const active = activeSession();
+      if (active) {
+        const entry = sessionMap.get(active);
+        if (entry) {
+          entry.fit.fit();
+        }
       }
     }
   });
   resizeObserver.observe(terminalsParent);
 
-  // Auto-create first session
-  createSession();
+  // Create first session only when the terminal tab becomes visible.
+  // We detect this via ResizeObserver — when the container goes from 0 to non-zero size.
+  let firstSessionCreated = false;
 
   // Cleanup
   onCleanup(() => {
