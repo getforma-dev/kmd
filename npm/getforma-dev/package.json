@@ -1,0 +1,32 @@
+{
+  "name": "@getforma/dev",
+  "version": "0.1.0",
+  "description": "Developer command center for the FormaStack ecosystem",
+  "license": "MIT",
+  "bin": {
+    "forma-dev": "bin/forma-dev.js"
+  },
+  "optionalDependencies": {
+    "@getforma/dev-darwin-arm64": "0.1.0",
+    "@getforma/dev-darwin-x64": "0.1.0",
+    "@getforma/dev-linux-x64": "0.1.0",
+    "@getforma/dev-win32-x64": "0.1.0"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin/"
+  ],
+  "keywords": [
+    "forma",
+    "formastack",
+    "developer-tools",
+    "markdown",
+    "monorepo"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nicholasgriffintn/getforma-dev"
+  }
+}

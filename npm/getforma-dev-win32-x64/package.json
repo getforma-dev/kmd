@@ -1,0 +1,10 @@
+{
+  "name": "@getforma/dev-win32-x64",
+  "version": "0.1.0",
+  "description": "forma-dev binary for Windows x64",
+  "license": "MIT",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["bin/"],
+  "preferUnpacked": true
+}

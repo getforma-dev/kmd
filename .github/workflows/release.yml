@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            npm-pkg: getforma-dev-darwin-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            npm-pkg: getforma-dev-darwin-x64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            npm-pkg: getforma-dev-linux-x64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            npm-pkg: getforma-dev-win32-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build client
+        working-directory: forma-dev
+        run: |
+          npm install
+          bash build-client.sh
+
+      - name: Build binary
+        working-directory: forma-dev
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p forma-dev/npm/${{ matrix.npm-pkg }}/bin
+          cp forma-dev/target/${{ matrix.target }}/release/forma-dev \
+             forma-dev/npm/${{ matrix.npm-pkg }}/bin/forma-dev
+          chmod +x forma-dev/npm/${{ matrix.npm-pkg }}/bin/forma-dev
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p forma-dev/npm/${{ matrix.npm-pkg }}/bin
+          cp forma-dev/target/${{ matrix.target }}/release/forma-dev.exe \
+             forma-dev/npm/${{ matrix.npm-pkg }}/bin/forma-dev.exe
+
+      - name: Publish platform package
+        working-directory: forma-dev/npm/${{ matrix.npm-pkg }}
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.npm-pkg }}
+          path: forma-dev/npm/${{ matrix.npm-pkg }}/bin/
+
+  publish-meta:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish meta package
+        working-directory: forma-dev/npm/getforma-dev
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

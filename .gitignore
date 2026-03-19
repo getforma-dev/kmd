@@ -1,0 +1,8 @@
+/target
+/node_modules
+/dist/client
+.forma-dev/
+*.db
+# Platform binary placeholders (only built in CI)
+npm/getforma-dev-*/bin/forma-dev
+npm/getforma-dev-*/bin/forma-dev.exe
