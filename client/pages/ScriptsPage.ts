@@ -91,6 +91,47 @@ interface HistoryEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Session persistence — survive page refresh
+// ---------------------------------------------------------------------------
+
+function saveHistory(entries: HistoryEntry[]) {
+  try {
+    sessionStorage.setItem('kmd:history', JSON.stringify(entries));
+  } catch { /* quota exceeded, ignore */ }
+}
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const raw = sessionStorage.getItem('kmd:history');
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveProcessTabs(procs: ActiveProcess[], outputMap: Map<string, TerminalLine[]>, selected: string | null) {
+  try {
+    const data = {
+      processes: procs,
+      selected,
+      output: Object.fromEntries(
+        procs.map(p => [p.id, outputMap.get(p.id) || []])
+      ),
+    };
+    sessionStorage.setItem('kmd:processTabs', JSON.stringify(data));
+  } catch { /* ignore */ }
+}
+
+function loadProcessTabs(): { processes: ActiveProcess[]; selected: string | null; output: Record<string, TerminalLine[]> } | null {
+  try {
+    const raw = sessionStorage.getItem('kmd:processTabs');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ScriptsPage
 // ---------------------------------------------------------------------------
 
@@ -102,8 +143,8 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   const [loading, setLoading] = createSignal(true);
   const [recentsVersion, setRecentsVersion] = createSignal(0);
 
-  // Feature 8: History state
-  const [history, setHistory] = createSignal<HistoryEntry[]>([]);
+  // Feature 8: History state — persisted in sessionStorage
+  const [history, setHistory] = createSignal<HistoryEntry[]>(loadHistory());
   const [viewingHistoryId, setViewingHistoryId] = createSignal<string | null>(null);
   const [showHistory, setShowHistory] = createSignal(false);
 
@@ -130,6 +171,27 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
 
   // Signal to trigger tabs re-render when process list changes
   const [tabsVersion, setTabsVersion] = createSignal(0);
+
+  // Persist history whenever it changes
+  createEffect(() => {
+    saveHistory(history());
+  });
+
+  // Restore process tabs from session storage on mount
+  const restored = loadProcessTabs();
+  if (restored && restored.processes.length > 0) {
+    // Re-populate output map and active processes from saved state
+    for (const proc of restored.processes) {
+      const lines = restored.output[proc.id] || [];
+      processOutputMap.set(proc.id, lines);
+    }
+    setActiveProcesses(restored.processes);
+    if (restored.selected) {
+      setSelectedProcessId(restored.selected);
+    }
+    setTabsVersion((v) => v + 1);
+    setOutputVersion((v) => v + 1);
+  }
 
   // Getter for current terminal lines
   const terminalLines = (): TerminalLine[] => {
@@ -207,7 +269,12 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       }
 
       // Remove from active processes
-      setActiveProcesses((procs) => procs.filter((p) => p.id !== pid));
+      setActiveProcesses((procs) => {
+        const updated = procs.filter((p) => p.id !== pid);
+        // Persist tab state (process finished, but keep its output visible)
+        saveProcessTabs(updated, processOutputMap, selectedProcessId());
+        return updated;
+      });
       setTabsVersion((v) => v + 1);
 
       if (selectedProcessId() === pid && !viewingHistoryId()) {
@@ -298,6 +365,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           setSelectedProcessId(pid);
           setOutputVersion((v) => v + 1);
           setTabsVersion((v) => v + 1);
+
+          // Persist new tab state
+          saveProcessTabs(activeProcesses(), processOutputMap, pid);
         }
       })
       .catch((err) => {
@@ -554,10 +624,27 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
 
       if (!show || hist.length === 0) return;
 
-      const title = document.createElement('div');
-      title.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--gruvbox-border);';
+      const titleRow = document.createElement('div');
+      titleRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--gruvbox-border);';
+
+      const title = document.createElement('span');
+      title.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;';
       title.textContent = 'Run History';
-      histPanel.appendChild(title);
+      titleRow.appendChild(title);
+
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'btn btn-ghost';
+      clearBtn.style.cssText = 'padding: 1px 6px; font-size: 10px;';
+      clearBtn.textContent = 'Clear';
+      clearBtn.onclick = () => {
+        setHistory([]);
+        setViewingHistoryId(null);
+        setShowHistory(false);
+        setOutputVersion((v) => v + 1);
+      };
+      titleRow.appendChild(clearBtn);
+
+      histPanel.appendChild(titleRow);
 
       const list = document.createElement('div');
       list.style.cssText = 'max-height: 120px; overflow-y: auto;';
