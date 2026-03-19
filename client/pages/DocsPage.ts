@@ -713,7 +713,9 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
                 }, 'Copy path'),
               ),
               () => h('div', null,
-                h('div', { style: 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;' },
+                h('div', {
+                  style: 'display: flex; align-items: center; justify-content: space-between; padding: 4px 0; position: sticky; top: 0; z-index: 10; background: var(--gruvbox-bg); margin-bottom: 4px;',
+                },
                   Breadcrumb(),
                   FocusModeToggle(),
                 ),
