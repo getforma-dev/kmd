@@ -157,6 +157,12 @@ function App() {
       // Non-critical, keep default
     });
 
+  // Bug 6 fix: Dynamically update window title with workspace name
+  createEffect(() => {
+    const name = workspaceName();
+    document.title = name && name !== 'K.md' ? `K.md \u2014 ${name}` : 'K.md';
+  });
+
   // -------------------------------------------------------------------------
   // Feature 1: Keyboard shortcuts
   // -------------------------------------------------------------------------

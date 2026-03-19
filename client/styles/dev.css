@@ -617,10 +617,49 @@ code, pre, kbd {
   margin: 1.5em 0;
 }
 
-/* Syntax highlighting (syntect classes) */
+/* Syntax highlighting (syntect ClassStyle::Spaced classes)
+ *
+ * Syntect's Spaced mode splits TextMate scope names into individual CSS classes.
+ * E.g. "keyword.control.rust" becomes class="keyword control rust".
+ * CSS class selectors like .keyword will match any element that has "keyword"
+ * among its classes, so these selectors work correctly.
+ *
+ * The selectors below cover the most common TextMate scope segments. */
+
+/* Keywords: keyword, keyword.control, keyword.operator, keyword.other */
 .markdown-body pre .keyword { color: var(--gruvbox-red); }
+
+/* Strings: string, string.quoted, string.template */
 .markdown-body pre .string { color: var(--gruvbox-green); }
+
+/* Comments: comment, comment.line, comment.block */
 .markdown-body pre .comment { color: var(--gruvbox-gray); font-style: italic; }
+
+/* Function/class names: entity.name.function, entity.name.class, entity.name.type */
+.markdown-body pre .entity { color: var(--gruvbox-aqua); }
+
+/* Numeric constants: constant.numeric, constant.language, constant.character */
+.markdown-body pre .constant { color: var(--gruvbox-purple); }
+
+/* Storage: storage.type (let, const, fn, var, class, struct), storage.modifier (pub, static) */
+.markdown-body pre .storage { color: var(--gruvbox-yellow); }
+
+/* Variables: variable, variable.parameter, variable.other */
+.markdown-body pre .variable { color: var(--gruvbox-blue); }
+
+/* Support: support.function, support.class, support.type (built-in library references) */
+.markdown-body pre .support { color: var(--gruvbox-aqua); }
+
+/* Meta: meta.function-call, meta.block — mostly structural, keep subtle */
+.markdown-body pre .meta { color: var(--gruvbox-orange); }
+
+/* Punctuation: punctuation.definition, punctuation.separator */
+.markdown-body pre .punctuation { color: var(--gruvbox-fg); }
+
+/* Operators as a class (some themes split keyword.operator into operator) */
+.markdown-body pre .operator { color: var(--gruvbox-red); }
+
+/* Legacy selectors (some syntect syntax defs may use these directly) */
 .markdown-body pre .function { color: var(--gruvbox-aqua); }
 .markdown-body pre .number { color: var(--gruvbox-purple); }
 .markdown-body pre .type { color: var(--gruvbox-yellow); }
@@ -642,12 +681,28 @@ code, pre, kbd {
   }
 }
 
+@keyframes loadingPulse {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
+}
+
 .fade-in {
   animation: fadeIn 0.2s ease-out;
 }
 
 .slide-in {
   animation: slideIn 0.2s ease-out;
+}
+
+/* Loading dots indicator (Bug 3) */
+.loading-dots::after {
+  content: '...';
+  display: inline-block;
+  letter-spacing: 2px;
+  animation: loadingPulse 1.4s ease-in-out infinite;
+  color: var(--gruvbox-gray);
+  font-size: 16px;
+  line-height: 1;
 }
 
 /* --- Page Stub / Placeholder --- */

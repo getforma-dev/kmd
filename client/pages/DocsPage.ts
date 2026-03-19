@@ -493,8 +493,20 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
             ),
           ),
           () => h('div', {
-            style: 'padding: var(--space-sm) var(--space-md); color: var(--gruvbox-gray); font-size: 13px;',
-          }, 'No results found.'),
+            style: 'padding: var(--space-lg) var(--space-md); color: var(--gruvbox-gray); font-size: 13px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);',
+          },
+            h('svg', {
+              viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5',
+              style: 'width: 28px; height: 28px; opacity: 0.4;',
+            },
+              h('circle', { cx: '11', cy: '11', r: '8' }),
+              h('path', { d: 'M21 21l-4.35-4.35' }),
+            ),
+            h('span', null, () => `No results for "${searchQuery()}"`),
+            h('span', {
+              style: 'font-size: 11px; color: var(--gruvbox-disabled);',
+            }, 'Try different keywords'),
+          ),
         ),
       ),
     );
@@ -505,6 +517,44 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   // -------------------------------------------------------------------------
 
   function LeftPanel() {
+    // Bug 1 fix: Reactive file tree container. We rebuild the tree whenever
+    // the roots signal changes (e.g. from WebSocket file_change events).
+    const treeContainer = document.createElement('div');
+
+    createEffect(() => {
+      const currentRoots = roots(); // subscribe to signal
+      const isLoading = loading();
+      treeContainer.innerHTML = '';
+
+      if (isLoading) {
+        const loadingEl = document.createElement('div');
+        loadingEl.style.cssText = 'padding: var(--space-md); color: var(--gruvbox-gray); font-size: 13px;';
+        loadingEl.textContent = 'Loading...';
+        treeContainer.appendChild(loadingEl);
+        return;
+      }
+
+      const hasAnyFiles = currentRoots.some((r) => r.children.length > 0);
+      if (!hasAnyFiles) {
+        // Bug 5 fix: improved empty state for docs
+        const emptyEl = document.createElement('div');
+        emptyEl.style.cssText = 'padding: var(--space-lg) var(--space-md); color: var(--gruvbox-gray); font-size: 13px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);';
+        emptyEl.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 32px; height: 32px; opacity: 0.4;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><span>No markdown files found</span><span style="font-size: 11px; color: var(--gruvbox-disabled);">Add .md files to your project to see them here</span>`;
+        treeContainer.appendChild(emptyEl);
+        return;
+      }
+
+      const treeEl = MultiRootFileTree({
+        roots: currentRoots,
+        selectedPath,
+        selectedRoot,
+        onSelect: handleFileSelect,
+      });
+      if (treeEl instanceof Node) {
+        treeContainer.appendChild(treeEl);
+      }
+    });
+
     return h('div', {
       style: 'width: 260px; min-width: 260px; border-right: 1px solid var(--gruvbox-border); display: flex; flex-direction: column; overflow: hidden; background: var(--gruvbox-bg-soft);',
     },
@@ -522,24 +572,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
         createShow(
           () => searchQuery().trim().length > 0,
           () => SearchResultsList(),
-          () => createShow(
-            () => loading(),
-            () => h('div', {
-              style: 'padding: var(--space-md); color: var(--gruvbox-gray); font-size: 13px;',
-            }, 'Loading...'),
-            () => createShow(
-              () => hasFiles(),
-              () => MultiRootFileTree({
-                roots: roots(),
-                selectedPath,
-                selectedRoot,
-                onSelect: handleFileSelect,
-              }),
-              () => h('div', {
-                style: 'padding: var(--space-md); color: var(--gruvbox-gray); font-size: 13px;',
-              }, 'No documentation files found.'),
-            ),
-          ),
+          () => treeContainer,
         ),
       ),
     );
@@ -637,8 +670,11 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
           () => createShow(
             () => docLoading(),
             () => h('div', {
-              style: 'color: var(--gruvbox-gray); font-size: 14px;',
-            }, 'Loading document...'),
+              style: 'display: flex; align-items: center; gap: var(--space-sm); color: var(--gruvbox-gray); font-size: 14px; padding: var(--space-md) 0;',
+            },
+              h('span', { class: 'loading-dots' }, ''),
+              'Loading document...',
+            ),
             () => createShow(
               () => isTruncated(),
               () => h('div', {

@@ -227,8 +227,8 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
 
     if (visible.length === 0) {
       const empty = document.createElement('div');
-      empty.style.cssText = 'color: var(--gruvbox-gray); font-size: 13px; padding: 20px 0;';
-      empty.textContent = 'No active ports detected';
+      empty.style.cssText = 'color: var(--gruvbox-gray); font-size: 13px; padding: var(--space-xl) var(--space-md); text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);';
+      empty.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width: 36px; height: 36px; opacity: 0.35;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg><span style="font-size: 14px;">No active dev ports</span><span style="font-size: 11px; color: var(--gruvbox-disabled);">Services will appear here when running</span>`;
       mainContainer.appendChild(empty);
     }
 

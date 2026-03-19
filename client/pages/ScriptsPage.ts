@@ -667,8 +667,20 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
             );
           },
           () => h('div', {
-            style: 'color: var(--gruvbox-gray); font-size: 14px; padding: var(--space-md); text-align: center;',
-          }, 'No package.json files with scripts found in this project.'),
+            style: 'color: var(--gruvbox-gray); font-size: 13px; padding: var(--space-xl) var(--space-md); text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);',
+          },
+            h('svg', {
+              viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5',
+              style: 'width: 36px; height: 36px; opacity: 0.35;',
+            },
+              h('polyline', { points: '4 17 10 11 4 5' }),
+              h('line', { x1: '12', y1: '19', x2: '20', y2: '19' }),
+            ),
+            h('span', { style: 'font-size: 14px;' }, 'No package.json files found'),
+            h('span', {
+              style: 'font-size: 11px; color: var(--gruvbox-disabled);',
+            }, 'Run kmd from a project directory with a package.json'),
+          ),
         ),
       ),
     ),
