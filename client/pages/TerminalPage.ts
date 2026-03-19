@@ -11,6 +11,7 @@ interface SessionEntry {
   term: Terminal;
   ws: WebSocket;
   fit: FitAddon;
+  container: HTMLDivElement; // each session has its own container
   resizeHandler: () => void;
 }
 
@@ -22,20 +23,18 @@ export function TerminalPage() {
   const [sessions, setSessions] = createSignal<string[]>([]);
   const [activeSession, setActiveSession] = createSignal<string | null>(null);
 
-  // Container where xterm.js renders
-  const terminalContainer = document.createElement('div');
-  terminalContainer.style.cssText = 'flex: 1; overflow: hidden;';
+  // Parent that holds all terminal containers (each session gets its own div)
+  const terminalsParent = document.createElement('div');
+  terminalsParent.style.cssText = 'flex: 1; position: relative; overflow: hidden;';
 
-  // Map of session ID -> session data
   const sessionMap = new Map<string, SessionEntry>();
 
-  // Tab bar element — we rebuild its contents reactively
+  // Tab bar
   const tabBar = document.createElement('div');
   tabBar.style.cssText =
     'flex-shrink: 0; display: flex; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--gruvbox-border); gap: 4px; overflow-x: auto;';
 
   function updateTabBar() {
-    // Preserve the + New button at the end
     tabBar.innerHTML = '';
 
     const label = document.createElement('span');
@@ -49,10 +48,11 @@ export function TerminalPage() {
 
     for (const id of ids) {
       const idx = ids.indexOf(id) + 1;
+      const isActive = id === active;
       const tab = document.createElement('button');
       tab.className = 'btn btn-ghost';
       tab.style.cssText = `padding: 2px 8px; font-size: 11px; font-family: var(--font-mono); flex-shrink: 0; ${
-        id === active ? 'border-color: var(--accent); color: var(--accent);' : ''
+        isActive ? 'border-color: var(--accent); color: var(--accent);' : ''
       }`;
       tab.textContent = `${idx}`;
       tab.addEventListener('click', () => switchToSession(id));
@@ -72,22 +72,19 @@ export function TerminalPage() {
     const active = activeSession();
     if (active === id) return;
 
-    // Hide the current terminal
-    if (active && sessionMap.has(active)) {
-      const prev = sessionMap.get(active)!;
-      prev.term.element?.parentElement?.removeChild(prev.term.element);
+    // Hide all terminal containers, show the active one
+    for (const [sid, entry] of sessionMap) {
+      entry.container.style.display = sid === id ? 'block' : 'none';
     }
 
     setActiveSession(id);
 
+    // Fit the newly visible terminal after layout settles
     const entry = sessionMap.get(id);
     if (entry) {
-      // xterm needs to be opened into a visible container
-      terminalContainer.innerHTML = '';
-      entry.term.open(terminalContainer);
-      // Schedule fit after the DOM has had a chance to lay out
       requestAnimationFrame(() => {
         entry.fit.fit();
+        entry.term.focus();
       });
     }
   }
@@ -130,13 +127,22 @@ export function TerminalPage() {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
 
-    // Use a temporary local ID until the server assigns one
     const localId = `term-${Date.now()}`;
-    let serverId: string | null = null;
+
+    // Create a dedicated container for this terminal session
+    const container = document.createElement('div');
+    container.style.cssText = 'position: absolute; inset: 0; display: none;';
+
+    // Hide all other containers
+    for (const [, entry] of sessionMap) {
+      entry.container.style.display = 'none';
+    }
+    container.style.display = 'block';
+
+    terminalsParent.appendChild(container);
 
     const resizeHandler = () => {
-      const sid = activeSession();
-      if (sid === localId || sid === serverId) {
+      if (activeSession() === localId) {
         fitAddon.fit();
       }
     };
@@ -146,14 +152,13 @@ export function TerminalPage() {
       setSessions((prev) => [...prev, localId]);
       setActiveSession(localId);
 
-      // Render terminal
-      terminalContainer.innerHTML = '';
-      term.open(terminalContainer);
+      // Open xterm into this session's dedicated container
+      term.open(container);
 
-      // Fit after layout settles
+      // Fit after layout
       requestAnimationFrame(() => {
         fitAddon.fit();
-        // Send initial size
+        term.focus();
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(
             JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
@@ -164,18 +169,14 @@ export function TerminalPage() {
 
     ws.onmessage = (e: MessageEvent) => {
       if (e.data instanceof ArrayBuffer) {
-        // Binary terminal output
         term.write(new Uint8Array(e.data));
       } else if (typeof e.data === 'string') {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.type === 'session_id' && msg.id) {
-            serverId = msg.id;
-          } else if (msg.type === 'error') {
+          if (msg.type === 'error') {
             term.write(`\r\n\x1b[31m[Error: ${msg.message}]\x1b[0m\r\n`);
           }
         } catch {
-          // Plain text terminal output
           term.write(e.data);
         }
       }
@@ -189,40 +190,38 @@ export function TerminalPage() {
       term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
     };
 
-    // Send keystrokes to the PTY
     term.onData((data: string) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(data);
       }
     });
 
-    // Handle terminal resize — send new dimensions to server
     term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', cols, rows }));
       }
     });
 
-    const entry: SessionEntry = {
+    sessionMap.set(localId, {
       id: localId,
       term,
       ws,
       fit: fitAddon,
+      container,
       resizeHandler,
-    };
-    sessionMap.set(localId, entry);
+    });
 
     return localId;
   }
 
-  // Watch for changes to update the tab bar
+  // Reactively update tab bar
   createEffect(() => {
     sessions();
     activeSession();
     updateTabBar();
   });
 
-  // Handle MutationObserver for container visibility to trigger fit
+  // Fit active terminal when parent resizes
   const resizeObserver = new ResizeObserver(() => {
     const active = activeSession();
     if (active) {
@@ -232,12 +231,12 @@ export function TerminalPage() {
       }
     }
   });
-  resizeObserver.observe(terminalContainer);
+  resizeObserver.observe(terminalsParent);
 
   // Auto-create first session
   createSession();
 
-  // Cleanup on unmount
+  // Cleanup
   onCleanup(() => {
     resizeObserver.disconnect();
     for (const [, entry] of sessionMap) {
@@ -251,10 +250,9 @@ export function TerminalPage() {
   return h(
     'div',
     {
-      style:
-        'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
+      style: 'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
     },
     tabBar,
-    terminalContainer
+    terminalsParent,
   );
 }
