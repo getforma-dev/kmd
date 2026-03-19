@@ -115,7 +115,7 @@ export function DocsPage(props?: {
   const [loading, setLoading] = createSignal(true);
   const [docLoading, setDocLoading] = createSignal(false);
   const [tocEntries, setTocEntries] = createSignal<TocEntry[]>([]);
-  const [activeTocId, setActiveTocId] = createSignal('');
+  const [activeTocId, setActiveTocId] = createSignal(sessionStorage.getItem('kmd:activeTocId') || '');
 
   // Focus mode can be passed in from parent or created locally
   const [focusMode, setFocusMode] = props?.focusMode
@@ -146,6 +146,13 @@ export function DocsPage(props?: {
     const root = selectedRoot();
     if (root) {
       localStorage.setItem('kmd:lastDocRoot', root);
+    }
+  });
+
+  createEffect(() => {
+    const tocId = activeTocId();
+    if (tocId) {
+      sessionStorage.setItem('kmd:activeTocId', tocId);
     }
   });
 
@@ -358,26 +365,34 @@ export function DocsPage(props?: {
 
       setTocEntries(entries);
 
-      // Set up intersection observer for active TOC tracking
+      // Track active heading via scroll position (simpler + more reliable than IntersectionObserver)
       if (entries.length >= 3) {
-        const contentEl = markdownBody.closest('.doc-content-area');
-        const observer = new IntersectionObserver(
-          (observerEntries) => {
-            for (const entry of observerEntries) {
-              if (entry.isIntersecting) {
-                setActiveTocId(entry.target.id);
-                break;
+        const scrollContainer = markdownBody.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
+        if (scrollContainer) {
+          const updateActiveHeading = () => {
+            const containerTop = scrollContainer.scrollTop;
+            let activeId = entries[0]?.id || '';
+
+            // Find the last heading that has scrolled past the top
+            for (const entry of entries) {
+              const el = document.getElementById(entry.id);
+              if (el) {
+                const offsetTop = el.offsetTop - scrollContainer.offsetTop;
+                if (offsetTop <= containerTop + 40) {
+                  activeId = entry.id;
+                } else {
+                  break;
+                }
               }
             }
-          },
-          { root: contentEl, rootMargin: '-10% 0px -80% 0px', threshold: 0 },
-        );
 
-        headings.forEach((heading) => {
-          if (heading.id) observer.observe(heading);
-        });
+            setActiveTocId(activeId);
+          };
 
-        // Clean up is handled by effect re-run (DOM gets replaced)
+          scrollContainer.addEventListener('scroll', updateActiveHeading, { passive: true });
+          // Run once to set initial state
+          updateActiveHeading();
+        }
       }
 
       // --- Feature 5: Add copy buttons to code blocks ---
@@ -651,7 +666,14 @@ export function DocsPage(props?: {
               e.preventDefault();
               const target = document.getElementById(entry.id);
               if (target) {
-                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                // Scroll the container so the heading is near the top with some padding
+                const scrollContainer = target.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
+                if (scrollContainer) {
+                  const offsetTop = target.offsetTop - scrollContainer.offsetTop;
+                  scrollContainer.scrollTo({ top: offsetTop - 16, behavior: 'smooth' });
+                } else {
+                  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
                 setActiveTocId(entry.id);
               }
             });
