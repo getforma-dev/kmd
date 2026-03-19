@@ -712,7 +712,7 @@ export function DocsPage(props?: {
               ),
               () => h('div', null,
                 h('div', {
-                  style: 'display: flex; align-items: center; position: sticky; top: 0; z-index: 10; padding: 6px 0; margin: -6px 0 6px 0; background: var(--gruvbox-bg); border-bottom: 1px solid var(--gruvbox-border);',
+                  style: 'display: flex; align-items: center; position: sticky; top: 0; z-index: 10; padding: 3px 0; margin: -16px 0 8px -24px; padding-left: 24px; padding-right: 0; width: calc(100% + 24px); background: var(--gruvbox-bg); border-bottom: 1px solid var(--gruvbox-border);',
                 },
                   h('div', { style: 'flex: 1; min-width: 0;' }, Breadcrumb()),
                   h('button', {
