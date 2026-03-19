@@ -166,6 +166,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   // Track labels (scriptName) for processes so we always have a name, even after exit
   const processLabelMap = new Map<string, string>();
 
+  // Track exit state for visual indicators: pid -> { code, duration }
+  const processExitMap = new Map<string, { code: number | null; durationSecs: number | null }>();
+
   // Track process metadata for history
   const processMetaMap = new Map<string, { scriptName: string; packagePath: string; startTime: number }>();
 
@@ -243,15 +246,27 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         processOutputMap.set(pid, []);
       }
       const code = data.code;
+
+      // Calculate duration
+      const meta = processMetaMap.get(pid);
+      const durationMs = meta ? Date.now() - meta.startTime : null;
+      const durationSecs = durationMs != null ? Math.round(durationMs / 1000) : null;
+      const durationStr = durationSecs != null
+        ? durationSecs < 60 ? `${durationSecs}s` : `${Math.floor(durationSecs / 60)}m ${durationSecs % 60}s`
+        : '';
+
+      // Store exit state for tab display
+      processExitMap.set(pid, { code: code ?? null, durationSecs });
+
+      // Better exit message with duration
       const exitLine: TerminalLine = code === 0
-        ? { type: 'success', text: 'Process exited with code 0' }
+        ? { type: 'success', text: durationStr ? `Completed successfully in ${durationStr}` : 'Completed successfully' }
         : code != null
-          ? { type: 'stderr', text: `Process exited with code ${code}` }
+          ? { type: 'stderr', text: durationStr ? `Failed with exit code ${code} after ${durationStr}` : `Failed with exit code ${code}` }
           : { type: 'system', text: 'Process terminated' };
       processOutputMap.get(pid)!.push(exitLine);
 
-      // Feature 8: Add to history
-      const meta = processMetaMap.get(pid);
+      // Add to history
       if (meta) {
         const historyEntry: HistoryEntry = {
           processId: pid,
@@ -264,7 +279,6 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
 
         setHistory((prev) => {
           const updated = [historyEntry, ...prev];
-          // Keep only last 10 entries (FIFO)
           return updated.slice(0, 10);
         });
 
@@ -283,7 +297,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         setOutputVersion((v) => v + 1);
       }
 
-      // Auto-remove the dead tab after 2s — it's in history now
+      // Auto-remove delay: longer for failures so you notice them
+      const autoCloseDelay = code === 0 ? 3000 : code != null ? 5000 : 2000;
+
       setTimeout(() => {
         // Only clean up if this process is no longer active
         if (!activeProcesses().some((p) => p.id === pid)) {
@@ -295,11 +311,12 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
             const remaining = activeProcesses();
             setSelectedProcessId(remaining.length > 0 ? remaining[0].id : null);
           }
+          processExitMap.delete(pid);
           setTabsVersion((v) => v + 1);
           setOutputVersion((v) => v + 1);
           saveProcessTabs(activeProcesses(), processOutputMap, selectedProcessId());
         }
-      }, 2000);
+      }, autoCloseDelay);
     }
   }
 
@@ -557,22 +574,55 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         const label = proc ? proc.scriptName : (processLabelMap.get(pid) || pid.slice(0, 8));
         const isActive = !!proc;
         const isSelected = pid === selected && !historyId;
+        const exitState = processExitMap.get(pid);
+
+        // Determine tab color based on state
+        let tabBg = isSelected ? 'rgba(215, 153, 33, 0.1)' : 'transparent';
+        let tabColor = isSelected ? 'var(--accent)' : 'var(--gruvbox-gray)';
+
+        if (!isActive && exitState) {
+          if (exitState.code === 0) {
+            tabBg = isSelected ? 'rgba(184, 187, 38, 0.1)' : 'rgba(184, 187, 38, 0.05)';
+            tabColor = 'var(--gruvbox-green)';
+          } else if (exitState.code != null) {
+            tabBg = isSelected ? 'rgba(251, 73, 52, 0.1)' : 'rgba(251, 73, 52, 0.05)';
+            tabColor = 'var(--gruvbox-red)';
+          }
+        }
 
         const tabEl = document.createElement('button');
         tabEl.style.cssText = `
           display: inline-flex; align-items: center; gap: 4px;
           padding: 3px 8px; border: none; border-radius: 4px;
           font-family: var(--font-code); font-size: 11px; cursor: pointer;
-          background: ${isSelected ? 'rgba(215, 153, 33, 0.1)' : 'transparent'};
-          color: ${isSelected ? 'var(--accent)' : 'var(--gruvbox-gray)'};
+          background: ${tabBg};
+          color: ${tabColor};
           white-space: nowrap;
+          transition: opacity 0.3s ease;
+          ${!isActive && exitState ? 'opacity: 0.8;' : ''}
         `;
 
+        // Status indicator
         if (isActive) {
+          // Running: green dot
           const dot = document.createElement('span');
           dot.className = 'status-dot active';
           dot.style.cssText = 'width: 6px; height: 6px;';
           tabEl.appendChild(dot);
+        } else if (exitState) {
+          const indicator = document.createElement('span');
+          indicator.style.cssText = 'font-size: 10px; line-height: 1;';
+          if (exitState.code === 0) {
+            indicator.textContent = '✓';
+            indicator.style.color = 'var(--gruvbox-green)';
+          } else if (exitState.code != null) {
+            indicator.textContent = '✗';
+            indicator.style.color = 'var(--gruvbox-red)';
+          } else {
+            indicator.textContent = '—';
+            indicator.style.color = 'var(--gruvbox-gray)';
+          }
+          tabEl.appendChild(indicator);
         }
 
         tabEl.appendChild(document.createTextNode(label));
@@ -679,6 +729,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           if (!activeIds.has(pid)) {
             processOutputMap.delete(pid);
             processLabelMap.delete(pid);
+            processExitMap.delete(pid);
           }
         }
         // Reset selection if the selected process was dead
