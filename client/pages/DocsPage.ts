@@ -670,9 +670,22 @@ export function DocsPage(props?: {
   // -------------------------------------------------------------------------
 
   function RightPanel() {
-    return h('div', { class: 'doc-content-area', style: 'flex: 1; overflow-y: auto; min-width: 0; display: flex;' },
-      // Main content column
-      h('div', { style: 'flex: 1; padding: var(--space-lg); min-width: 0; overflow-y: auto;' },
+    return h('div', { class: 'doc-content-area', style: 'flex: 1; min-width: 0; display: flex;' },
+      // Main content column — flex column: breadcrumb bar + scrollable content
+      h('div', { style: 'flex: 1; min-width: 0; display: flex; flex-direction: column;' },
+        // Breadcrumb bar — fixed at top, not inside scroll container
+        h('div', {
+          style: 'flex-shrink: 0; height: 28px; display: flex; align-items: center; padding: 0 var(--space-lg); border-bottom: 1px solid var(--gruvbox-border); background: var(--gruvbox-bg);',
+        },
+          h('div', { style: 'flex: 1; min-width: 0;' }, Breadcrumb()),
+          h('button', {
+            class: 'btn btn-ghost',
+            style: 'padding: 2px 10px; font-size: 10px; flex-shrink: 0;',
+            onClick: () => setFocusMode(!focusMode()),
+          }, () => focusMode() ? 'Exit focus' : 'Focus'),
+        ),
+        // Scrollable content area
+        h('div', { style: 'flex: 1; overflow-y: auto; padding: var(--space-lg);' },
         createShow(
           () => !selectedPath(),
           () => h('div', { class: 'page-stub' }, 'Select a document from the sidebar.'),
@@ -710,27 +723,16 @@ export function DocsPage(props?: {
                   onClick: () => copyPath(selectedPath()),
                 }, 'Copy path'),
               ),
-              () => h('div', null,
-                h('div', {
-                  style: 'display: flex; align-items: center; position: sticky; top: 0; z-index: 10; padding: 3px 0; margin: -16px 0 8px -24px; padding-left: 24px; padding-right: 0; width: calc(100% + 24px); background: var(--gruvbox-bg); border-bottom: 1px solid var(--gruvbox-border);',
-                },
-                  h('div', { style: 'flex: 1; min-width: 0;' }, Breadcrumb()),
-                  h('button', {
-                    class: 'btn btn-ghost',
-                    style: 'padding: 2px 10px; font-size: 10px; flex-shrink: 0;',
-                    onClick: () => setFocusMode(!focusMode()),
-                  }, () => focusMode() ? 'Exit focus' : 'Focus'),
-                ),
-                h('div', {
+              () => h('div', {
                   class: 'markdown-body fade-in',
                   style: () => focusMode() ? 'max-width: 900px; margin: 0 auto;' : '',
                   dangerouslySetInnerHTML: () => ({ __html: docHtml() }),
                 }),
-              ),
             ),
           ),
         ),
-      ),
+        ), // close scrollable content div
+      ), // close flex column
       // TOC column
       TocSidebar(),
     );
