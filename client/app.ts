@@ -1,5 +1,6 @@
-import { createSignal, createEffect, createSwitch, mount, h, onCleanup } from '@getforma/core';
+import { createSignal, createEffect, createSwitch, createShow, mount, h, onCleanup } from '@getforma/core';
 import { Sidebar, type Route } from './components/Sidebar';
+import { CommandPalette } from './components/CommandPalette';
 import { DocsPage } from './pages/DocsPage';
 import { ScriptsPage } from './pages/ScriptsPage';
 import { PortsPage } from './pages/PortsPage';
@@ -113,6 +114,24 @@ interface WorkspaceInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Theme management
+// ---------------------------------------------------------------------------
+
+function getInitialTheme(): string {
+  const stored = localStorage.getItem('kmd:theme');
+  if (stored === 'light' || stored === 'dark') return stored;
+  return 'dark';
+}
+
+function applyTheme(theme: string) {
+  if (theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // App root
 // ---------------------------------------------------------------------------
 
@@ -120,6 +139,22 @@ function App() {
   const [route, setRoute] = createSignal<Route>(parseRoute(location.hash));
   const [workspaceName, setWorkspaceName] = createSignal('K.md');
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
+  const [paletteOpen, setPaletteOpen] = createSignal(false);
+  const [theme, setTheme] = createSignal(getInitialTheme());
+
+  // Apply initial theme
+  applyTheme(theme());
+
+  // Persist and apply theme changes
+  createEffect(() => {
+    const t = theme();
+    applyTheme(t);
+    localStorage.setItem('kmd:theme', t);
+  });
+
+  function toggleTheme() {
+    setTheme((t) => t === 'dark' ? 'light' : 'dark');
+  }
 
   // Listen to hash changes
   const onHashChange = () => setRoute(parseRoute(location.hash));
@@ -172,17 +207,10 @@ function App() {
   function handleGlobalKeydown(e: KeyboardEvent) {
     const mod = isMac ? e.metaKey : e.ctrlKey;
 
-    // Cmd+K / Ctrl+K — Focus search on DocsPage
+    // Cmd+K / Ctrl+K — Toggle command palette
     if (mod && e.key === 'k') {
       e.preventDefault();
-      if (route() !== 'docs') {
-        location.hash = '#docs';
-      }
-      // Use requestAnimationFrame to let the page render first if switching
-      requestAnimationFrame(() => {
-        const searchInput = document.querySelector('.search-input') as HTMLInputElement | null;
-        searchInput?.focus();
-      });
+      setPaletteOpen((open) => !open);
       return;
     }
 
@@ -207,8 +235,12 @@ function App() {
       return;
     }
 
-    // Escape — Clear and blur search
+    // Escape — close palette if open, otherwise clear search
     if (e.key === 'Escape') {
+      if (paletteOpen()) {
+        setPaletteOpen(false);
+        return;
+      }
       const searchInput = document.querySelector('.search-input') as HTMLInputElement | null;
       if (searchInput) {
         searchInput.value = '';
@@ -221,6 +253,56 @@ function App() {
 
   window.addEventListener('keydown', handleGlobalKeydown);
   onCleanup(() => window.removeEventListener('keydown', handleGlobalKeydown));
+
+  // -------------------------------------------------------------------------
+  // Command palette callbacks
+  // -------------------------------------------------------------------------
+
+  function handlePaletteNavigate(target: string) {
+    // Handle doc-specific navigation: "docs:root:path"
+    if (target.startsWith('docs:')) {
+      const parts = target.split(':');
+      // parts = ['docs', root, ...pathParts]
+      const root = parts[1];
+      const filePath = parts.slice(2).join(':');
+      location.hash = '#docs';
+      // Store in localStorage so DocsPage picks it up
+      if (filePath) {
+        localStorage.setItem('kmd:lastDoc', filePath);
+        localStorage.setItem('kmd:lastDocRoot', root);
+      }
+      // If we're already on docs, force a re-render by triggering hashchange
+      if (route() === 'docs') {
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
+      }
+    } else {
+      location.hash = `#${target}`;
+    }
+    setPaletteOpen(false);
+  }
+
+  function handlePaletteAction(action: string) {
+    switch (action) {
+      case 'toggle-sidebar':
+        setSidebarOpen((open) => !open);
+        break;
+      case 'toggle-theme':
+        toggleTheme();
+        break;
+      case 'scan-ports':
+        // Navigate to ports and trigger scan
+        location.hash = '#ports';
+        requestAnimationFrame(() => {
+          fetch('/api/ports/scan', { method: 'POST' }).catch(() => {});
+        });
+        break;
+      case 'refresh-docs':
+        // Navigate to docs and let it re-fetch
+        location.hash = '#docs';
+        break;
+    }
+    setPaletteOpen(false);
+  }
 
   // Page title headers
   const PAGE_TITLES: Record<Route, string> = {
@@ -267,19 +349,32 @@ function App() {
   }
 
   return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
-    Sidebar({ route, workspaceName }),
+    Sidebar({ route, workspaceName, theme, onToggleTheme: toggleTheme }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         HamburgerButton(),
         h('h1', null, () => PAGE_TITLES[route()]),
-        h('span', { class: 'kbd-hints' },
-          h('kbd', { class: 'kbd' }, () => isMac ? '⌘K' : 'Ctrl+K'),
-          ' search',
+        h('button', {
+          class: 'kbd-hints palette-trigger',
+          onClick: () => setPaletteOpen(true),
+          title: 'Open command palette',
+        },
+          h('kbd', { class: 'kbd' }, () => isMac ? '\u2318K' : 'Ctrl+K'),
         ),
       ),
       h('div', { class: 'main-content slide-in' },
         pageContent,
       ),
+    ),
+    // Command palette overlay (conditionally rendered)
+    createShow(
+      () => paletteOpen(),
+      () => CommandPalette({
+        onClose: () => setPaletteOpen(false),
+        onNavigate: handlePaletteNavigate,
+        onAction: handlePaletteAction,
+      }),
+      () => h('div', { style: 'display: none;' }),
     ),
   );
 }

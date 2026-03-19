@@ -50,6 +50,51 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
+
+  /* Terminal background (variable so light theme can override) */
+  --terminal-bg: #0d0d0d;
+
+  /* Hover overlays (theme-aware) */
+  --hover-overlay: rgba(255, 255, 255, 0.04);
+  --hover-overlay-subtle: rgba(255, 255, 255, 0.02);
+  --accent-overlay: rgba(215, 153, 33, 0.08);
+  --accent-overlay-strong: rgba(215, 153, 33, 0.1);
+}
+
+/* --- Gruvbox Light Theme Override --- */
+[data-theme="light"] {
+  --gruvbox-bg: #fbf1c7;
+  --gruvbox-bg-soft: #f2e5bc;
+  --gruvbox-bg-hard: #f9f5d7;
+  --gruvbox-fg: #3c3836;
+  --gruvbox-fg1: #504945;
+  --gruvbox-fg2: #665c54;
+  --gruvbox-gray: #928374;
+  --gruvbox-red: #cc241d;
+  --gruvbox-green: #98971a;
+  --gruvbox-yellow: #d79921;
+  --gruvbox-blue: #458588;
+  --gruvbox-purple: #b16286;
+  --gruvbox-aqua: #689d6a;
+  --gruvbox-orange: #d65d0e;
+  --gruvbox-border: #d5c4a1;
+  --gruvbox-border-subtle: #bdae93;
+  --gruvbox-disabled: #a89984;
+
+  /* Accent stays the same */
+  --accent: #d79921;
+  --accent-bright: #fabd2f;
+  --accent-deep: #b57614;
+  --accent-muted: #8f5e0a;
+
+  /* Terminal background for light mode */
+  --terminal-bg: #f9f5d7;
+
+  /* Hover overlays for light mode */
+  --hover-overlay: rgba(0, 0, 0, 0.04);
+  --hover-overlay-subtle: rgba(0, 0, 0, 0.02);
+  --accent-overlay: rgba(215, 153, 33, 0.1);
+  --accent-overlay-strong: rgba(215, 153, 33, 0.15);
 }
 
 /* --- Reset / Base --- */
@@ -182,13 +227,13 @@ code, pre, kbd {
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-overlay);
   text-decoration: none;
 }
 
 .nav-item.active {
   border-left-color: var(--accent);
-  background: rgba(215, 153, 33, 0.08);
+  background: var(--accent-overlay);
   color: var(--gruvbox-fg);
 }
 
@@ -234,7 +279,7 @@ code, pre, kbd {
 
 .hamburger-btn:hover {
   color: var(--gruvbox-fg);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-overlay);
 }
 
 /* --- Keyboard Shortcut Hints --- */
@@ -371,7 +416,7 @@ code, pre, kbd {
 }
 
 .btn-ghost:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-overlay);
   border-color: var(--gruvbox-gray);
 }
 
@@ -407,11 +452,11 @@ code, pre, kbd {
 }
 
 .file-tree-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-overlay);
 }
 
 .file-tree-item.selected {
-  background: rgba(215, 153, 33, 0.08);
+  background: var(--accent-overlay);
   color: var(--accent);
 }
 
@@ -460,7 +505,7 @@ code, pre, kbd {
 }
 
 .port-table tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--hover-overlay-subtle);
 }
 
 .port-table .port-num {
@@ -476,7 +521,7 @@ code, pre, kbd {
 
 /* --- Terminal / Output Panel --- */
 .terminal {
-  background: #0d0d0d;
+  background: var(--terminal-bg);
   border: 1px solid var(--gruvbox-border);
   border-radius: var(--radius-md);
   padding: var(--space-md);
@@ -874,7 +919,7 @@ code, pre, kbd {
 }
 
 .recent-pill:hover {
-  background: rgba(215, 153, 33, 0.08);
+  background: var(--accent-overlay);
   border-color: var(--accent-muted);
 }
 
@@ -888,6 +933,147 @@ code, pre, kbd {
 .doc-content-area {
   display: flex;
   overflow: hidden;
+}
+
+/* --- Sidebar Footer & Theme Toggle --- */
+.sidebar-footer {
+  padding: var(--space-sm) var(--space-md);
+  border-top: 1px solid var(--gruvbox-border);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.theme-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: 1px solid var(--gruvbox-border);
+  border-radius: var(--radius-sm);
+  color: var(--gruvbox-gray);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.theme-toggle-btn:hover {
+  color: var(--accent);
+  background: var(--hover-overlay);
+}
+
+/* --- Palette Trigger Button (in header) --- */
+.palette-trigger {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  transition: opacity 0.15s ease;
+}
+
+.palette-trigger:hover {
+  opacity: 1;
+}
+
+/* --- Command Palette --- */
+.cmd-palette-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+  animation: fadeIn 0.12s ease-out;
+}
+
+.cmd-palette-card {
+  width: 500px;
+  max-width: calc(100vw - 32px);
+  background: var(--gruvbox-bg-soft);
+  border: 1px solid var(--gruvbox-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: slideIn 0.12s ease-out;
+}
+
+.cmd-palette-input {
+  width: 100%;
+  padding: var(--space-md);
+  background: transparent;
+  border: none;
+  font-family: var(--font-code);
+  font-size: 16px;
+  color: var(--gruvbox-fg);
+  outline: none;
+}
+
+.cmd-palette-input::placeholder {
+  color: var(--gruvbox-gray);
+}
+
+.cmd-palette-divider {
+  height: 1px;
+  background: var(--gruvbox-border);
+}
+
+.cmd-palette-results {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--space-xs) 0;
+}
+
+.cmd-palette-category {
+  font-family: var(--font-code);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--gruvbox-gray);
+  padding: var(--space-sm) var(--space-md) var(--space-xs);
+}
+
+.cmd-palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  cursor: pointer;
+  transition: background 0.08s ease;
+}
+
+.cmd-palette-item:hover,
+.cmd-palette-item.selected {
+  background: var(--gruvbox-bg-hard);
+}
+
+.cmd-palette-item-label {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--gruvbox-fg);
+}
+
+.cmd-palette-item-secondary {
+  font-family: var(--font-code);
+  font-size: 12px;
+  color: var(--gruvbox-gray);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.cmd-palette-empty {
+  padding: var(--space-lg) var(--space-md);
+  text-align: center;
+  color: var(--gruvbox-gray);
+  font-size: 13px;
 }
 
 /* --- Responsive --- */
