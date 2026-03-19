@@ -112,6 +112,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   const [docLoading, setDocLoading] = createSignal(false);
   const [tocEntries, setTocEntries] = createSignal<TocEntry[]>([]);
   const [activeTocId, setActiveTocId] = createSignal('');
+  const [focusMode, setFocusMode] = createSignal(false);
 
   // Debounce timer
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -613,7 +614,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
 
   function TocSidebar() {
     return createShow(
-      () => tocEntries().length >= 3,
+      () => tocEntries().length >= 3 && !focusMode(),
       () => {
         const tocEl = document.createElement('nav');
         tocEl.className = 'toc';
@@ -660,6 +661,16 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   // Right panel: markdown content with breadcrumb and TOC
   // -------------------------------------------------------------------------
 
+  // Focus mode toggle button
+  function FocusModeToggle() {
+    return h('button', {
+      class: 'btn btn-ghost',
+      style: 'padding: 2px 6px; font-size: 10px; white-space: nowrap;',
+      onClick: () => setFocusMode(!focusMode()),
+      title: () => focusMode() ? 'Exit focus mode' : 'Focus mode — hide sidebars',
+    }, () => focusMode() ? 'Exit focus' : 'Focus');
+  }
+
   function RightPanel() {
     return h('div', { class: 'doc-content-area', style: 'flex: 1; overflow-y: auto; min-width: 0; display: flex;' },
       // Main content column
@@ -702,9 +713,13 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
                 }, 'Copy path'),
               ),
               () => h('div', null,
-                Breadcrumb(),
+                h('div', { style: 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;' },
+                  Breadcrumb(),
+                  FocusModeToggle(),
+                ),
                 h('div', {
                   class: 'markdown-body fade-in',
+                  style: () => focusMode() ? 'max-width: 900px; margin: 0 auto;' : '',
                   dangerouslySetInnerHTML: () => ({ __html: docHtml() }),
                 }),
               ),
@@ -721,10 +736,17 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   // Full layout
   // -------------------------------------------------------------------------
 
+  // Wrap LeftPanel in a container that hides in focus mode
+  const leftPanelEl = LeftPanel();
+
   return h('div', {
     style: 'display: flex; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
   },
-    LeftPanel(),
+    h('div', {
+      style: () => focusMode()
+        ? 'width: 0; min-width: 0; overflow: hidden; border: none;'
+        : 'display: contents;',
+    }, leftPanelEl),
     RightPanel(),
   );
 }
