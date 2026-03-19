@@ -17,6 +17,8 @@ pub struct ProcessInfo {
     pub script_name: String,
     /// When the process was started (seconds since UNIX epoch).
     pub started_at_secs: u64,
+    /// OS-level process ID (for port-process matching).
+    pub pid: Option<u32>,
 }
 
 /// A running child process with its metadata.

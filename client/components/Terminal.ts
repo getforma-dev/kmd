@@ -4,7 +4,6 @@ import { h, createEffect } from '@getforma/core';
 // ANSI escape code stripping
 // ---------------------------------------------------------------------------
 
-// Matches all ANSI escape sequences: CSI (ESC[...m), OSC, and other control sequences
 const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[=>]/g;
 
 function stripAnsi(text: string): string {
@@ -29,19 +28,27 @@ export interface TerminalProps {
 // ---------------------------------------------------------------------------
 
 export function Terminal(props: TerminalProps) {
-  // Build the terminal container
   const el = h('div', { class: 'terminal' }) as HTMLDivElement;
 
-  // Track last rendered line count to append only new lines
+  // Track what we've rendered to enable incremental append
   let renderedCount = 0;
+  let renderedIdentity: string | null = null; // identity of the current content source
 
   createEffect(() => {
     const allLines = props.lines();
 
-    // Lines were cleared or reset — full rebuild
-    if (allLines.length < renderedCount) {
+    // Determine identity from the first line — if it changes, this is a different
+    // process/source and we need a full rebuild (not an incremental append)
+    const identity = allLines.length > 0 ? allLines[0].text : null;
+
+    const needsFullRebuild =
+      identity !== renderedIdentity || // different process/source
+      allLines.length < renderedCount;  // lines were cleared
+
+    if (needsFullRebuild) {
       el.innerHTML = '';
       renderedCount = 0;
+      renderedIdentity = identity;
     }
 
     // Append only new lines

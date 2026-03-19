@@ -2,6 +2,7 @@
 //!
 //! Spawns child processes for npm scripts, captures stdout/stderr line-by-line,
 //! and broadcasts output to all connected WebSocket clients via the broadcast channel.
+//! Kills entire process groups to ensure child processes are cleaned up.
 
 use crate::state::{AppState, ProcessInfo, RunningProcess};
 use crate::ws::ServerMessage;
@@ -24,7 +25,6 @@ pub fn run_script(
     package_path: &str,
     script_name: &str,
 ) -> Result<String, String> {
-    // Find the workspace root by its relative_path key
     let workspace_root = state
         .roots()
         .iter()
@@ -56,15 +56,29 @@ pub fn run_script(
 
     let process_id = Uuid::new_v4().to_string();
 
-    let mut child = Command::new("npm")
-        .args(["run", script_name])
+    // Spawn in a new process group so we can kill the entire tree.
+    // On Unix, process_group(0) makes the child the leader of a new group.
+    let mut cmd = Command::new("npm");
+    cmd.args(["run", script_name])
         .current_dir(&cwd)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn process: {e}"))?;
+        .stderr(std::process::Stdio::piped());
 
-    // Take the piped handles before storing the child
+    // On Unix, put the child in its own process group so we can kill the entire
+    // tree (npm + node + vite, etc.) with a single killpg() call.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn process: {e}"))?;
+
+    // Capture the OS PID before taking stdout/stderr
+    let os_pid = child.id();
+
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
@@ -78,6 +92,7 @@ pub fn run_script(
         package_path: package_path.to_string(),
         script_name: script_name.to_string(),
         started_at_secs: now,
+        pid: os_pid,
     };
 
     // Store the running process
@@ -129,28 +144,24 @@ pub fn run_script(
         let state = state.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            // Small delay to ensure stdout/stderr tasks have started
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-            // Loop until the process exits, polling with a short interval.
             loop {
                 let status = {
                     let mut procs = state.processes();
                     if let Some(running) = procs.get_mut(&pid) {
                         match running.child.try_wait() {
                             Ok(Some(status)) => Some(status.code()),
-                            Ok(None) => None, // still running
-                            Err(_) => Some(None), // error getting status
+                            Ok(None) => None,
+                            Err(_) => Some(None),
                         }
                     } else {
-                        // Process was removed (killed), exit the loop
                         break;
                     }
                 };
 
                 match status {
                     Some(code) => {
-                        // Process exited, clean up and broadcast
                         {
                             let mut procs = state.processes();
                             procs.remove(&pid);
@@ -162,7 +173,6 @@ pub fn run_script(
                         break;
                     }
                     None => {
-                        // Still running, poll again
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }
                 }
@@ -173,18 +183,36 @@ pub fn run_script(
     Ok(process_id)
 }
 
-/// Kill a running process by its ID.
+/// Kill a running process and its entire process group.
 pub fn kill_process(state: &AppState, process_id: &str) -> Result<(), String> {
     let mut procs = state.processes();
-    if let Some(mut running) = procs.remove(process_id) {
-        // Send kill signal. On Unix this sends SIGKILL; for graceful shutdown
-        // we could use nix::sys::signal, but .start_kill() is cross-platform.
-        running
-            .child
-            .start_kill()
-            .map_err(|e| format!("Failed to kill process: {e}"))?;
+    if let Some(running) = procs.remove(process_id) {
+        let os_pid = running.meta.pid;
 
-        // Broadcast the exit event
+        // Kill the entire process group (npm + child processes like node/vite)
+        #[cfg(unix)]
+        if let Some(pid) = os_pid {
+            // Send SIGTERM to the entire process group (negative PID = process group)
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+            // Give it a moment, then SIGKILL if still alive
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            });
+        }
+
+        // Also kill the direct child as a fallback
+        #[cfg(not(unix))]
+        {
+            let mut child = running.child;
+            let _ = child.start_kill();
+        }
+
+        // Broadcast exit
         let tx = state.broadcast_tx();
         let _ = tx.send(ServerMessage::Exit {
             process_id: process_id.to_string(),
