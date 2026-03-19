@@ -104,11 +104,21 @@ function createWSBus() {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace info types
+// ---------------------------------------------------------------------------
+
+interface WorkspaceInfo {
+  name: string;
+  roots: Array<{ name: string; path: string }>;
+}
+
+// ---------------------------------------------------------------------------
 // App root
 // ---------------------------------------------------------------------------
 
 function App() {
   const [route, setRoute] = createSignal<Route>(parseRoute(location.hash));
+  const [workspaceName, setWorkspaceName] = createSignal('K.md');
 
   // Listen to hash changes
   const onHashChange = () => setRoute(parseRoute(location.hash));
@@ -133,6 +143,18 @@ function App() {
     }
   });
   onCleanup(() => wsManager.close());
+
+  // Fetch workspace info
+  fetch('/api/workspace')
+    .then((r) => r.json())
+    .then((data: WorkspaceInfo) => {
+      if (data.name) {
+        setWorkspaceName(data.name);
+      }
+    })
+    .catch(() => {
+      // Non-critical, keep default
+    });
 
   // Page title headers
   const PAGE_TITLES: Record<Route, string> = {
@@ -164,7 +186,7 @@ function App() {
   ]);
 
   return h('div', { class: 'layout' },
-    Sidebar({ route }),
+    Sidebar({ route, workspaceName }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         h('h1', null, () => PAGE_TITLES[route()]),

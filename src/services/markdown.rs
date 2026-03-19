@@ -3,6 +3,7 @@
 //! Uses the `ignore` crate (from ripgrep) for `.gitignore`-aware recursive
 //! directory walking, and SQLite FTS5 for full-text search.
 
+use crate::state::WorkspaceRoot;
 use ignore::WalkBuilder;
 use rusqlite::Connection;
 use serde::Serialize;
@@ -32,7 +33,9 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// A discovered markdown file on disk.
 #[derive(Debug, Clone)]
 pub struct MdFile {
-    /// Path relative to the project root (forward-slash separated).
+    /// Which workspace root this file belongs to (relative_path from workspace.json).
+    pub root: String,
+    /// Path relative to the root directory (forward-slash separated).
     pub relative_path: String,
     /// Absolute path on disk.
     pub absolute_path: PathBuf,
@@ -55,37 +58,60 @@ pub struct TreeNode {
     pub children: Option<Vec<TreeNode>>,
 }
 
+/// A root-level group containing a file tree for that root.
+#[derive(Debug, Clone, Serialize)]
+pub struct RootTree {
+    pub name: String,
+    pub path: String,
+    pub children: Vec<TreeNode>,
+}
+
 /// A single FTS search result.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
     pub path: String,
     pub snippet: String,
     pub rank: f64,
+    pub root: String,
 }
 
 // ---------------------------------------------------------------------------
 // File discovery
 // ---------------------------------------------------------------------------
 
-/// Walk the `project_root` directory, find all `.md` files,
-/// respecting `.gitignore` and excluding known junk directories.
+/// Walk all workspace roots and discover `.md` files.
 ///
-/// Accepts optional extra exclude dirs and max depth from `.kmd/config.json`.
-pub fn discover_files(project_root: &Path) -> Vec<MdFile> {
-    let config = crate::db::read_config(project_root);
-    discover_files_with_config(project_root, &config.exclude, config.max_depth)
+/// Each file is tagged with the root it belongs to.
+pub fn discover_files(roots: &[WorkspaceRoot]) -> Vec<MdFile> {
+    let mut all_files = Vec::new();
+
+    for root in roots {
+        let config = crate::db::read_config(&root.absolute_path);
+        let root_files =
+            discover_files_in_root(&root.relative_path, &root.absolute_path, &config.exclude, config.max_depth);
+        all_files.extend(root_files);
+    }
+
+    // Sort for deterministic output
+    all_files.sort_by(|a, b| {
+        a.root
+            .cmp(&b.root)
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
+    all_files
 }
 
-/// Inner discovery function that accepts config parameters.
-pub fn discover_files_with_config(
-    project_root: &Path,
+/// Discover files within a single root directory.
+fn discover_files_in_root(
+    root_key: &str,
+    root_path: &Path,
     extra_excludes: &[String],
     max_depth: usize,
 ) -> Vec<MdFile> {
     let mut files = Vec::new();
 
     let extra: Vec<String> = extra_excludes.to_vec();
-    let walker = WalkBuilder::new(project_root)
+    let walker = WalkBuilder::new(root_path)
         .hidden(false)
         .max_depth(Some(max_depth))
         .filter_entry(move |entry| {
@@ -126,7 +152,7 @@ pub fn discover_files_with_config(
             Err(_) => path.to_path_buf(),
         };
 
-        let rel = match path.strip_prefix(project_root) {
+        let rel = match path.strip_prefix(root_path) {
             Ok(r) => r.to_string_lossy().replace('\\', "/"),
             Err(_) => continue,
         };
@@ -140,6 +166,7 @@ pub fn discover_files_with_config(
             .map(|d| d.as_secs() as i64);
 
         files.push(MdFile {
+            root: root_key.to_string(),
             relative_path: rel,
             absolute_path: abs,
             size,
@@ -148,8 +175,6 @@ pub fn discover_files_with_config(
         });
     }
 
-    // Sort for deterministic output
-    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     files
 }
 
@@ -255,6 +280,29 @@ pub fn build_tree(files: &[MdFile]) -> Vec<TreeNode> {
     build_children("", &mut dirs)
 }
 
+/// Build root-grouped trees for multi-root workspaces.
+pub fn build_root_trees(files: &[MdFile], roots: &[WorkspaceRoot]) -> Vec<RootTree> {
+    roots
+        .iter()
+        .map(|root| {
+            let root_files: Vec<&MdFile> = files
+                .iter()
+                .filter(|f| f.root == root.relative_path)
+                .collect();
+
+            // Build tree from the filtered files
+            let tree_files: Vec<MdFile> = root_files.into_iter().cloned().collect();
+            let children = build_tree(&tree_files);
+
+            RootTree {
+                name: root.name.clone(),
+                path: root.relative_path.clone(),
+                children,
+            }
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // FTS indexing
 // ---------------------------------------------------------------------------
@@ -269,8 +317,8 @@ pub fn index_files(conn: &Connection, files: &[MdFile]) -> rusqlite::Result<()> 
     conn.execute("DELETE FROM md_files", [])?;
 
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO md_files (relative_path, absolute_path, content, size, modified_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO md_files (root, relative_path, absolute_path, content, size, modified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )?;
 
     for file in files {
@@ -290,6 +338,7 @@ pub fn index_files(conn: &Connection, files: &[MdFile]) -> rusqlite::Result<()> 
         };
 
         stmt.execute(rusqlite::params![
+            &file.root,
             &file.relative_path,
             file.absolute_path.to_string_lossy().as_ref(),
             content,
@@ -324,7 +373,8 @@ pub fn search(conn: &Connection, query: &str) -> rusqlite::Result<Vec<SearchResu
         "SELECT
             m.relative_path,
             snippet(md_fts, 1, '\x01MARK\x01', '\x01/MARK\x01', '…', 48) AS snippet,
-            md_fts.rank
+            md_fts.rank,
+            m.root
          FROM md_fts
          JOIN md_files m ON m.id = md_fts.rowid
          WHERE md_fts MATCH ?1
@@ -349,6 +399,7 @@ pub fn search(conn: &Connection, query: &str) -> rusqlite::Result<Vec<SearchResu
             path: row.get(0)?,
             snippet: safe_snippet,
             rank: row.get(2)?,
+            root: row.get(3)?,
         })
     })?;
 
@@ -387,12 +438,13 @@ fn sanitise_fts_query(query: &str) -> String {
 // Helpers for the API handlers
 // ---------------------------------------------------------------------------
 
-/// Resolve a relative path safely, ensuring it stays within the project root.
-/// Returns `None` if the path escapes the project root (path traversal).
-fn safe_resolve(project_root: &Path, relative_path: &str) -> Option<PathBuf> {
-    let abs = project_root.join(relative_path);
+/// Resolve a relative path safely within a given root directory,
+/// ensuring it stays within the root (path traversal check).
+/// Returns `None` if the path escapes the root.
+fn safe_resolve(root_dir: &Path, relative_path: &str) -> Option<PathBuf> {
+    let abs = root_dir.join(relative_path);
     let canonical = abs.canonicalize().ok()?;
-    let root = project_root.canonicalize().ok()?;
+    let root = root_dir.canonicalize().ok()?;
     if canonical.starts_with(&root) {
         Some(canonical)
     } else {
@@ -402,8 +454,10 @@ fn safe_resolve(project_root: &Path, relative_path: &str) -> Option<PathBuf> {
 
 /// Read and render a single markdown file, returning the HTML.
 /// Returns `None` for oversized files or path traversal attempts.
-pub fn read_and_render(project_root: &Path, relative_path: &str) -> Option<String> {
-    let abs = safe_resolve(project_root, relative_path)?;
+///
+/// `root_dir` is the absolute path of the workspace root the file belongs to.
+pub fn read_and_render(root_dir: &Path, relative_path: &str) -> Option<String> {
+    let abs = safe_resolve(root_dir, relative_path)?;
     let meta = fs::metadata(&abs).ok()?;
 
     if meta.len() > MAX_FILE_SIZE {
@@ -414,15 +468,15 @@ pub fn read_and_render(project_root: &Path, relative_path: &str) -> Option<Strin
     Some(super::parser::render_markdown(&content))
 }
 
-/// Get the file size for a given relative path.
-pub fn file_size(project_root: &Path, relative_path: &str) -> Option<u64> {
-    let abs = safe_resolve(project_root, relative_path)?;
+/// Get the file size for a given relative path within a root.
+pub fn file_size(root_dir: &Path, relative_path: &str) -> Option<u64> {
+    let abs = safe_resolve(root_dir, relative_path)?;
     fs::metadata(&abs).ok().map(|m| m.len())
 }
 
-/// Check if a relative path points to a known markdown file within the project.
-pub fn file_exists(project_root: &Path, relative_path: &str) -> bool {
-    let Some(abs) = safe_resolve(project_root, relative_path) else {
+/// Check if a relative path points to a known markdown file within the root.
+pub fn file_exists(root_dir: &Path, relative_path: &str) -> bool {
+    let Some(abs) = safe_resolve(root_dir, relative_path) else {
         return false;
     };
     abs.is_file()

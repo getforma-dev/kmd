@@ -24,13 +24,20 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// Maximum file size for indexing (must match markdown.rs).
 const MAX_FILE_SIZE: u64 = 500 * 1024;
 
-/// Start a file watcher that monitors the project root recursively.
+/// Start a file watcher that monitors all workspace roots recursively.
 ///
 /// Returns the `RecommendedWatcher` handle — it must be kept alive for
 /// the watcher to continue operating.
 pub fn start_watcher(state: AppState) -> notify::Result<RecommendedWatcher> {
-    let project_root = state.project_root().clone();
+    // Collect the root info we need for the callback closure.
+    let roots: Vec<(String, std::path::PathBuf)> = state
+        .roots()
+        .iter()
+        .map(|r| (r.relative_path.clone(), r.absolute_path.clone()))
+        .collect();
+
     let callback_state = state.clone();
+    let callback_roots = roots.clone();
 
     let mut watcher = RecommendedWatcher::new(
         move |result: Result<Event, notify::Error>| {
@@ -69,22 +76,12 @@ pub fn start_watcher(state: AppState) -> notify::Result<RecommendedWatcher> {
                     continue;
                 }
 
-                // Compute relative path for WS messages and DB
-                let relative_path = match path.strip_prefix(&project_root) {
-                    Ok(r) => r.to_string_lossy().replace('\\', "/"),
-                    Err(_) => {
-                        // If we can't strip, try canonicalized project root
-                        if let Ok(canon_root) = project_root.canonicalize() {
-                            let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-                            match canon_path.strip_prefix(&canon_root) {
-                                Ok(r) => r.to_string_lossy().replace('\\', "/"),
-                                Err(_) => continue,
-                            }
-                        } else {
-                            continue;
-                        }
-                    }
-                };
+                // Determine which root this file belongs to
+                let (root_key, relative_path) =
+                    match determine_root(path, &callback_roots) {
+                        Some(result) => result,
+                        None => continue,
+                    };
 
                 // Determine the change kind for the WS message
                 let kind = match event.kind {
@@ -98,10 +95,10 @@ pub fn start_watcher(state: AppState) -> notify::Result<RecommendedWatcher> {
                 if is_md {
                     match event.kind {
                         EventKind::Create(_) | EventKind::Modify(_) => {
-                            upsert_md_file(&state, &relative_path, path);
+                            upsert_md_file(state, &root_key, &relative_path, path);
                         }
                         EventKind::Remove(_) => {
-                            delete_md_file(&state, &relative_path);
+                            delete_md_file(state, &root_key, &relative_path);
                         }
                         _ => {}
                     }
@@ -117,13 +114,62 @@ pub fn start_watcher(state: AppState) -> notify::Result<RecommendedWatcher> {
         Config::default(),
     )?;
 
-    watcher.watch(state.project_root(), RecursiveMode::Recursive)?;
-    tracing::info!(
-        "File watcher started on {}",
-        state.project_root().display()
-    );
+    // Watch each workspace root
+    for (root_key, root_path) in &roots {
+        match watcher.watch(root_path, RecursiveMode::Recursive) {
+            Ok(()) => {
+                tracing::info!(
+                    "File watcher started on root '{}' ({})",
+                    root_key,
+                    root_path.display()
+                );
+            }
+            Err(err) => {
+                tracing::error!(
+                    "Failed to watch root '{}' ({}): {err}",
+                    root_key,
+                    root_path.display()
+                );
+            }
+        }
+    }
 
     Ok(watcher)
+}
+
+/// Determine which workspace root a changed file belongs to.
+///
+/// Returns `(root_key, relative_path)` or `None` if no root matches.
+fn determine_root(
+    path: &Path,
+    roots: &[(String, std::path::PathBuf)],
+) -> Option<(String, String)> {
+    // Try direct strip-prefix first, then canonicalized versions.
+    // Check longest path first (more specific roots match first).
+    let mut best: Option<(usize, String, String)> = None;
+
+    for (root_key, root_path) in roots {
+        if let Ok(rel) = path.strip_prefix(root_path) {
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let depth = root_path.components().count();
+            if best.as_ref().is_none_or(|(d, _, _)| depth > *d) {
+                best = Some((depth, root_key.clone(), rel_str));
+            }
+        } else if let Ok(canon_root) = root_path.canonicalize() {
+            let canon_path = path
+                .canonicalize()
+                .unwrap_or_else(|_| path.to_path_buf());
+            if let Ok(rel) = canon_path.strip_prefix(&canon_root) {
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let depth = canon_root.components().count();
+                if best.as_ref().is_none_or(|(d, _, _)| depth > *d) {
+                    best = Some((depth, root_key.clone(), rel_str));
+                }
+            }
+        }
+    }
+
+    best.map(|(_, root_key, rel)| (root_key, rel))
 }
 
 /// Check if a path is inside one of the excluded directories.
@@ -141,7 +187,7 @@ fn is_excluded(path: &Path) -> bool {
 }
 
 /// Insert or replace a markdown file entry in the `md_files` table.
-fn upsert_md_file(state: &AppState, relative_path: &str, abs_path: &Path) {
+fn upsert_md_file(state: &AppState, root: &str, relative_path: &str, abs_path: &Path) {
     let meta = match fs::metadata(abs_path) {
         Ok(m) => m,
         Err(err) => {
@@ -173,25 +219,25 @@ fn upsert_md_file(state: &AppState, relative_path: &str, abs_path: &Path) {
 
     let conn = state.db();
     if let Err(err) = conn.execute(
-        "INSERT OR REPLACE INTO md_files (relative_path, absolute_path, content, size, modified_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![relative_path, abs_str.as_ref(), content, size as i64, modified_at],
+        "INSERT OR REPLACE INTO md_files (root, relative_path, absolute_path, content, size, modified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![root, relative_path, abs_str.as_ref(), content, size as i64, modified_at],
     ) {
         tracing::error!("Failed to upsert md_file {relative_path}: {err}");
     } else {
-        tracing::debug!("Upserted md_file: {relative_path}");
+        tracing::debug!("Upserted md_file: {root}:{relative_path}");
     }
 }
 
 /// Delete a markdown file entry from the `md_files` table.
-fn delete_md_file(state: &AppState, relative_path: &str) {
+fn delete_md_file(state: &AppState, root: &str, relative_path: &str) {
     let conn = state.db();
     if let Err(err) = conn.execute(
-        "DELETE FROM md_files WHERE relative_path = ?1",
-        [relative_path],
+        "DELETE FROM md_files WHERE root = ?1 AND relative_path = ?2",
+        [root, relative_path],
     ) {
         tracing::error!("Failed to delete md_file {relative_path}: {err}");
     } else {
-        tracing::debug!("Deleted md_file: {relative_path}");
+        tracing::debug!("Deleted md_file: {root}:{relative_path}");
     }
 }

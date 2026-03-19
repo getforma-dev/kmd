@@ -7,10 +7,23 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
+export interface RootTreeData {
+  name: string;
+  path: string;
+  children: TreeNode[];
+}
+
 export interface FileTreeProps {
   tree: TreeNode[];
   selectedPath: () => string;
   onSelect: (path: string) => void;
+}
+
+export interface MultiRootFileTreeProps {
+  roots: RootTreeData[];
+  selectedPath: () => string;
+  selectedRoot: () => string;
+  onSelect: (path: string, root: string) => void;
 }
 
 // SVG icon: chevron-right (rotated via CSS transform when expanded)
@@ -99,7 +112,7 @@ function TreeItem(props: {
 }
 
 /**
- * Recursive, collapsible file tree component.
+ * Recursive, collapsible file tree component (single root).
  */
 export function FileTree(props: FileTreeProps) {
   const { tree, selectedPath, onSelect } = props;
@@ -107,6 +120,48 @@ export function FileTree(props: FileTreeProps) {
   return h('div', { class: 'file-tree' },
     ...tree.map((node) =>
       TreeItem({ node, selectedPath, onSelect })
+    ),
+  );
+}
+
+/**
+ * Multi-root file tree: shows root group headers when there are 2+ roots,
+ * looks identical to single-root when there is only one root.
+ */
+export function MultiRootFileTree(props: MultiRootFileTreeProps) {
+  const { roots, selectedPath, selectedRoot, onSelect } = props;
+
+  // Single root: render identically to the old FileTree (no headers)
+  if (roots.length === 1) {
+    const root = roots[0];
+    return h('div', { class: 'file-tree' },
+      ...root.children.map((node) =>
+        TreeItem({
+          node,
+          selectedPath,
+          onSelect: (path: string) => onSelect(path, root.path),
+        })
+      ),
+    );
+  }
+
+  // Multi-root: show root headers
+  return h('div', { class: 'file-tree' },
+    ...roots.map((root) =>
+      h('div', null,
+        // Root header
+        h('div', {
+          style: 'font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.1em; padding: var(--space-sm) var(--space-md); margin-top: var(--space-xs);',
+        }, root.name),
+        // Tree items for this root
+        ...root.children.map((node) =>
+          TreeItem({
+            node,
+            selectedPath,
+            onSelect: (path: string) => onSelect(path, root.path),
+          })
+        ),
+      )
     ),
   );
 }

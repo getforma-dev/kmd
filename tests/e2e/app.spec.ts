@@ -39,6 +39,16 @@ test.describe('App Shell', () => {
     const ws = await wsPromise;
     expect(ws.url()).toContain('/ws');
   });
+
+  test('workspace API returns workspace info', async ({ page }) => {
+    const response = await page.request.get('/api/workspace');
+    const data = await response.json();
+    expect(data.name).toBeTruthy();
+    expect(Array.isArray(data.roots)).toBe(true);
+    expect(data.roots.length).toBeGreaterThan(0);
+    expect(data.roots[0].name).toBeTruthy();
+    expect(data.roots[0].path).toBe('.');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -48,7 +58,6 @@ test.describe('App Shell', () => {
 test.describe('Markdown Explorer', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/#docs');
-    // Wait for the tree to load
     await page.waitForResponse(resp =>
       resp.url().includes('/api/docs') && !resp.url().includes('search') && resp.status() === 200
     );
@@ -61,9 +70,19 @@ test.describe('Markdown Explorer', () => {
     expect(count).toBeGreaterThan(3);
   });
 
+  test('docs API returns roots-grouped structure', async ({ page }) => {
+    const response = await page.request.get('/api/docs');
+    const data = await response.json();
+    // New format: { roots: [{ name, path, children }] }
+    expect(Array.isArray(data.roots)).toBe(true);
+    expect(data.roots.length).toBeGreaterThan(0);
+    expect(data.roots[0].name).toBeTruthy();
+    expect(data.roots[0].path).toBe('.');
+    expect(Array.isArray(data.roots[0].children)).toBe(true);
+    expect(data.roots[0].children.length).toBeGreaterThan(0);
+  });
+
   test('auto-selects and renders the first file on load', async ({ page }) => {
-    // The DocsPage auto-selects the first file (findFirstFile) and fetches its HTML.
-    // Wait for the doc render API call that fires automatically.
     await page.waitForResponse(
       resp =>
         resp.url().includes('/api/docs/') &&
@@ -73,7 +92,6 @@ test.describe('Markdown Explorer', () => {
       { timeout: 10000 },
     );
 
-    // The markdown body should be visible with rendered content
     const markdownBody = page.locator('.markdown-body');
     await expect(markdownBody).toBeVisible({ timeout: 5000 });
     const innerHTML = await markdownBody.innerHTML();
@@ -81,16 +99,13 @@ test.describe('Markdown Explorer', () => {
   });
 
   test('clicking a different file in the tree renders its markdown', async ({ page }) => {
-    // Wait for tree to render and the initial auto-fetch to settle
     await page.locator('.file-tree-item').first().waitFor({ timeout: 5000 });
     await page.locator('.markdown-body').waitFor({ timeout: 10000 });
 
-    // Files have ".md" in their name. Find all file items and click one that isn't selected.
     const allFileItems = page.locator('.file-tree-item').filter({ hasText: /\.md/i });
     const count = await allFileItems.count();
     expect(count).toBeGreaterThan(1);
 
-    // Click the second file (index 1) — different from the auto-selected first file
     const secondFile = allFileItems.nth(1);
     await expect(secondFile).toBeVisible();
 
@@ -116,25 +131,22 @@ test.describe('Markdown Explorer', () => {
     }
   });
 
-  test('search returns results and displays them', async ({ page }) => {
+  test('search returns results with root field', async ({ page }) => {
     const searchInput = page.locator('.search-input');
     await expect(searchInput).toBeVisible();
 
-    // Type a query — debounce is 300ms
     await searchInput.fill('reactive');
 
-    // Wait for the search API call
     const searchResponse = await page.waitForResponse(
       resp => resp.url().includes('/api/docs/search') && resp.status() === 200,
       { timeout: 5000 },
     );
     const searchData = await searchResponse.json();
     expect(searchData.results.length).toBeGreaterThan(0);
+    // Results now include root field
+    expect(searchData.results[0].root).toBeTruthy();
 
-    // Wait for results to render
     await page.waitForTimeout(500);
-
-    // Search results should show file paths
     const resultPaths = page.locator('.file-tree-item .name').filter({ hasText: /\.md$/i });
     const count = await resultPaths.count();
     expect(count).toBeGreaterThan(0);
@@ -157,7 +169,7 @@ test.describe('Markdown Explorer', () => {
 
   test('rendered markdown contains syntax-highlighted code blocks', async ({ page }) => {
     const response = await page.request.get(
-      '/api/docs/FormaStack/docs/architecture/TURBO-STREAMS-EVALUATION.md',
+      '/api/docs/FormaStack/docs/architecture/TURBO-STREAMS-EVALUATION.md?root=.',
     );
     const data = await response.json();
     expect(data.html).toContain('class="highlight');
@@ -165,7 +177,7 @@ test.describe('Markdown Explorer', () => {
 
   test('mermaid diagrams are present in rendered output', async ({ page }) => {
     const response = await page.request.get(
-      '/api/docs/forma-code-poc-files/FormaOld/docs/FORMA-PLATFORM-SYNOPSIS.md',
+      '/api/docs/forma-code-poc-files/FormaOld/docs/FORMA-PLATFORM-SYNOPSIS.md?root=.',
     );
     const data = await response.json();
     expect(data.html).toContain('class="mermaid"');
@@ -186,48 +198,46 @@ test.describe('Script Runner', () => {
 
   test('scripts page loads and shows discovered packages', async ({ page }) => {
     await expect(page.locator('.main-header h1')).toHaveText('Scripts');
-    // Wait for package cards to render
     await page.waitForTimeout(500);
     const mainContent = page.locator('.main-content');
     const text = await mainContent.textContent();
     expect(text!.length).toBeGreaterThan(10);
   });
 
-  test('scripts API returns packages with scripts', async ({ page }) => {
+  test('scripts API returns roots-grouped structure', async ({ page }) => {
     const response = await page.request.get('/api/scripts');
     const data = await response.json();
-    expect(data.packages.length).toBeGreaterThan(0);
-    const withScripts = data.packages.filter((p: any) => p.scripts.length > 0);
-    expect(withScripts.length).toBeGreaterThan(0);
-    expect(data.packages[0].name).toBeTruthy();
-    expect(data.packages[0].path).toBeTruthy();
+    // New format: { roots: [{ name, path, packages }] }
+    expect(Array.isArray(data.roots)).toBe(true);
+    expect(data.roots.length).toBeGreaterThan(0);
+    expect(data.roots[0].packages.length).toBeGreaterThan(0);
+    expect(data.roots[0].packages[0].name).toBeTruthy();
   });
 
   test('running a script returns a process ID', async ({ page }) => {
     const scriptsResp = await page.request.get('/api/scripts');
     const scriptsData = await scriptsResp.json();
 
-    // Find any package with scripts
-    const pkg = scriptsData.packages.find((p: any) => p.scripts.length > 0);
+    const firstRoot = scriptsData.roots[0];
+    const pkg = firstRoot.packages.find((p: any) => p.scripts.length > 0);
     if (!pkg) { test.skip(); return; }
 
     const runResp = await page.request.post('/api/scripts/run', {
       data: {
+        root: firstRoot.path,
         package_path: pkg.path,
         script_name: pkg.scripts[0].name,
       },
     });
     const runData = await runResp.json();
     expect(runData.process_id).toBeTruthy();
-    expect(runData.process_id.length).toBe(36); // UUID
+    expect(runData.process_id.length).toBe(36);
 
-    // Clean up — kill the process
     await page.waitForTimeout(500);
     await page.request.post(`/api/processes/${runData.process_id}/kill`).catch(() => {});
   });
 
   test('WebSocket receives process output messages', async ({ page }) => {
-    // Use a fresh page context to control WS lifecycle
     const wsMessages: any[] = [];
     page.on('websocket', ws => {
       ws.on('framereceived', event => {
@@ -237,17 +247,12 @@ test.describe('Script Runner', () => {
       });
     });
 
-    // Full navigation to get a fresh WS connection
     await page.goto('about:blank');
     await page.goto('/#scripts');
 
-    // Wait for the WS connection + port scan cycle (broadcasts every 5s)
     await page.waitForTimeout(7000);
 
-    // Should have received at least one WS message (port scan broadcasts every 5s)
     expect(wsMessages.length).toBeGreaterThan(0);
-
-    // Verify we got ports messages (guaranteed by the 5s interval)
     const hasPortsMsg = wsMessages.some(m => m.type === 'ports');
     expect(hasPortsMsg).toBe(true);
   });
@@ -255,11 +260,13 @@ test.describe('Script Runner', () => {
   test('kill process API works', async ({ page }) => {
     const scriptsResp = await page.request.get('/api/scripts');
     const data = await scriptsResp.json();
-    const pkg = data.packages.find((p: any) => p.scripts.length > 0);
+    const firstRoot = data.roots[0];
+    const pkg = firstRoot.packages.find((p: any) => p.scripts.length > 0);
     if (!pkg) { test.skip(); return; }
 
     const runResp = await page.request.post('/api/scripts/run', {
       data: {
+        root: firstRoot.path,
         package_path: pkg.path,
         script_name: pkg.scripts[0].name,
       },
@@ -281,12 +288,10 @@ test.describe('Port Monitor', () => {
   test('ports page loads and shows port table', async ({ page }) => {
     await page.goto('/#ports');
     await expect(page.locator('.main-header h1')).toHaveText('Ports');
-    // Wait for initial port data fetch
     await page.waitForResponse(
       resp => resp.url().includes('/api/ports') && resp.status() === 200,
       { timeout: 5000 },
     );
-    // Table should be visible
     await expect(page.locator('.port-table')).toBeVisible({ timeout: 3000 });
   });
 
@@ -296,7 +301,6 @@ test.describe('Port Monitor', () => {
     expect(Array.isArray(data.ports)).toBe(true);
     expect(data.ports.length).toBeGreaterThan(0);
 
-    // Port 4444 should be active (kmd itself)
     const port4444 = data.ports.find((p: any) => p.port === 4444);
     expect(port4444).toBeTruthy();
     expect(port4444.active).toBe(true);
@@ -314,7 +318,6 @@ test.describe('Port Monitor', () => {
     });
 
     await page.goto('/#ports');
-    // Port scan broadcasts every 5s — wait for at least one
     await page.waitForTimeout(7000);
 
     expect(wsMessages.length).toBeGreaterThan(0);
@@ -325,18 +328,15 @@ test.describe('Port Monitor', () => {
 
   test('port table shows port 4444 as active', async ({ page }) => {
     await page.goto('/#ports');
-    // Wait for port data to load (HTTP fetch + render)
     await page.waitForResponse(
       resp => resp.url().includes('/api/ports') && resp.status() === 200,
       { timeout: 5000 },
     );
-    await page.waitForTimeout(1000); // Let the effect re-render the table
+    await page.waitForTimeout(1000);
 
-    // Port 4444 should appear in the table
     const portCell = page.locator('td.port-num').filter({ hasText: '4444' });
     await expect(portCell).toBeVisible({ timeout: 5000 });
 
-    // There should be at least one active status dot
     const activeIndicators = page.locator('.status-dot.active');
     const count = await activeIndicators.count();
     expect(count).toBeGreaterThan(0);
@@ -350,7 +350,7 @@ test.describe('Port Monitor', () => {
 test.describe('Security', () => {
   test('path traversal in docs API returns error', async ({ page }) => {
     const response = await page.request.get(
-      '/api/docs/FormaStack/../../../../../../etc/passwd',
+      '/api/docs/FormaStack/../../../../../../etc/passwd?root=.',
     );
     const text = await response.text();
     expect(text).not.toContain('root:');
@@ -369,7 +369,7 @@ test.describe('Security', () => {
 
   test('script run API rejects path traversal', async ({ page }) => {
     const response = await page.request.post('/api/scripts/run', {
-      data: { package_path: '../../', script_name: 'test' },
+      data: { root: '.', package_path: '../../', script_name: 'test' },
     });
     const data = await response.json();
     expect(data.error).toBeTruthy();

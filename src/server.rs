@@ -24,6 +24,8 @@ pub fn build_router(state: AppState) -> Router {
     // important because kmd exposes process execution on localhost.
 
     let api = Router::new()
+        // Workspace info
+        .route("/api/workspace", get(api_workspace_handler))
         // Docs routes — search must come before the wildcard
         .route("/api/docs", get(api_docs_tree))
         .route("/api/docs/search", get(api_docs_search))
@@ -69,14 +71,37 @@ async fn static_handler(req: Request<Body>) -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace API handler
+// ---------------------------------------------------------------------------
+
+/// `GET /api/workspace` — Return workspace name and roots info.
+async fn api_workspace_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let roots: Vec<serde_json::Value> = state
+        .roots()
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "name": r.name,
+                "path": r.relative_path,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "name": state.workspace_name(),
+        "roots": roots,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Docs API handlers
 // ---------------------------------------------------------------------------
 
-/// `GET /api/docs` — Return the markdown file tree.
+/// `GET /api/docs` — Return the markdown file tree, grouped by roots.
 async fn api_docs_tree(State(state): State<AppState>) -> impl IntoResponse {
-    let files = markdown::discover_files(state.project_root());
-    let tree = markdown::build_tree(&files);
-    Json(serde_json::json!({ "tree": tree }))
+    let files = markdown::discover_files(state.roots());
+    let root_trees = markdown::build_root_trees(&files, state.roots());
+    Json(serde_json::json!({ "roots": root_trees }))
 }
 
 /// Query parameters for the search endpoint.
@@ -105,15 +130,36 @@ async fn api_docs_search(
     }
 }
 
-/// `GET /api/docs/*path` — Render a single markdown file to HTML.
+/// Query parameters for doc render (root selection).
+#[derive(Deserialize)]
+struct DocRenderQuery {
+    root: Option<String>,
+}
+
+/// `GET /api/docs/*path?root=.` — Render a single markdown file to HTML.
 async fn api_docs_render(
     State(state): State<AppState>,
     Path(file_path): Path<String>,
+    Query(params): Query<DocRenderQuery>,
 ) -> impl IntoResponse {
-    let root = state.project_root();
+    let root_key = params.root.as_deref().unwrap_or(".");
+
+    // Find the workspace root
+    let workspace_root = match state.roots().iter().find(|r| r.relative_path == root_key) {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Root not found", "root": root_key })),
+            )
+                .into_response();
+        }
+    };
+
+    let root_dir = &workspace_root.absolute_path;
 
     // Validate that the path is a known markdown file
-    if !markdown::file_exists(root, &file_path) {
+    if !markdown::file_exists(root_dir, &file_path) {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "File not found", "path": file_path })),
@@ -122,7 +168,7 @@ async fn api_docs_render(
     }
 
     // Check for oversized files
-    if let Some(size) = markdown::file_size(root, &file_path) {
+    if let Some(size) = markdown::file_size(root_dir, &file_path) {
         if size > markdown::SIZE_CAP {
             return Json(serde_json::json!({
                 "truncated": true,
@@ -134,7 +180,7 @@ async fn api_docs_render(
     }
 
     // Render the file
-    match markdown::read_and_render(root, &file_path) {
+    match markdown::read_and_render(root_dir, &file_path) {
         Some(html) => Json(serde_json::json!({
             "html": html,
             "path": file_path,
@@ -151,6 +197,7 @@ async fn api_docs_render(
 /// Request body for the PATCH endpoint.
 #[derive(Deserialize)]
 struct PatchBody {
+    root: Option<String>,
     starred: Option<bool>,
     hidden: Option<bool>,
 }
@@ -161,12 +208,13 @@ async fn api_docs_patch(
     Path(file_path): Path<String>,
     Json(body): Json<PatchBody>,
 ) -> impl IntoResponse {
+    let root_key = body.root.as_deref().unwrap_or(".");
     let conn = state.db();
 
     if let Some(starred) = body.starred {
         if let Err(err) = conn.execute(
-            "UPDATE md_files SET starred = ?1 WHERE relative_path = ?2",
-            rusqlite::params![starred as i32, &file_path],
+            "UPDATE md_files SET starred = ?1 WHERE root = ?2 AND relative_path = ?3",
+            rusqlite::params![starred as i32, root_key, &file_path],
         ) {
             tracing::error!("Failed to update starred: {err}");
             return (
@@ -179,8 +227,8 @@ async fn api_docs_patch(
 
     if let Some(hidden) = body.hidden {
         if let Err(err) = conn.execute(
-            "UPDATE md_files SET hidden = ?1 WHERE relative_path = ?2",
-            rusqlite::params![hidden as i32, &file_path],
+            "UPDATE md_files SET hidden = ?1 WHERE root = ?2 AND relative_path = ?3",
+            rusqlite::params![hidden as i32, root_key, &file_path],
         ) {
             tracing::error!("Failed to update hidden: {err}");
             return (
@@ -198,15 +246,16 @@ async fn api_docs_patch(
 // Script / Process API handlers
 // ---------------------------------------------------------------------------
 
-/// `GET /api/scripts` — Discover all packages and their npm scripts.
+/// `GET /api/scripts` — Discover all packages and their npm scripts, grouped by root.
 async fn api_scripts_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let packages = scripts::discover_scripts(state.project_root());
-    Json(serde_json::json!({ "packages": packages }))
+    let root_scripts = scripts::discover_scripts(state.roots());
+    Json(serde_json::json!({ "roots": root_scripts }))
 }
 
 /// Request body for the run endpoint.
 #[derive(Deserialize)]
 struct RunScriptBody {
+    root: Option<String>,
     package_path: String,
     script_name: String,
 }
@@ -216,7 +265,8 @@ async fn api_scripts_run_handler(
     State(state): State<AppState>,
     Json(body): Json<RunScriptBody>,
 ) -> impl IntoResponse {
-    match process::run_script(&state, &body.package_path, &body.script_name) {
+    let root = body.root.as_deref().unwrap_or(".");
+    match process::run_script(&state, root, &body.package_path, &body.script_name) {
         Ok(process_id) => Json(serde_json::json!({ "process_id": process_id })).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -1,5 +1,5 @@
 import { h, createSignal, createEffect, createShow, onCleanup } from '@getforma/core';
-import { FileTree, type TreeNode } from '../components/FileTree';
+import { MultiRootFileTree, type TreeNode, type RootTreeData } from '../components/FileTree';
 import { SearchBar } from '../components/SearchBar';
 import { renderMermaidDiagrams } from '../lib/mermaid';
 
@@ -11,6 +11,7 @@ interface SearchResult {
   path: string;
   snippet: string;
   rank: number;
+  root: string;
 }
 
 interface DocResponse {
@@ -30,6 +31,10 @@ interface WSMessage {
     path?: string;
     kind?: string;
   };
+}
+
+interface DocsApiResponse {
+  roots: RootTreeData[];
 }
 
 // ---------------------------------------------------------------------------
@@ -63,8 +68,9 @@ function formatSize(bytes: number): string {
 
 export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void) }) {
   // State signals
-  const [tree, setTree] = createSignal<TreeNode[]>([]);
+  const [roots, setRoots] = createSignal<RootTreeData[]>([]);
   const [selectedPath, setSelectedPath] = createSignal('');
+  const [selectedRoot, setSelectedRoot] = createSignal('.');
   const [docHtml, setDocHtml] = createSignal('');
   const [isTruncated, setIsTruncated] = createSignal(false);
   const [truncatedSize, setTruncatedSize] = createSignal(0);
@@ -80,6 +86,9 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
     if (searchTimer) clearTimeout(searchTimer);
   });
 
+  // Helper: check if any root has files
+  const hasFiles = (): boolean => roots().some((r) => r.children.length > 0);
+
   // -------------------------------------------------------------------------
   // Handle WS messages for live file updates
   // -------------------------------------------------------------------------
@@ -87,8 +96,8 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   function refreshTree() {
     fetch('/api/docs')
       .then((r) => r.json())
-      .then((data: { tree: TreeNode[] }) => {
-        setTree(data.tree);
+      .then((data: DocsApiResponse) => {
+        setRoots(data.roots);
       })
       .catch((err) => {
         console.error('[kmd] Failed to refresh docs tree:', err);
@@ -97,9 +106,10 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
 
   function refreshCurrentDoc() {
     const path = selectedPath();
+    const root = selectedRoot();
     if (!path) return;
 
-    fetch(`/api/docs/${encodeURI(path)}`)
+    fetch(`/api/docs/${encodeURI(path)}?root=${encodeURIComponent(root)}`)
       .then((r) => r.json())
       .then((data: DocResponse | TruncatedResponse) => {
         if ('truncated' in data && data.truncated) {
@@ -129,7 +139,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
 
     if (isMd) {
       if (kind === 'create' || kind === 'remove') {
-        // Tree structure changed — re-fetch the whole tree
+        // Tree structure changed -- re-fetch the whole tree
         refreshTree();
       }
 
@@ -164,14 +174,18 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
 
   fetch('/api/docs')
     .then((r) => r.json())
-    .then((data: { tree: TreeNode[] }) => {
-      setTree(data.tree);
+    .then((data: DocsApiResponse) => {
+      setRoots(data.roots);
       setLoading(false);
 
-      // Auto-select first file
-      const first = findFirstFile(data.tree);
-      if (first) {
-        setSelectedPath(first);
+      // Auto-select first file from first root with files
+      for (const root of data.roots) {
+        const first = findFirstFile(root.children);
+        if (first) {
+          setSelectedPath(first);
+          setSelectedRoot(root.path);
+          break;
+        }
       }
     })
     .catch((err) => {
@@ -185,6 +199,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
 
   createEffect(() => {
     const path = selectedPath();
+    const root = selectedRoot();
     if (!path) {
       setDocHtml('');
       setIsTruncated(false);
@@ -194,7 +209,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
     setDocLoading(true);
     setIsTruncated(false);
 
-    fetch(`/api/docs/${encodeURI(path)}`)
+    fetch(`/api/docs/${encodeURI(path)}?root=${encodeURIComponent(root)}`)
       .then((r) => r.json())
       .then((data: DocResponse | TruncatedResponse) => {
         if ('truncated' in data && data.truncated) {
@@ -263,8 +278,9 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   // Handle search result click
   // -------------------------------------------------------------------------
 
-  function handleSearchResultClick(path: string) {
+  function handleSearchResultClick(path: string, root: string) {
     setSelectedPath(path);
+    setSelectedRoot(root);
     setSearchQuery('');
     setSearchResults([]);
   }
@@ -277,6 +293,15 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
     navigator.clipboard.writeText(path).catch(() => {
       // Fallback: do nothing if clipboard unavailable
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Handle file tree selection
+  // -------------------------------------------------------------------------
+
+  function handleFileSelect(path: string, root: string) {
+    setSelectedPath(path);
+    setSelectedRoot(root);
   }
 
   // -------------------------------------------------------------------------
@@ -294,7 +319,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
             ...searchResults().map((result) =>
               h('div', {
                 class: 'file-tree-item',
-                onClick: () => handleSearchResultClick(result.path),
+                onClick: () => handleSearchResultClick(result.path, result.root),
                 style: 'flex-direction: column; align-items: flex-start; gap: 2px; padding: var(--space-sm) var(--space-md);',
               },
                 h('span', {
@@ -344,11 +369,12 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
               style: 'padding: var(--space-md); color: var(--gruvbox-gray); font-size: 13px;',
             }, 'Loading...'),
             () => createShow(
-              () => tree().length > 0,
-              () => FileTree({
-                tree: tree(),
+              () => hasFiles(),
+              () => MultiRootFileTree({
+                roots: roots(),
                 selectedPath,
-                onSelect: setSelectedPath,
+                selectedRoot,
+                onSelect: handleFileSelect,
               }),
               () => h('div', {
                 style: 'padding: var(--space-md); color: var(--gruvbox-gray); font-size: 13px;',

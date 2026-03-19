@@ -15,7 +15,7 @@ const LABELS: Record<Route, string> = {
   ports: 'Ports',
 };
 
-export function Sidebar(props: { route: () => Route }) {
+export function Sidebar(props: { route: () => Route; workspaceName?: () => string }) {
   const navItems = (['docs', 'scripts', 'ports'] as const).map((key) =>
     h('a', {
       class: () => `nav-item${props.route() === key ? ' active' : ''}`,
@@ -35,7 +35,11 @@ export function Sidebar(props: { route: () => Route }) {
         h('span', { class: 'dot' }, '.'),
         h('span', { class: 'md' }, 'md'),
       ),
-      h('span', { class: 'sidebar-version' }, 'v0.1.0'),
+      h('span', { class: 'sidebar-version' },
+        props.workspaceName
+          ? () => props.workspaceName!()
+          : 'v0.1.0',
+      ),
     ),
     h('nav', { class: 'sidebar-nav' }, ...navItems),
   );

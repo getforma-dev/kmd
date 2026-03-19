@@ -16,6 +16,12 @@ interface PackageScripts {
   scripts: ScriptEntry[];
 }
 
+interface RootScripts {
+  name: string;
+  path: string;
+  packages: PackageScripts[];
+}
+
 interface ActiveProcess {
   id: string;
   packagePath: string;
@@ -37,10 +43,22 @@ interface WSMessage {
 
 export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void) }) {
   // State signals
-  const [packages, setPackages] = createSignal<PackageScripts[]>([]);
+  const [rootScripts, setRootScripts] = createSignal<RootScripts[]>([]);
   const [activeProcesses, setActiveProcesses] = createSignal<ActiveProcess[]>([]);
   const [selectedProcessId, setSelectedProcessId] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(true);
+
+  // Helper: get all packages flattened
+  const allPackages = (): PackageScripts[] => {
+    const result: PackageScripts[] = [];
+    for (const root of rootScripts()) {
+      result.push(...root.packages);
+    }
+    return result;
+  };
+
+  // Helper: check if multi-root (2+ roots)
+  const isMultiRoot = (): boolean => rootScripts().length > 1;
 
   // Store output lines per process: processId -> lines
   const processOutputMap = new Map<string, TerminalLine[]>();
@@ -118,8 +136,8 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   // -------------------------------------------------------------------------
   fetch('/api/scripts')
     .then((r) => r.json())
-    .then((data: { packages: PackageScripts[] }) => {
-      setPackages(data.packages);
+    .then((data: { roots: RootScripts[] }) => {
+      setRootScripts(data.roots);
       setLoading(false);
     })
     .catch((err) => {
@@ -148,11 +166,11 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   // -------------------------------------------------------------------------
   // Run a script
   // -------------------------------------------------------------------------
-  function runScript(packagePath: string, scriptName: string) {
+  function runScript(root: string, packagePath: string, scriptName: string) {
     fetch('/api/scripts/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ package_path: packagePath, script_name: scriptName }),
+      body: JSON.stringify({ root, package_path: packagePath, script_name: scriptName }),
     })
       .then((r) => r.json())
       .then((data: { process_id?: string; error?: string }) => {
@@ -212,10 +230,10 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   }
 
   // -------------------------------------------------------------------------
-  // Package cards — top section
+  // Package cards -- top section
   // -------------------------------------------------------------------------
 
-  function PackageCard(pkg: PackageScripts) {
+  function PackageCard(pkg: PackageScripts, rootPath: string) {
     return h('div', {
       style: 'background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: var(--radius-lg); padding: var(--space-md); display: flex; flex-direction: column; gap: var(--space-sm);',
     },
@@ -236,7 +254,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           h('button', {
             class: 'btn btn-ghost',
             title: script.command,
-            onClick: () => runScript(pkg.path, script.name),
+            onClick: () => runScript(rootPath, pkg.path, script.name),
             style: 'font-family: var(--font-code); font-size: 12px; padding: 4px 8px;',
           },
             h('svg', {
@@ -254,7 +272,17 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   }
 
   // -------------------------------------------------------------------------
-  // Process tabs — bottom section header (imperatively updated)
+  // Root group header (only shown in multi-root mode)
+  // -------------------------------------------------------------------------
+
+  function RootHeader(name: string) {
+    return h('div', {
+      style: 'font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.1em; padding: 0 0 var(--space-sm) 0;',
+    }, name);
+  }
+
+  // -------------------------------------------------------------------------
+  // Process tabs -- bottom section header (imperatively updated)
   // -------------------------------------------------------------------------
 
   function ProcessTabs() {
@@ -353,12 +381,37 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           style: 'color: var(--gruvbox-gray); font-size: 14px; padding: var(--space-md);',
         }, 'Discovering scripts...'),
         () => createShow(
-          () => packages().length > 0,
-          () => h('div', {
-            style: 'display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-md);',
+          () => allPackages().length > 0,
+          () => {
+            // Single root: render flat grid (identical to old behavior)
+            // Multi-root: render grouped with root headers
+            if (!isMultiRoot()) {
+              const pkgs = allPackages();
+              return h('div', {
+                style: 'display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-md);',
+              },
+                ...pkgs.map((pkg) => PackageCard(pkg, rootScripts()[0].path)),
+              );
+            }
+
+            // Multi-root: show root group headers
+            return h('div', {
+              style: 'display: flex; flex-direction: column; gap: var(--space-lg);',
+            },
+              ...rootScripts()
+                .filter((root) => root.packages.length > 0)
+                .map((root) =>
+                  h('div', null,
+                    RootHeader(root.name),
+                    h('div', {
+                      style: 'display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-md);',
+                    },
+                      ...root.packages.map((pkg) => PackageCard(pkg, root.path)),
+                    ),
+                  )
+                ),
+            );
           },
-            ...packages().map((pkg) => PackageCard(pkg)),
-          ),
           () => h('div', {
             style: 'color: var(--gruvbox-gray); font-size: 14px; padding: var(--space-md); text-align: center;',
           }, 'No package.json files with scripts found in this project.'),

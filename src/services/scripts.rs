@@ -3,6 +3,7 @@
 //! Walks the project directory (respecting `.gitignore`) to find all
 //! `package.json` files and extract the `"scripts"` section from each.
 
+use crate::state::WorkspaceRoot;
 use ignore::WalkBuilder;
 use serde::Serialize;
 use std::path::Path;
@@ -41,19 +42,41 @@ pub struct PackageScripts {
     pub scripts: Vec<ScriptEntry>,
 }
 
+/// Scripts grouped by workspace root.
+#[derive(Debug, Clone, Serialize)]
+pub struct RootScripts {
+    pub name: String,
+    pub path: String,
+    pub packages: Vec<PackageScripts>,
+}
+
 // ---------------------------------------------------------------------------
 // Discovery
 // ---------------------------------------------------------------------------
 
-/// Walk the `project_root` directory, find all `package.json` files,
+/// Walk all workspace roots and discover scripts from `package.json` files.
+pub fn discover_scripts(roots: &[WorkspaceRoot]) -> Vec<RootScripts> {
+    roots
+        .iter()
+        .map(|root| {
+            let packages = discover_scripts_in_root(&root.absolute_path);
+            RootScripts {
+                name: root.name.clone(),
+                path: root.relative_path.clone(),
+                packages,
+            }
+        })
+        .collect()
+}
+
+/// Walk a single root directory, find all `package.json` files,
 /// respecting `.gitignore` and excluding known junk directories.
-/// Reads `.kmd/config.json` for extra excludes and max depth.
-pub fn discover_scripts(project_root: &Path) -> Vec<PackageScripts> {
-    let config = crate::db::read_config(project_root);
+fn discover_scripts_in_root(root_path: &Path) -> Vec<PackageScripts> {
+    let config = crate::db::read_config(root_path);
     let extra: Vec<String> = config.exclude.clone();
     let mut packages = Vec::new();
 
-    let walker = WalkBuilder::new(project_root)
+    let walker = WalkBuilder::new(root_path)
         .hidden(false)
         .max_depth(Some(config.max_depth))
         .filter_entry(move |entry| {
@@ -148,7 +171,7 @@ pub fn discover_scripts(project_root: &Path) -> Vec<PackageScripts> {
 
         // Relative path to the package.json's directory
         let rel_dir = match path.parent() {
-            Some(parent) => match parent.strip_prefix(project_root) {
+            Some(parent) => match parent.strip_prefix(root_path) {
                 Ok(rel) => {
                     let s = rel.to_string_lossy().replace('\\', "/");
                     if s.is_empty() {

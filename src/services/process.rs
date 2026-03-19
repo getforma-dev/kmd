@@ -12,34 +12,46 @@ use uuid::Uuid;
 
 /// Spawn `npm run <script_name>` in the given package directory.
 ///
+/// The `root` parameter is the workspace root key (e.g. "." or "packages/foo")
+/// and `package_path` is the relative path within that root to the package directory.
+///
 /// Returns the process UUID on success. The process stdout/stderr are streamed
 /// to all WebSocket clients via `ServerMessage::Stdout` / `ServerMessage::Stderr`,
 /// and a `ServerMessage::Exit` is broadcast when the process terminates.
 pub fn run_script(
     state: &AppState,
+    root: &str,
     package_path: &str,
     script_name: &str,
 ) -> Result<String, String> {
-    let project_root = state.project_root();
+    // Find the workspace root by its relative_path key
+    let workspace_root = state
+        .roots()
+        .iter()
+        .find(|r| r.relative_path == root)
+        .ok_or_else(|| format!("Unknown workspace root: {root}"))?;
+
+    let root_abs = &workspace_root.absolute_path;
+
     let cwd = if package_path == "." {
-        project_root.clone()
+        root_abs.clone()
     } else {
-        project_root.join(package_path)
+        root_abs.join(package_path)
     };
 
     if !cwd.is_dir() {
         return Err(format!("Directory not found: {}", cwd.display()));
     }
 
-    // Prevent path traversal: ensure CWD stays within the project root
+    // Prevent path traversal: ensure CWD stays within the workspace root
     let canonical_cwd = cwd
         .canonicalize()
         .map_err(|e| format!("Failed to resolve path: {e}"))?;
-    let canonical_root = project_root
+    let canonical_root = root_abs
         .canonicalize()
-        .map_err(|e| format!("Failed to resolve project root: {e}"))?;
+        .map_err(|e| format!("Failed to resolve root: {e}"))?;
     if !canonical_cwd.starts_with(&canonical_root) {
-        return Err("Path traversal detected: directory is outside project root".to_string());
+        return Err("Path traversal detected: directory is outside workspace root".to_string());
     }
 
     let process_id = Uuid::new_v4().to_string();
@@ -117,21 +129,10 @@ pub fn run_script(
         let state = state.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            // Wait for the child to exit.
-            // We need to take the child out of the map temporarily to call wait().
-            // Actually, we can just wait on the child in the map by taking a &mut.
-            // But since the map is behind a std::Mutex, we can't hold it across await.
-            //
-            // Instead, we poll in a loop with a small sleep, or use a different approach:
-            // Move the child out of the map for the wait, then clean up.
-            //
-            // Simplest approach: take the child out, wait, then remove entry.
-
             // Small delay to ensure stdout/stderr tasks have started
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
             // Loop until the process exits, polling with a short interval.
-            // We take the child out, try_wait, put it back if not done.
             loop {
                 let status = {
                     let mut procs = state.processes();
