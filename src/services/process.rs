@@ -230,3 +230,135 @@ pub fn list_processes(state: &AppState) -> Vec<ProcessInfo> {
     let procs = state.processes();
     procs.values().map(|rp| rp.meta.clone()).collect()
 }
+
+/// Execute a shell command in a workspace root directory.
+/// Spawns `sh -c "{command}"` and streams output via WebSocket.
+pub fn run_shell_command(
+    state: &AppState,
+    root: &str,
+    command: &str,
+) -> Result<String, String> {
+    let workspace_root = state
+        .roots()
+        .iter()
+        .find(|r| r.relative_path == root)
+        .ok_or_else(|| format!("Unknown workspace root: {root}"))?;
+
+    let cwd = &workspace_root.absolute_path;
+
+    if !cwd.is_dir() {
+        return Err(format!("Directory not found: {}", cwd.display()));
+    }
+
+    let process_id = Uuid::new_v4().to_string();
+
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", command])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn shell: {e}"))?;
+    let os_pid = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let meta = ProcessInfo {
+        id: process_id.clone(),
+        package_path: ".".to_string(),
+        script_name: command.to_string(),
+        started_at_secs: now,
+        pid: os_pid,
+    };
+
+    {
+        let mut procs = state.processes();
+        procs.insert(process_id.clone(), RunningProcess { child, meta });
+    }
+
+    let tx = state.broadcast_tx();
+
+    if let Some(stdout) = stdout {
+        let pid = process_id.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = tx.send(ServerMessage::Stdout {
+                    process_id: pid.clone(),
+                    line,
+                });
+            }
+        });
+    }
+
+    if let Some(stderr) = stderr {
+        let pid = process_id.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = tx.send(ServerMessage::Stderr {
+                    process_id: pid.clone(),
+                    line,
+                });
+            }
+        });
+    }
+
+    {
+        let pid = process_id.clone();
+        let state = state.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            loop {
+                let status = {
+                    let mut procs = state.processes();
+                    if let Some(running) = procs.get_mut(&pid) {
+                        match running.child.try_wait() {
+                            Ok(Some(status)) => Some(status.code()),
+                            Ok(None) => None,
+                            Err(_) => Some(None),
+                        }
+                    } else {
+                        break;
+                    }
+                };
+                match status {
+                    Some(code) => {
+                        {
+                            let mut procs = state.processes();
+                            procs.remove(&pid);
+                        }
+                        let _ = tx.send(ServerMessage::Exit {
+                            process_id: pid,
+                            code,
+                        });
+                        break;
+                    }
+                    None => {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        });
+    }
+
+    Ok(process_id)
+}

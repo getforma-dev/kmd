@@ -36,6 +36,8 @@ pub fn build_router(state: AppState) -> Router {
         // Process routes
         .route("/api/processes", get(api_processes_handler))
         .route("/api/processes/{id}/kill", post(api_process_kill_handler))
+        // Shell exec
+        .route("/api/shell/exec", post(api_shell_exec_handler))
         // Port routes
         .route("/api/ports", get(api_ports_handler))
         .route("/api/ports/scan", post(api_ports_scan_handler))
@@ -293,6 +295,34 @@ async fn api_process_kill_handler(
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(err) => (
             StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": err })),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shell exec handler
+// ---------------------------------------------------------------------------
+
+/// Request body for shell exec.
+#[derive(Deserialize)]
+struct ShellExecBody {
+    command: String,
+    root: Option<String>,
+}
+
+/// `POST /api/shell/exec` — Execute a shell command in a workspace root.
+/// Spawns as a managed process with stdout/stderr streaming via WebSocket.
+async fn api_shell_exec_handler(
+    State(state): State<AppState>,
+    Json(body): Json<ShellExecBody>,
+) -> impl IntoResponse {
+    let root_key = body.root.as_deref().unwrap_or(".");
+    match process::run_shell_command(&state, root_key, &body.command) {
+        Ok(process_id) => Json(serde_json::json!({ "process_id": process_id })).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": err })),
         )
             .into_response(),

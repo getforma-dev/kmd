@@ -896,6 +896,135 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   }
 
   // -------------------------------------------------------------------------
+  // Shell command input
+  // -------------------------------------------------------------------------
+
+  const [shellHistory, setShellHistory] = createSignal<string[]>([]);
+  let shellHistoryIndex = -1;
+
+  function ShellInput() {
+    let inputEl: HTMLInputElement | null = null;
+
+    function execCommand(cmd: string) {
+      if (!cmd.trim()) return;
+
+      // Add to shell history
+      setShellHistory((prev) => {
+        const updated = [cmd, ...prev.filter((c) => c !== cmd)].slice(0, 50);
+        return updated;
+      });
+      shellHistoryIndex = -1;
+
+      // Get the first root as default
+      const roots = rootScripts();
+      const rootPath = roots.length > 0 ? roots[0].path : '.';
+
+      // Initialize output buffer with the command echo
+      const tempId = `shell-${Date.now()}`;
+      processOutputMap.set(tempId, [
+        { type: 'system', text: `$ ${cmd}` },
+      ]);
+      processLabelMap.set(tempId, cmd.length > 20 ? cmd.slice(0, 20) + '…' : cmd);
+
+      // Add to active processes temporarily (will be replaced by real ID)
+      setActiveProcesses((procs) => [
+        ...procs,
+        { id: tempId, packagePath: '.', scriptName: cmd },
+      ]);
+      setSelectedProcessId(tempId);
+      setViewingHistoryId(null);
+      setTabsVersion((v) => v + 1);
+      setOutputVersion((v) => v + 1);
+
+      // Track metadata for history
+      processMetaMap.set(tempId, { scriptName: cmd, packagePath: '.', startTime: Date.now() });
+
+      // Execute via API
+      fetch('/api/shell/exec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cmd, root: rootPath }),
+      })
+        .then((r) => r.json())
+        .then((data: { process_id?: string; error?: string }) => {
+          if (data.error) {
+            processOutputMap.get(tempId)?.push({ type: 'stderr', text: data.error });
+            setOutputVersion((v) => v + 1);
+            return;
+          }
+          if (data.process_id) {
+            const realId = data.process_id;
+            // Transfer output buffer and metadata from temp to real ID
+            const existingLines = processOutputMap.get(tempId) || [];
+            processOutputMap.set(realId, existingLines);
+            processOutputMap.delete(tempId);
+            processLabelMap.set(realId, processLabelMap.get(tempId) || cmd);
+            processLabelMap.delete(tempId);
+            const meta = processMetaMap.get(tempId);
+            if (meta) {
+              processMetaMap.set(realId, meta);
+              processMetaMap.delete(tempId);
+            }
+
+            // Update active processes with real ID
+            setActiveProcesses((procs) =>
+              procs.map((p) => p.id === tempId ? { ...p, id: realId } : p)
+            );
+            setSelectedProcessId(realId);
+            setTabsVersion((v) => v + 1);
+            setOutputVersion((v) => v + 1);
+            saveProcessTabs(activeProcesses(), processOutputMap, realId);
+          }
+        })
+        .catch((err) => {
+          processOutputMap.get(tempId)?.push({ type: 'stderr', text: String(err) });
+          setOutputVersion((v) => v + 1);
+        });
+
+      // Clear input
+      if (inputEl) inputEl.value = '';
+    }
+
+    return h('div', {
+      style: 'flex-shrink: 0; display: flex; align-items: center; border-top: 1px solid var(--gruvbox-border); background: var(--terminal-bg, #0d0d0d); padding: 0 var(--space-sm);',
+    },
+      h('span', {
+        style: 'color: var(--accent, var(--gruvbox-yellow)); font-family: var(--font-mono, var(--font-code)); font-size: 12px; padding: 0 4px; flex-shrink: 0;',
+      }, '$'),
+      h('input', {
+        ref: (el: Element) => { inputEl = el as HTMLInputElement; },
+        type: 'text',
+        placeholder: 'Type a command… (ls, pwd, npm test, etc.)',
+        style: 'flex: 1; background: transparent; border: none; outline: none; color: var(--gruvbox-fg); font-family: var(--font-mono, var(--font-code)); font-size: 12px; padding: 8px 4px;',
+        onKeyDown: (e: KeyboardEvent) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            execCommand((e.target as HTMLInputElement).value);
+          }
+          // Up arrow: previous command from history
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            const hist = shellHistory();
+            if (hist.length > 0) {
+              shellHistoryIndex = Math.min(shellHistoryIndex + 1, hist.length - 1);
+              if (inputEl) inputEl.value = hist[shellHistoryIndex];
+            }
+          }
+          // Down arrow: next command from history
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            const hist = shellHistory();
+            shellHistoryIndex = Math.max(shellHistoryIndex - 1, -1);
+            if (inputEl) {
+              inputEl.value = shellHistoryIndex >= 0 ? hist[shellHistoryIndex] : '';
+            }
+          }
+        },
+      }),
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // Full layout
   // -------------------------------------------------------------------------
 
@@ -1002,12 +1131,11 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       ),
     ),
 
-    // Bottom section: terminal output
+    // Bottom section: terminal output + command input
     h('div', {
       style: 'flex: 1; display: flex; flex-direction: column; min-height: 200px; overflow: hidden;',
     },
       ProcessTabs(),
-      // Feature 8: History panel (shown above terminal when toggled)
       HistoryPanel(),
       h('div', {
         style: 'flex: 1; overflow: hidden; padding: var(--space-sm);',
@@ -1025,10 +1153,12 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           },
             h('span', {
               style: 'color: var(--gruvbox-gray); font-style: italic;',
-            }, 'Run a script to see output here'),
+            }, 'Run a script or type a command below'),
           ),
         ),
       ),
+      // Shell command input bar
+      ShellInput(),
     ),
   );
 }
