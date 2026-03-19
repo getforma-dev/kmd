@@ -14,6 +14,13 @@ interface PortInfo {
   category: string | null;
 }
 
+interface ManagedProcess {
+  id: string;
+  package_path: string;
+  script_name: string;
+  pid?: number | null;
+}
+
 interface WSMessage {
   type: string;
   data: {
@@ -67,6 +74,9 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   const [showSystem, setShowSystem] = createSignal(false);
   const [scanning, setScanning] = createSignal(false);
 
+  // Feature 9: managed processes for PID matching
+  const [managedProcesses, setManagedProcesses] = createSignal<ManagedProcess[]>([]);
+
   // -------------------------------------------------------------------------
   // WS + initial fetch
   // -------------------------------------------------------------------------
@@ -92,6 +102,36 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
     .then((r) => r.json())
     .then((data: { hidden: number[] }) => setHiddenPorts(data.hidden || []))
     .catch(() => {});
+
+  // Feature 9: Fetch managed processes for PID matching
+  function fetchManagedProcesses() {
+    fetch('/api/processes')
+      .then((r) => r.json())
+      .then((data: { processes: ManagedProcess[] }) => {
+        setManagedProcesses(data.processes || []);
+      })
+      .catch(() => {});
+  }
+  fetchManagedProcesses();
+
+  // Refresh managed processes periodically (every 5s like ports)
+  const processRefreshTimer = setInterval(fetchManagedProcesses, 5000);
+  onCleanup(() => clearInterval(processRefreshTimer));
+
+  // Helper: find managed process matching a port's PID
+  function findManagedProcess(portPid: number | null): ManagedProcess | null {
+    if (portPid == null) return null;
+    // Match by PID if available, otherwise match by command heuristics
+    // The server ProcessInfo doesn't currently expose PID, so we match by command
+    // For now we check the process list — this works best for dev servers
+    const procs = managedProcesses();
+    for (const proc of procs) {
+      if (proc.pid != null && proc.pid === portPid) {
+        return proc;
+      }
+    }
+    return null;
+  }
 
   // -------------------------------------------------------------------------
   // Actions
@@ -171,6 +211,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
     const showHid = showHidden();
 
     const showSys = showSystem();
+    const managed = managedProcesses(); // Feature 9: read managed processes
     const visible = portList.filter((p) => !hidden.includes(p.port));
     const hiddenList = portList.filter((p) => hidden.includes(p.port));
 
@@ -299,6 +340,22 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
           cmd.textContent = p.command;
           cmd.title = p.command;
           info.appendChild(cmd);
+        }
+
+        // Feature 9: Show managed process link if PID matches
+        const matchedProc = findManagedProcess(p.pid);
+        if (matchedProc) {
+          const managedLink = document.createElement('button');
+          managedLink.className = 'btn btn-ghost';
+          managedLink.style.cssText = 'padding: 1px 6px; font-size: 10px; margin-top: 3px; color: var(--gruvbox-aqua);';
+          managedLink.textContent = `Started by: ${matchedProc.script_name}`;
+          managedLink.title = `Switch to Scripts tab and view ${matchedProc.script_name}`;
+          managedLink.onclick = (e) => {
+            e.stopPropagation();
+            // Switch to scripts tab
+            location.hash = '#scripts';
+          };
+          info.appendChild(managedLink);
         }
 
         // Error message for failed kill

@@ -119,6 +119,7 @@ interface WorkspaceInfo {
 function App() {
   const [route, setRoute] = createSignal<Route>(parseRoute(location.hash));
   const [workspaceName, setWorkspaceName] = createSignal('K.md');
+  const [sidebarOpen, setSidebarOpen] = createSignal(true);
 
   // Listen to hash changes
   const onHashChange = () => setRoute(parseRoute(location.hash));
@@ -156,6 +157,65 @@ function App() {
       // Non-critical, keep default
     });
 
+  // -------------------------------------------------------------------------
+  // Feature 1: Keyboard shortcuts
+  // -------------------------------------------------------------------------
+
+  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+
+  function handleGlobalKeydown(e: KeyboardEvent) {
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+
+    // Cmd+K / Ctrl+K — Focus search on DocsPage
+    if (mod && e.key === 'k') {
+      e.preventDefault();
+      if (route() !== 'docs') {
+        location.hash = '#docs';
+      }
+      // Use requestAnimationFrame to let the page render first if switching
+      requestAnimationFrame(() => {
+        const searchInput = document.querySelector('.search-input') as HTMLInputElement | null;
+        searchInput?.focus();
+      });
+      return;
+    }
+
+    // Cmd+1 — Docs
+    if (mod && e.key === '1') {
+      e.preventDefault();
+      location.hash = '#docs';
+      return;
+    }
+
+    // Cmd+2 — Scripts
+    if (mod && e.key === '2') {
+      e.preventDefault();
+      location.hash = '#scripts';
+      return;
+    }
+
+    // Cmd+3 — Ports
+    if (mod && e.key === '3') {
+      e.preventDefault();
+      location.hash = '#ports';
+      return;
+    }
+
+    // Escape — Clear and blur search
+    if (e.key === 'Escape') {
+      const searchInput = document.querySelector('.search-input') as HTMLInputElement | null;
+      if (searchInput) {
+        searchInput.value = '';
+        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+        searchInput.blur();
+      }
+      return;
+    }
+  }
+
+  window.addEventListener('keydown', handleGlobalKeydown);
+  onCleanup(() => window.removeEventListener('keydown', handleGlobalKeydown));
+
   // Page title headers
   const PAGE_TITLES: Record<Route, string> = {
     docs: 'Documentation',
@@ -185,11 +245,31 @@ function App() {
     },
   ]);
 
-  return h('div', { class: 'layout' },
+  // Hamburger icon (3 lines)
+  function HamburgerButton() {
+    return h('button', {
+      class: 'hamburger-btn',
+      onClick: () => setSidebarOpen(!sidebarOpen()),
+      title: () => sidebarOpen() ? 'Collapse sidebar' : 'Expand sidebar',
+    },
+      h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', style: 'width: 18px; height: 18px;' },
+        h('line', { x1: '3', y1: '6', x2: '21', y2: '6' }),
+        h('line', { x1: '3', y1: '12', x2: '21', y2: '12' }),
+        h('line', { x1: '3', y1: '18', x2: '21', y2: '18' }),
+      ),
+    );
+  }
+
+  return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
     Sidebar({ route, workspaceName }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
+        HamburgerButton(),
         h('h1', null, () => PAGE_TITLES[route()]),
+        h('span', { class: 'kbd-hints' },
+          h('kbd', { class: 'kbd' }, () => isMac ? '⌘K' : 'Ctrl+K'),
+          ' search',
+        ),
       ),
       h('div', { class: 'main-content slide-in' },
         pageContent,

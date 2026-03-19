@@ -38,6 +38,59 @@ interface WSMessage {
 }
 
 // ---------------------------------------------------------------------------
+// Feature 7: Script run tracking (localStorage)
+// ---------------------------------------------------------------------------
+
+interface ScriptRunCounts {
+  [key: string]: number;
+}
+
+function getScriptRunCounts(): ScriptRunCounts {
+  try {
+    const raw = localStorage.getItem('kmd:scriptRuns');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function incrementScriptRun(rootPath: string, packagePath: string, scriptName: string): void {
+  const counts = getScriptRunCounts();
+  const key = `${rootPath}:${packagePath}:${scriptName}`;
+  counts[key] = (counts[key] || 0) + 1;
+  localStorage.setItem('kmd:scriptRuns', JSON.stringify(counts));
+}
+
+function getTopRecents(limit: number): Array<{ key: string; root: string; pkg: string; script: string; count: number }> {
+  const counts = getScriptRunCounts();
+  return Object.entries(counts)
+    .map(([key, count]) => {
+      const parts = key.split(':');
+      // key format: rootPath:packagePath:scriptName
+      // Handle case where root or package might contain ':'
+      const script = parts[parts.length - 1];
+      const pkg = parts[parts.length - 2];
+      const root = parts.slice(0, -2).join(':');
+      return { key, root, pkg, script, count };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------
+// Feature 8: History entry type
+// ---------------------------------------------------------------------------
+
+interface HistoryEntry {
+  processId: string;
+  scriptName: string;
+  packagePath: string;
+  exitCode: number | null;
+  timestamp: number;
+  lines: TerminalLine[];
+}
+
+// ---------------------------------------------------------------------------
 // ScriptsPage
 // ---------------------------------------------------------------------------
 
@@ -47,6 +100,12 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   const [activeProcesses, setActiveProcesses] = createSignal<ActiveProcess[]>([]);
   const [selectedProcessId, setSelectedProcessId] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(true);
+  const [recentsVersion, setRecentsVersion] = createSignal(0);
+
+  // Feature 8: History state
+  const [history, setHistory] = createSignal<HistoryEntry[]>([]);
+  const [viewingHistoryId, setViewingHistoryId] = createSignal<string | null>(null);
+  const [showHistory, setShowHistory] = createSignal(false);
 
   // Helper: get all packages flattened
   const allPackages = (): PackageScripts[] => {
@@ -63,6 +122,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   // Store output lines per process: processId -> lines
   const processOutputMap = new Map<string, TerminalLine[]>();
 
+  // Track process metadata for history
+  const processMetaMap = new Map<string, { scriptName: string; packagePath: string; startTime: number }>();
+
   // Signal to trigger terminal re-render when lines change
   const [outputVersion, setOutputVersion] = createSignal(0);
 
@@ -73,6 +135,14 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   const terminalLines = (): TerminalLine[] => {
     // Read the version signal to establish reactivity
     outputVersion();
+
+    // If viewing history, show that
+    const histId = viewingHistoryId();
+    if (histId) {
+      const entry = history().find((h) => h.processId === histId);
+      return entry ? entry.lines : [];
+    }
+
     const pid = selectedProcessId();
     if (!pid) return [];
     return processOutputMap.get(pid) ?? [];
@@ -92,7 +162,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         processOutputMap.set(pid, []);
       }
       processOutputMap.get(pid)!.push({ type: 'stdout', text: data.line });
-      if (selectedProcessId() === pid) {
+      if (selectedProcessId() === pid && !viewingHistoryId()) {
         setOutputVersion((v) => v + 1);
       }
     } else if (type === 'stderr' && data.line !== undefined) {
@@ -100,7 +170,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         processOutputMap.set(pid, []);
       }
       processOutputMap.get(pid)!.push({ type: 'stderr', text: data.line });
-      if (selectedProcessId() === pid) {
+      if (selectedProcessId() === pid && !viewingHistoryId()) {
         setOutputVersion((v) => v + 1);
       }
     } else if (type === 'exit') {
@@ -115,11 +185,32 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           : { type: 'system', text: 'Process terminated' };
       processOutputMap.get(pid)!.push(exitLine);
 
+      // Feature 8: Add to history
+      const meta = processMetaMap.get(pid);
+      if (meta) {
+        const historyEntry: HistoryEntry = {
+          processId: pid,
+          scriptName: meta.scriptName,
+          packagePath: meta.packagePath,
+          exitCode: code ?? null,
+          timestamp: Date.now(),
+          lines: [...(processOutputMap.get(pid) || [])],
+        };
+
+        setHistory((prev) => {
+          const updated = [historyEntry, ...prev];
+          // Keep only last 10 entries (FIFO)
+          return updated.slice(0, 10);
+        });
+
+        processMetaMap.delete(pid);
+      }
+
       // Remove from active processes
       setActiveProcesses((procs) => procs.filter((p) => p.id !== pid));
       setTabsVersion((v) => v + 1);
 
-      if (selectedProcessId() === pid) {
+      if (selectedProcessId() === pid && !viewingHistoryId()) {
         setOutputVersion((v) => v + 1);
       }
     }
@@ -167,6 +258,13 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   // Run a script
   // -------------------------------------------------------------------------
   function runScript(root: string, packagePath: string, scriptName: string) {
+    // Feature 7: Track run count
+    incrementScriptRun(root, packagePath, scriptName);
+    setRecentsVersion((v) => v + 1);
+
+    // Clear history viewing when starting new process
+    setViewingHistoryId(null);
+
     fetch('/api/scripts/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -186,6 +284,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
             { type: 'system', text: `  in ${packagePath === '.' ? 'project root' : packagePath}` },
             { type: 'system', text: '' },
           ]);
+
+          // Track metadata for history
+          processMetaMap.set(pid, { scriptName, packagePath, startTime: Date.now() });
 
           // Add to active processes
           setActiveProcesses((procs) => [
@@ -223,10 +324,55 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   }
 
   // -------------------------------------------------------------------------
-  // Check if a process is still active
+  // Feature 7: Recents section
   // -------------------------------------------------------------------------
-  function isProcessActive(processId: string): boolean {
-    return activeProcesses().some((p) => p.id === processId);
+
+  function RecentsSection() {
+    const recentsContainer = document.createElement('div');
+    recentsContainer.className = 'recents-section';
+
+    createEffect(() => {
+      recentsVersion(); // re-run when runs change
+      const recents = getTopRecents(5);
+
+      recentsContainer.innerHTML = '';
+      if (recents.length === 0) return;
+
+      const label = document.createElement('div');
+      label.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: var(--space-xs);';
+      label.textContent = 'Recent';
+      recentsContainer.appendChild(label);
+
+      const pillRow = document.createElement('div');
+      pillRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-bottom: var(--space-md);';
+
+      for (const rec of recents) {
+        const pill = document.createElement('button');
+        pill.className = 'recent-pill';
+        pill.title = `Run ${rec.script} in ${rec.pkg} (${rec.count} runs)`;
+
+        const pkgSpan = document.createElement('span');
+        pkgSpan.style.cssText = 'color: var(--gruvbox-gray); font-size: 10px;';
+        pkgSpan.textContent = rec.pkg === '.' ? 'root' : rec.pkg.split('/').pop() || rec.pkg;
+        pill.appendChild(pkgSpan);
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = rec.script;
+        pill.appendChild(nameSpan);
+
+        const countSpan = document.createElement('span');
+        countSpan.style.cssText = 'font-size: 9px; color: var(--gruvbox-gray); opacity: 0.7;';
+        countSpan.textContent = `${rec.count}`;
+        pill.appendChild(countSpan);
+
+        pill.onclick = () => runScript(rec.root, rec.pkg, rec.script);
+        pillRow.appendChild(pill);
+      }
+
+      recentsContainer.appendChild(pillRow);
+    });
+
+    return recentsContainer;
   }
 
   // -------------------------------------------------------------------------
@@ -290,13 +436,14 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
     tabsContainer.style.cssText = 'display: flex; gap: 2px; align-items: center; flex: 1;';
 
     const killBtnContainer = document.createElement('div');
-    killBtnContainer.style.cssText = 'margin-left: auto; flex-shrink: 0;';
+    killBtnContainer.style.cssText = 'margin-left: auto; flex-shrink: 0; display: flex; gap: 4px; align-items: center;';
 
     // Reactively rebuild tabs when processes or selection change
     createEffect(() => {
       // Read reactive dependencies
       const active = activeProcesses();
       const selected = selectedProcessId();
+      const historyId = viewingHistoryId();
       tabsVersion(); // also re-run when tabs version bumps
 
       // Clear existing tabs
@@ -307,7 +454,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         const proc = active.find((p) => p.id === pid);
         const label = proc ? proc.scriptName : pid.slice(0, 8);
         const isActive = !!proc;
-        const isSelected = pid === selected;
+        const isSelected = pid === selected && !historyId;
 
         const tabEl = document.createElement('button');
         tabEl.style.cssText = `
@@ -329,6 +476,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         tabEl.appendChild(document.createTextNode(label));
         const capturedPid = pid;
         tabEl.onclick = () => {
+          setViewingHistoryId(null);
           setSelectedProcessId(capturedPid);
           setOutputVersion((v) => v + 1);
         };
@@ -336,13 +484,37 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       }
     });
 
-    // Reactively show/hide kill button
+    // Reactively show/hide kill button and history toggle
     createEffect(() => {
       const pid = selectedProcessId();
       const active = activeProcesses();
+      const historyId = viewingHistoryId();
+      const hist = history();
       killBtnContainer.innerHTML = '';
 
-      if (pid && active.some((p) => p.id === pid)) {
+      // History toggle
+      if (hist.length > 0) {
+        const histBtn = document.createElement('button');
+        histBtn.className = 'btn btn-ghost';
+        histBtn.style.cssText = 'padding: 2px 8px; font-size: 10px;';
+        histBtn.textContent = showHistory() ? 'Hide History' : `History (${hist.length})`;
+        histBtn.onclick = () => setShowHistory(!showHistory());
+        killBtnContainer.appendChild(histBtn);
+      }
+
+      if (historyId) {
+        const backBtn = document.createElement('button');
+        backBtn.className = 'btn btn-ghost';
+        backBtn.style.cssText = 'padding: 2px 8px; font-size: 10px;';
+        backBtn.textContent = 'Back to live';
+        backBtn.onclick = () => {
+          setViewingHistoryId(null);
+          setOutputVersion((v) => v + 1);
+        };
+        killBtnContainer.appendChild(backBtn);
+      }
+
+      if (pid && !historyId && active.some((p) => p.id === pid)) {
         const killBtn = document.createElement('button');
         killBtn.className = 'btn btn-danger';
         killBtn.style.cssText = 'padding: 2px 8px; font-size: 11px;';
@@ -365,16 +537,98 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   }
 
   // -------------------------------------------------------------------------
+  // Feature 8: History panel
+  // -------------------------------------------------------------------------
+
+  function HistoryPanel() {
+    const histPanel = document.createElement('div');
+    histPanel.className = 'history-panel';
+
+    createEffect(() => {
+      const show = showHistory();
+      const hist = history();
+      const currentHistId = viewingHistoryId();
+
+      histPanel.innerHTML = '';
+      histPanel.style.display = show && hist.length > 0 ? 'block' : 'none';
+
+      if (!show || hist.length === 0) return;
+
+      const title = document.createElement('div');
+      title.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--gruvbox-border);';
+      title.textContent = 'Run History';
+      histPanel.appendChild(title);
+
+      const list = document.createElement('div');
+      list.style.cssText = 'max-height: 120px; overflow-y: auto;';
+
+      for (const entry of hist) {
+        const item = document.createElement('div');
+        const isViewing = entry.processId === currentHistId;
+        item.style.cssText = `
+          display: flex; align-items: center; gap: 8px;
+          padding: 4px var(--space-sm); cursor: pointer; font-size: 12px;
+          background: ${isViewing ? 'rgba(215, 153, 33, 0.08)' : 'transparent'};
+          border-left: 2px solid ${isViewing ? 'var(--accent)' : 'transparent'};
+        `;
+        item.onmouseenter = () => { if (!isViewing) item.style.background = 'rgba(255,255,255,0.02)'; };
+        item.onmouseleave = () => { if (!isViewing) item.style.background = 'transparent'; };
+
+        // Exit code indicator
+        const exitDot = document.createElement('span');
+        exitDot.style.cssText = `
+          width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+          background: ${entry.exitCode === 0 ? 'var(--gruvbox-green)' : entry.exitCode != null ? 'var(--gruvbox-red)' : 'var(--gruvbox-gray)'};
+        `;
+        item.appendChild(exitDot);
+
+        // Script name
+        const nameEl = document.createElement('span');
+        nameEl.style.cssText = 'font-family: var(--font-code); color: var(--gruvbox-fg);';
+        nameEl.textContent = entry.scriptName;
+        item.appendChild(nameEl);
+
+        // Package path
+        const pkgEl = document.createElement('span');
+        pkgEl.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray);';
+        pkgEl.textContent = entry.packagePath === '.' ? 'root' : entry.packagePath;
+        item.appendChild(pkgEl);
+
+        // Timestamp
+        const timeEl = document.createElement('span');
+        timeEl.style.cssText = 'margin-left: auto; font-size: 10px; color: var(--gruvbox-gray); font-family: var(--font-code);';
+        const d = new Date(entry.timestamp);
+        timeEl.textContent = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+        item.appendChild(timeEl);
+
+        const capturedId = entry.processId;
+        item.onclick = () => {
+          setViewingHistoryId(capturedId);
+          setOutputVersion((v) => v + 1);
+        };
+        list.appendChild(item);
+      }
+
+      histPanel.appendChild(list);
+    });
+
+    return histPanel;
+  }
+
+  // -------------------------------------------------------------------------
   // Full layout
   // -------------------------------------------------------------------------
 
   return h('div', {
     style: 'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
   },
-    // Top section: packages grid
+    // Top section: recents + packages grid
     h('div', {
       style: 'flex: 0 0 auto; max-height: 50%; overflow-y: auto; padding: var(--space-lg); border-bottom: 1px solid var(--gruvbox-border);',
     },
+      // Feature 7: Recents
+      RecentsSection(),
+
       createShow(
         () => loading(),
         () => h('div', {
@@ -424,11 +678,13 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       style: 'flex: 1; display: flex; flex-direction: column; min-height: 200px; overflow: hidden;',
     },
       ProcessTabs(),
+      // Feature 8: History panel (shown above terminal when toggled)
+      HistoryPanel(),
       h('div', {
         style: 'flex: 1; overflow: hidden; padding: var(--space-sm);',
       },
         createShow(
-          () => selectedProcessId() !== null,
+          () => selectedProcessId() !== null || viewingHistoryId() !== null,
           () => {
             const termEl = Terminal({ lines: terminalLines });
             (termEl as HTMLElement).style.cssText += 'height: 100%; max-height: none;';

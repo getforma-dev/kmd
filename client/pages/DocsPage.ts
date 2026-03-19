@@ -37,6 +37,12 @@ interface DocsApiResponse {
   roots: RootTreeData[];
 }
 
+interface TocEntry {
+  id: string;
+  text: string;
+  level: number;
+}
+
 // ---------------------------------------------------------------------------
 // Helper: find first file in tree (depth-first)
 // ---------------------------------------------------------------------------
@@ -53,6 +59,18 @@ function findFirstFile(nodes: TreeNode[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: check if a path exists in the tree
+// ---------------------------------------------------------------------------
+
+function pathExistsInTree(nodes: TreeNode[], targetPath: string): boolean {
+  for (const node of nodes) {
+    if (node.type === 'file' && node.path === targetPath) return true;
+    if (node.children && pathExistsInTree(node.children, targetPath)) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Helper: format file size
 // ---------------------------------------------------------------------------
 
@@ -60,6 +78,19 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: slugify heading text for IDs
+// ---------------------------------------------------------------------------
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +110,8 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   const [isSearching, setIsSearching] = createSignal(false);
   const [loading, setLoading] = createSignal(true);
   const [docLoading, setDocLoading] = createSignal(false);
+  const [tocEntries, setTocEntries] = createSignal<TocEntry[]>([]);
+  const [activeTocId, setActiveTocId] = createSignal('');
 
   // Debounce timer
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -88,6 +121,24 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
 
   // Helper: check if any root has files
   const hasFiles = (): boolean => roots().some((r) => r.children.length > 0);
+
+  // -------------------------------------------------------------------------
+  // Feature 2: Persist selected path and root to localStorage
+  // -------------------------------------------------------------------------
+
+  createEffect(() => {
+    const path = selectedPath();
+    if (path) {
+      localStorage.setItem('kmd:lastDoc', path);
+    }
+  });
+
+  createEffect(() => {
+    const root = selectedRoot();
+    if (root) {
+      localStorage.setItem('kmd:lastDocRoot', root);
+    }
+  });
 
   // -------------------------------------------------------------------------
   // Handle WS messages for live file updates
@@ -169,7 +220,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   }
 
   // -------------------------------------------------------------------------
-  // Fetch tree on mount
+  // Fetch tree on mount (with last-doc restore)
   // -------------------------------------------------------------------------
 
   fetch('/api/docs')
@@ -178,7 +229,21 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
       setRoots(data.roots);
       setLoading(false);
 
-      // Auto-select first file from first root with files
+      // Feature 2: Try to restore last viewed doc
+      const lastDoc = localStorage.getItem('kmd:lastDoc');
+      const lastRoot = localStorage.getItem('kmd:lastDocRoot');
+
+      if (lastDoc && lastRoot) {
+        // Check if the path exists in the loaded tree
+        const targetRootData = data.roots.find((r) => r.path === lastRoot);
+        if (targetRootData && pathExistsInTree(targetRootData.children, lastDoc)) {
+          setSelectedPath(lastDoc);
+          setSelectedRoot(lastRoot);
+          return;
+        }
+      }
+
+      // Fallback: Auto-select first file from first root with files
       for (const root of data.roots) {
         const first = findFirstFile(root.children);
         if (first) {
@@ -241,6 +306,100 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
         renderMermaidDiagrams();
       });
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Feature 4 + 5: After doc HTML renders, build TOC + add copy buttons
+  // -------------------------------------------------------------------------
+
+  createEffect(() => {
+    const html = docHtml();
+    if (!html) {
+      setTocEntries([]);
+      return;
+    }
+
+    // Let the DOM update first
+    requestAnimationFrame(() => {
+      const markdownBody = document.querySelector('.markdown-body');
+      if (!markdownBody) return;
+
+      // --- Feature 4: Build TOC from headings ---
+      const headings = markdownBody.querySelectorAll('h1, h2, h3, h4');
+      const entries: TocEntry[] = [];
+      const idCounts: Record<string, number> = {};
+
+      headings.forEach((heading) => {
+        const text = heading.textContent?.trim() || '';
+        if (!text) return;
+
+        let baseId = slugify(text);
+        // Ensure unique IDs
+        if (idCounts[baseId] !== undefined) {
+          idCounts[baseId]++;
+          baseId = `${baseId}-${idCounts[baseId]}`;
+        } else {
+          idCounts[baseId] = 0;
+        }
+
+        heading.id = baseId;
+        const level = parseInt(heading.tagName.charAt(1), 10);
+        entries.push({ id: baseId, text, level });
+      });
+
+      setTocEntries(entries);
+
+      // Set up intersection observer for active TOC tracking
+      if (entries.length >= 3) {
+        const contentEl = markdownBody.closest('.doc-content-area');
+        const observer = new IntersectionObserver(
+          (observerEntries) => {
+            for (const entry of observerEntries) {
+              if (entry.isIntersecting) {
+                setActiveTocId(entry.target.id);
+                break;
+              }
+            }
+          },
+          { root: contentEl, rootMargin: '-10% 0px -80% 0px', threshold: 0 },
+        );
+
+        headings.forEach((heading) => {
+          if (heading.id) observer.observe(heading);
+        });
+
+        // Clean up is handled by effect re-run (DOM gets replaced)
+      }
+
+      // --- Feature 5: Add copy buttons to code blocks ---
+      const preBlocks = markdownBody.querySelectorAll('pre');
+      preBlocks.forEach((pre) => {
+        // Skip if already has a copy button
+        if (pre.querySelector('.code-copy-btn')) return;
+
+        // Make the pre relative for positioning
+        (pre as HTMLElement).style.position = 'relative';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'code-copy-btn';
+        copyBtn.textContent = 'Copy';
+        copyBtn.addEventListener('click', () => {
+          const code = pre.querySelector('code');
+          const text = code ? code.textContent || '' : pre.textContent || '';
+          navigator.clipboard.writeText(text).then(() => {
+            copyBtn.textContent = 'Copied!';
+            copyBtn.classList.add('copied');
+            setTimeout(() => {
+              copyBtn.textContent = 'Copy';
+              copyBtn.classList.remove('copied');
+            }, 2000);
+          }).catch(() => {
+            // Clipboard not available
+          });
+        });
+        pre.appendChild(copyBtn);
+      });
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -387,52 +546,138 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
   }
 
   // -------------------------------------------------------------------------
-  // Right panel: markdown content
+  // Feature 3: Breadcrumb path
+  // -------------------------------------------------------------------------
+
+  function Breadcrumb() {
+    return createShow(
+      () => !!selectedPath(),
+      () => {
+        const segments = selectedPath().split('/');
+        const items: (HTMLElement | SVGElement)[] = [];
+        segments.forEach((seg, i) => {
+          if (i > 0) {
+            items.push(
+              h('span', { class: 'breadcrumb-sep' }, '/') as unknown as HTMLElement,
+            );
+          }
+          const isLast = i === segments.length - 1;
+          items.push(
+            h('span', {
+              class: isLast ? 'breadcrumb-segment breadcrumb-current' : 'breadcrumb-segment',
+            }, seg) as unknown as HTMLElement,
+          );
+        });
+        return h('div', { class: 'breadcrumb' }, ...items);
+      },
+      () => h('div', null) as unknown as HTMLElement,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Feature 4: Table of contents sidebar
+  // -------------------------------------------------------------------------
+
+  function TocSidebar() {
+    return createShow(
+      () => tocEntries().length >= 3,
+      () => {
+        const tocEl = document.createElement('nav');
+        tocEl.className = 'toc';
+
+        const tocTitle = document.createElement('div');
+        tocTitle.className = 'toc-title';
+        tocTitle.textContent = 'On this page';
+        tocEl.appendChild(tocTitle);
+
+        // Reactively rebuild TOC items
+        createEffect(() => {
+          const entries = tocEntries();
+          const activeId = activeTocId();
+
+          // Remove all items except title
+          while (tocEl.children.length > 1) {
+            tocEl.removeChild(tocEl.lastChild!);
+          }
+
+          for (const entry of entries) {
+            const item = document.createElement('a');
+            item.className = `toc-item toc-level-${entry.level}${entry.id === activeId ? ' active' : ''}`;
+            item.textContent = entry.text;
+            item.href = `#${entry.id}`;
+            item.addEventListener('click', (e) => {
+              e.preventDefault();
+              const target = document.getElementById(entry.id);
+              if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setActiveTocId(entry.id);
+              }
+            });
+            tocEl.appendChild(item);
+          }
+        });
+
+        return tocEl;
+      },
+      () => h('div', null) as unknown as HTMLElement,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Right panel: markdown content with breadcrumb and TOC
   // -------------------------------------------------------------------------
 
   function RightPanel() {
-    return h('div', { style: 'flex: 1; overflow-y: auto; padding: var(--space-lg); min-width: 0;' },
-      createShow(
-        () => !selectedPath(),
-        () => h('div', { class: 'page-stub' }, 'Select a document from the sidebar.'),
-        () => createShow(
-          () => docLoading(),
-          () => h('div', {
-            style: 'color: var(--gruvbox-gray); font-size: 14px;',
-          }, 'Loading document...'),
+    return h('div', { class: 'doc-content-area', style: 'flex: 1; overflow-y: auto; min-width: 0; display: flex;' },
+      // Main content column
+      h('div', { style: 'flex: 1; padding: var(--space-lg); min-width: 0; overflow-y: auto;' },
+        createShow(
+          () => !selectedPath(),
+          () => h('div', { class: 'page-stub' }, 'Select a document from the sidebar.'),
           () => createShow(
-            () => isTruncated(),
+            () => docLoading(),
             () => h('div', {
-              style: 'display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-md); padding: var(--space-xl); color: var(--gruvbox-gray);',
-            },
-              h('svg', {
-                viewBox: '0 0 24 24',
-                fill: 'none',
-                stroke: 'currentColor',
-                'stroke-width': '2',
-                style: 'width: 48px; height: 48px; opacity: 0.5;',
+              style: 'color: var(--gruvbox-gray); font-size: 14px;',
+            }, 'Loading document...'),
+            () => createShow(
+              () => isTruncated(),
+              () => h('div', {
+                style: 'display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-md); padding: var(--space-xl); color: var(--gruvbox-gray);',
               },
-                h('path', { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }),
-                h('polyline', { points: '14 2 14 8 20 8' }),
-              ),
-              h('div', { style: 'text-align: center;' },
-                h('p', { style: 'font-size: 15px; margin-bottom: var(--space-sm);' },
-                  () => `File too large to render (${formatSize(truncatedSize())})`
+                h('svg', {
+                  viewBox: '0 0 24 24',
+                  fill: 'none',
+                  stroke: 'currentColor',
+                  'stroke-width': '2',
+                  style: 'width: 48px; height: 48px; opacity: 0.5;',
+                },
+                  h('path', { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }),
+                  h('polyline', { points: '14 2 14 8 20 8' }),
                 ),
-                h('p', { style: 'font-size: 13px;' }, () => selectedPath()),
+                h('div', { style: 'text-align: center;' },
+                  h('p', { style: 'font-size: 15px; margin-bottom: var(--space-sm);' },
+                    () => `File too large to render (${formatSize(truncatedSize())})`
+                  ),
+                  h('p', { style: 'font-size: 13px;' }, () => selectedPath()),
+                ),
+                h('button', {
+                  class: 'btn btn-ghost',
+                  onClick: () => copyPath(selectedPath()),
+                }, 'Copy path'),
               ),
-              h('button', {
-                class: 'btn btn-ghost',
-                onClick: () => copyPath(selectedPath()),
-              }, 'Copy path'),
+              () => h('div', null,
+                Breadcrumb(),
+                h('div', {
+                  class: 'markdown-body fade-in',
+                  dangerouslySetInnerHTML: () => ({ __html: docHtml() }),
+                }),
+              ),
             ),
-            () => h('div', {
-              class: 'markdown-body fade-in',
-              dangerouslySetInnerHTML: () => ({ __html: docHtml() }),
-            }),
           ),
         ),
       ),
+      // TOC column
+      TocSidebar(),
     );
   }
 
