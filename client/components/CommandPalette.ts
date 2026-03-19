@@ -52,6 +52,7 @@ export function CommandPalette(props: CommandPaletteProps) {
     { id: 'action-theme', label: 'Toggle theme', secondary: 'Switch dark/light mode', category: 'action', action: () => props.onAction('toggle-theme') },
     { id: 'action-scan', label: 'Scan ports', secondary: 'Trigger a port scan', category: 'action', action: () => props.onAction('scan-ports') },
     { id: 'action-refresh', label: 'Refresh docs', secondary: 'Re-fetch documentation tree', category: 'action', action: () => props.onAction('refresh-docs') },
+    { id: 'action-help', label: 'Help', secondary: 'CLI commands, shortcuts, tips', category: 'action', action: () => props.onAction('help') },
   ];
 
   // -------------------------------------------------------------------------

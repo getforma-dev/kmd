@@ -1,6 +1,7 @@
 import { createSignal, createEffect, createSwitch, createShow, mount, h, onCleanup } from '@getforma/core';
 import { Sidebar, type Route } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
+import { HelpPanel } from './components/HelpPanel';
 import { DocsPage } from './pages/DocsPage';
 import { ScriptsPage } from './pages/ScriptsPage';
 import { PortsPage } from './pages/PortsPage';
@@ -140,6 +141,7 @@ function App() {
   const [workspaceName, setWorkspaceName] = createSignal('K.md');
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [paletteOpen, setPaletteOpen] = createSignal(false);
+  const [helpOpen, setHelpOpen] = createSignal(false);
   const [theme, setTheme] = createSignal(getInitialTheme());
 
   // Apply initial theme
@@ -235,8 +237,12 @@ function App() {
       return;
     }
 
-    // Escape — close palette if open, otherwise clear search
+    // Escape — close help/palette if open, otherwise clear search
     if (e.key === 'Escape') {
+      if (helpOpen()) {
+        setHelpOpen(false);
+        return;
+      }
       if (paletteOpen()) {
         setPaletteOpen(false);
         return;
@@ -247,6 +253,12 @@ function App() {
         searchInput.dispatchEvent(new Event('input', { bubbles: true }));
         searchInput.blur();
       }
+      return;
+    }
+
+    // ? — Toggle help (only when not typing in an input)
+    if (e.key === '?' && !paletteOpen() && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) {
+      setHelpOpen(!helpOpen());
       return;
     }
   }
@@ -300,6 +312,9 @@ function App() {
         // Navigate to docs and let it re-fetch
         location.hash = '#docs';
         break;
+      case 'help':
+        setHelpOpen(true);
+        break;
     }
     setPaletteOpen(false);
   }
@@ -349,7 +364,7 @@ function App() {
   }
 
   return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
-    Sidebar({ route, workspaceName, theme, onToggleTheme: toggleTheme }),
+    Sidebar({ route, workspaceName, theme, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true) }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         HamburgerButton(),
@@ -366,7 +381,7 @@ function App() {
         pageContent,
       ),
     ),
-    // Command palette overlay (conditionally rendered)
+    // Command palette overlay
     createShow(
       () => paletteOpen(),
       () => CommandPalette({
@@ -374,6 +389,12 @@ function App() {
         onNavigate: handlePaletteNavigate,
         onAction: handlePaletteAction,
       }),
+      () => h('div', { style: 'display: none;' }),
+    ),
+    // Help panel overlay
+    createShow(
+      () => helpOpen(),
+      () => HelpPanel({ onClose: () => setHelpOpen(false) }),
       () => h('div', { style: 'display: none;' }),
     ),
   );

@@ -20,6 +20,7 @@ export function Sidebar(props: {
   workspaceName?: () => string;
   theme?: () => string;
   onToggleTheme?: () => void;
+  onHelp?: () => void;
 }) {
   const navItems = (['docs', 'scripts', 'ports'] as const).map((key) =>
     h('a', {
@@ -90,6 +91,12 @@ export function Sidebar(props: {
     ),
     h('nav', { class: 'sidebar-nav' }, ...navItems),
     h('div', { class: 'sidebar-footer' },
+      h('button', {
+        class: 'theme-toggle-btn',
+        onClick: () => props.onHelp?.(),
+        title: 'Help & shortcuts (?)',
+        style: 'font-size: 12px;',
+      }, '?'),
       ThemeToggle(),
     ),
   );
