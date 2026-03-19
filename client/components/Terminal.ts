@@ -1,6 +1,17 @@
 import { h, createEffect } from '@getforma/core';
 
 // ---------------------------------------------------------------------------
+// ANSI escape code stripping
+// ---------------------------------------------------------------------------
+
+// Matches all ANSI escape sequences: CSI (ESC[...m), OSC, and other control sequences
+const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[=>]/g;
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_REGEX, '');
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -38,7 +49,7 @@ export function Terminal(props: TerminalProps) {
       const line = allLines[i];
       const lineEl = document.createElement('div');
       lineEl.className = `terminal-line ${line.type}`;
-      lineEl.textContent = line.text;
+      lineEl.textContent = stripAnsi(line.text);
       el.appendChild(lineEl);
     }
 
