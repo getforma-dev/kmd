@@ -8,7 +8,7 @@ use axum::{
 };
 use rust_embed::Embed;
 use serde::Deserialize;
-use crate::services::{markdown, ports, process, scripts};
+use crate::services::{markdown, ports, process, scripts, terminal_ws};
 use crate::state::AppState;
 use crate::ws;
 
@@ -38,6 +38,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/processes/{id}/kill", post(api_process_kill_handler))
         // Shell exec
         .route("/api/shell/exec", post(api_shell_exec_handler))
+        // Terminal routes
+        .route("/api/terminal/sessions", get(terminal_ws::list_terminal_sessions))
+        .route("/api/terminal/sessions/{id}/kill", post(terminal_ws::kill_terminal_session))
         // Port routes
         .route("/api/ports", get(api_ports_handler))
         .route("/api/ports/scan", post(api_ports_scan_handler))
@@ -46,6 +49,7 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/ws", get(ws::ws_handler))
+        .route("/ws/terminal", get(terminal_ws::terminal_ws_handler))
         .merge(api)
         .fallback(static_handler)
         .with_state(state)

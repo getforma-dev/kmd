@@ -39,6 +39,16 @@ export function iconPorts(): SVGElement {
   ) as unknown as SVGElement;
 }
 
+/** Terminal / console icon */
+export function iconTerminal(): SVGElement {
+  return h('svg', { ...NAV_ATTRS },
+    h('rect', { x: '2', y: '4', width: '20', height: '16', rx: '2' }),
+    h('path', { d: 'M6 12l4-4' }),
+    h('path', { d: 'M6 12l4 4' }),
+    h('line', { x1: '14', y1: '16', x2: '18', y2: '16' }),
+  ) as unknown as SVGElement;
+}
+
 // ---------------------------------------------------------------------------
 // Ecosystem icons (simple filled paths, 14x14)
 // ---------------------------------------------------------------------------

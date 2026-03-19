@@ -21,6 +21,7 @@ npx esbuild client/app.ts \
 # Copy static assets
 cp client/index.html dist/client/index.html
 cp client/styles/dev.css dist/client/dev.css
+cp node_modules/@xterm/xterm/css/xterm.css dist/client/xterm.css
 
 # Copy vendored libraries (mermaid.js for offline diagram rendering)
 mkdir -p dist/client/vendor

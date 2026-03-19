@@ -26,3 +26,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 mime_guess = "2"
 libc = "0.2"
+portable-pty = "0.8"
+futures = "0.3"

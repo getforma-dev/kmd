@@ -3,5 +3,7 @@ pub mod parser;
 pub mod ports;
 pub mod process;
 pub mod scripts;
+pub mod terminal;
+pub mod terminal_ws;
 pub mod watcher;
 pub mod workspace;

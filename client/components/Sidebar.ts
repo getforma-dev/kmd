@@ -1,18 +1,20 @@
 import { h } from '@getforma/core';
-import { iconDocs, iconScripts, iconPorts } from './icons';
+import { iconDocs, iconScripts, iconPorts, iconTerminal } from './icons';
 
-export type Route = 'docs' | 'scripts' | 'ports';
+export type Route = 'docs' | 'scripts' | 'ports' | 'terminal';
 
 const LABELS: Record<Route, string> = {
   docs: 'Docs',
   scripts: 'Scripts',
   ports: 'Ports',
+  terminal: 'Terminal',
 };
 
 const ICON_FNS: Record<Route, () => SVGElement> = {
   docs: iconDocs,
   scripts: iconScripts,
   ports: iconPorts,
+  terminal: iconTerminal,
 };
 
 export function Sidebar(props: {
@@ -22,7 +24,7 @@ export function Sidebar(props: {
   onToggleTheme?: () => void;
   onHelp?: () => void;
 }) {
-  const navItems = (['docs', 'scripts', 'ports'] as const).map((key) =>
+  const navItems = (['docs', 'scripts', 'ports', 'terminal'] as const).map((key) =>
     h('a', {
       class: () => `nav-item${props.route() === key ? ' active' : ''}`,
       href: `#${key}`,

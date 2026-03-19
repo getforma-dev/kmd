@@ -5,6 +5,7 @@ import { HelpPanel } from './components/HelpPanel';
 import { DocsPage } from './pages/DocsPage';
 import { ScriptsPage } from './pages/ScriptsPage';
 import { PortsPage } from './pages/PortsPage';
+import { TerminalPage } from './pages/TerminalPage';
 
 // ---------------------------------------------------------------------------
 // Hash-based routing
@@ -12,7 +13,7 @@ import { PortsPage } from './pages/PortsPage';
 
 function parseRoute(hash: string): Route {
   const route = hash.replace('#', '');
-  if (route === 'docs' || route === 'scripts' || route === 'ports') {
+  if (route === 'docs' || route === 'scripts' || route === 'ports' || route === 'terminal') {
     return route;
   }
   return 'docs'; // default
@@ -246,6 +247,13 @@ function App() {
       return;
     }
 
+    // Cmd+4 — Terminal
+    if (mod && e.key === '4') {
+      e.preventDefault();
+      location.hash = '#terminal';
+      return;
+    }
+
     // Escape — close help/palette if open, otherwise clear search
     if (e.key === 'Escape') {
       if (helpOpen()) {
@@ -333,6 +341,7 @@ function App() {
     docs: 'Documentation',
     scripts: 'Scripts',
     ports: 'Ports',
+    terminal: 'Terminal',
   };
 
   // Page switching via createSwitch
@@ -356,6 +365,10 @@ function App() {
       render: () => PortsPage({
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
       }),
+    },
+    {
+      match: 'terminal' as Route,
+      render: () => TerminalPage(),
     },
   ]);
 

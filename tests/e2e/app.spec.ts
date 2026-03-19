@@ -9,10 +9,11 @@ test.describe('App Shell', () => {
     await page.goto('/');
     await expect(page.locator('.sidebar-logo')).toHaveText('K.md');
     const navItems = page.locator('.nav-item');
-    await expect(navItems).toHaveCount(3);
+    await expect(navItems).toHaveCount(4);
     await expect(navItems.nth(0)).toContainText('Docs');
     await expect(navItems.nth(1)).toContainText('Scripts');
     await expect(navItems.nth(2)).toContainText('Ports');
+    await expect(navItems.nth(3)).toContainText('Terminal');
   });
 
   test('defaults to docs page with active nav highlight', async ({ page }) => {
