@@ -91,7 +91,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
         setTree(data.tree);
       })
       .catch((err) => {
-        console.error('[forma-dev] Failed to refresh docs tree:', err);
+        console.error('[kmd] Failed to refresh docs tree:', err);
       });
   }
 
@@ -112,7 +112,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
         }
       })
       .catch((err) => {
-        console.error('[forma-dev] Failed to refresh doc:', err);
+        console.error('[kmd] Failed to refresh doc:', err);
       });
   }
 
@@ -175,7 +175,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
       }
     })
     .catch((err) => {
-      console.error('[forma-dev] Failed to fetch docs tree:', err);
+      console.error('[kmd] Failed to fetch docs tree:', err);
       setLoading(false);
     });
 
@@ -208,7 +208,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
         setDocLoading(false);
       })
       .catch((err) => {
-        console.error('[forma-dev] Failed to fetch doc:', err);
+        console.error('[kmd] Failed to fetch doc:', err);
         setDocHtml('<p>Failed to load document.</p>');
         setDocLoading(false);
       });
@@ -253,7 +253,7 @@ export function DocsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => v
           setIsSearching(false);
         })
         .catch((err) => {
-          console.error('[forma-dev] Search failed:', err);
+          console.error('[kmd] Search failed:', err);
           setIsSearching(false);
         });
     }, 300);

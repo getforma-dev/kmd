@@ -30,7 +30,11 @@ export function Sidebar(props: { route: () => Route }) {
 
   return h('aside', { class: 'sidebar' },
     h('div', { class: 'sidebar-header' },
-      h('span', { class: 'sidebar-logo' }, 'forma-dev'),
+      h('span', { class: 'sidebar-logo' },
+        'K',
+        h('span', { class: 'dot' }, '.'),
+        h('span', { class: 'md' }, 'md'),
+      ),
       h('span', { class: 'sidebar-version' }, 'v0.1.0'),
     ),
     h('nav', { class: 'sidebar-nav' }, ...navItems),

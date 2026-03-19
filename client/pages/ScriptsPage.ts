@@ -123,7 +123,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       setLoading(false);
     })
     .catch((err) => {
-      console.error('[forma-dev] Failed to fetch scripts:', err);
+      console.error('[kmd] Failed to fetch scripts:', err);
       setLoading(false);
     });
 
@@ -157,7 +157,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       .then((r) => r.json())
       .then((data: { process_id?: string; error?: string }) => {
         if (data.error) {
-          console.error('[forma-dev] Failed to run script:', data.error);
+          console.error('[kmd] Failed to run script:', data.error);
           return;
         }
         if (data.process_id) {
@@ -182,7 +182,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         }
       })
       .catch((err) => {
-        console.error('[forma-dev] Failed to run script:', err);
+        console.error('[kmd] Failed to run script:', err);
       });
   }
 
@@ -196,11 +196,11 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       .then((r) => r.json())
       .then((data: { ok?: boolean; error?: string }) => {
         if (data.error) {
-          console.error('[forma-dev] Failed to kill process:', data.error);
+          console.error('[kmd] Failed to kill process:', data.error);
         }
       })
       .catch((err) => {
-        console.error('[forma-dev] Failed to kill process:', err);
+        console.error('[kmd] Failed to kill process:', err);
       });
   }
 
@@ -286,8 +286,8 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           display: inline-flex; align-items: center; gap: 4px;
           padding: 3px 8px; border: none; border-radius: 4px;
           font-family: var(--font-code); font-size: 11px; cursor: pointer;
-          background: ${isSelected ? 'rgba(57, 255, 20, 0.1)' : 'transparent'};
-          color: ${isSelected ? 'var(--forma-green)' : 'var(--gruvbox-gray)'};
+          background: ${isSelected ? 'rgba(215, 153, 33, 0.1)' : 'transparent'};
+          color: ${isSelected ? 'var(--accent)' : 'var(--gruvbox-gray)'};
           white-space: nowrap;
         `;
 

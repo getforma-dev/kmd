@@ -1,16 +1,16 @@
 {
-  "name": "@getforma/dev",
+  "name": "@getforma/kmd",
   "version": "0.1.0",
-  "description": "Developer command center for the FormaStack ecosystem",
+  "description": "K.md — kausing much damage to dev workflow chaos",
   "license": "MIT",
   "bin": {
-    "forma-dev": "bin/forma-dev.js"
+    "kmd": "bin/kmd.js"
   },
   "optionalDependencies": {
-    "@getforma/dev-darwin-arm64": "0.1.0",
-    "@getforma/dev-darwin-x64": "0.1.0",
-    "@getforma/dev-linux-x64": "0.1.0",
-    "@getforma/dev-win32-x64": "0.1.0"
+    "@getforma/kmd-darwin-arm64": "0.1.0",
+    "@getforma/kmd-darwin-x64": "0.1.0",
+    "@getforma/kmd-linux-x64": "0.1.0",
+    "@getforma/kmd-win32-x64": "0.1.0"
   },
   "engines": {
     "node": ">=16"
@@ -19,6 +19,7 @@
     "bin/"
   ],
   "keywords": [
+    "kmd",
     "forma",
     "formastack",
     "developer-tools",
@@ -27,6 +28,6 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/nicholasgriffintn/getforma-dev"
+    "url": "https://github.com/nicholasgriffintn/kmd"
   }
 }

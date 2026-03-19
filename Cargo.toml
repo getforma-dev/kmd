@@ -1,7 +1,11 @@
 [package]
-name = "forma-dev"
+name = "kmd"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "kmd"
+path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }

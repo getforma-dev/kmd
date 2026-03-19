@@ -9,9 +9,9 @@ export default defineConfig({
     headless: true,
     screenshot: 'only-on-failure',
   },
-  // forma-dev binary starts the server — webServer manages the lifecycle
+  // kmd binary starts the server — webServer manages the lifecycle
   webServer: {
-    command: './forma-dev/target/release/forma-dev --no-open --port 4444',
+    command: './forma-dev/target/release/kmd --no-open --port 4444',
     port: 4444,
     timeout: 30_000,
     reuseExistingServer: false,

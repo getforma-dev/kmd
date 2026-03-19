@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
 test.describe('App Shell', () => {
   test('loads the app and shows sidebar with three nav items', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('.sidebar-logo')).toHaveText('forma-dev');
+    await expect(page.locator('.sidebar-logo')).toHaveText('K.md');
     const navItems = page.locator('.nav-item');
     await expect(navItems).toHaveCount(3);
     await expect(navItems.nth(0)).toContainText('Docs');
@@ -290,13 +290,13 @@ test.describe('Port Monitor', () => {
     await expect(page.locator('.port-table')).toBeVisible({ timeout: 3000 });
   });
 
-  test('ports API returns scanned ports including forma-dev on 4444', async ({ page }) => {
+  test('ports API returns scanned ports including kmd on 4444', async ({ page }) => {
     const response = await page.request.get('/api/ports');
     const data = await response.json();
     expect(Array.isArray(data.ports)).toBe(true);
     expect(data.ports.length).toBeGreaterThan(0);
 
-    // Port 4444 should be active (forma-dev itself)
+    // Port 4444 should be active (kmd itself)
     const port4444 = data.ports.find((p: any) => p.port === 4444);
     expect(port4444).toBeTruthy();
     expect(port4444.active).toBe(true);

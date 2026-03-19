@@ -22,7 +22,7 @@ const EXCLUDED_DIRS: &[&str] = &[
     ".git",
     "dist",
     "coverage",
-    ".forma-dev",
+    ".kmd",
 ];
 
 // ---------------------------------------------------------------------------
@@ -69,16 +69,29 @@ pub struct SearchResult {
 
 /// Walk the `project_root` directory, find all `.md` files,
 /// respecting `.gitignore` and excluding known junk directories.
+///
+/// Accepts optional extra exclude dirs and max depth from `.kmd/config.json`.
 pub fn discover_files(project_root: &Path) -> Vec<MdFile> {
+    let config = crate::db::read_config(project_root);
+    discover_files_with_config(project_root, &config.exclude, config.max_depth)
+}
+
+/// Inner discovery function that accepts config parameters.
+pub fn discover_files_with_config(
+    project_root: &Path,
+    extra_excludes: &[String],
+    max_depth: usize,
+) -> Vec<MdFile> {
     let mut files = Vec::new();
 
+    let extra: Vec<String> = extra_excludes.to_vec();
     let walker = WalkBuilder::new(project_root)
-        .hidden(false) // show hidden files (we'll exclude specific dirs below)
-        .filter_entry(|entry| {
-            // Skip excluded directories
+        .hidden(false)
+        .max_depth(Some(max_depth))
+        .filter_entry(move |entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
-                    if EXCLUDED_DIRS.contains(&name) {
+                    if EXCLUDED_DIRS.contains(&name) || extra.iter().any(|e| e == name) {
                         return false;
                     }
                 }

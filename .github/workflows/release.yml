@@ -55,17 +55,17 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p forma-dev/npm/${{ matrix.npm-pkg }}/bin
-          cp forma-dev/target/${{ matrix.target }}/release/forma-dev \
-             forma-dev/npm/${{ matrix.npm-pkg }}/bin/forma-dev
-          chmod +x forma-dev/npm/${{ matrix.npm-pkg }}/bin/forma-dev
+          cp forma-dev/target/${{ matrix.target }}/release/kmd \
+             forma-dev/npm/${{ matrix.npm-pkg }}/bin/kmd
+          chmod +x forma-dev/npm/${{ matrix.npm-pkg }}/bin/kmd
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p forma-dev/npm/${{ matrix.npm-pkg }}/bin
-          cp forma-dev/target/${{ matrix.target }}/release/forma-dev.exe \
-             forma-dev/npm/${{ matrix.npm-pkg }}/bin/forma-dev.exe
+          cp forma-dev/target/${{ matrix.target }}/release/kmd.exe \
+             forma-dev/npm/${{ matrix.npm-pkg }}/bin/kmd.exe
 
       - name: Publish platform package
         working-directory: forma-dev/npm/${{ matrix.npm-pkg }}

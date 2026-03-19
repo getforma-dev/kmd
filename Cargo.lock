@@ -433,29 +433,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "forma-dev"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "ignore",
- "mime_guess",
- "notify",
- "open",
- "pulldown-cmark",
- "rusqlite",
- "rust-embed",
- "serde",
- "serde_json",
- "syntect",
- "sysinfo",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "fsevent-sys"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -783,6 +760,29 @@ checksum = "b49715b7073f385ba4bc528e5747d02e66cb39c6146efb66b781f131f0fb399c"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kmd"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "ignore",
+ "mime_guess",
+ "notify",
+ "open",
+ "pulldown-cmark",
+ "rusqlite",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "syntect",
+ "sysinfo",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -1,8 +1,9 @@
 /target
 /node_modules
 /dist/client
-.forma-dev/
+.kmd/
 *.db
 # Platform binary placeholders (only built in CI)
-npm/getforma-dev-*/bin/forma-dev
-npm/getforma-dev-*/bin/forma-dev.exe
+npm/getforma-dev-*/bin/kmd
+npm/getforma-dev-*/bin/kmd.exe
+test-results/

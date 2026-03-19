@@ -18,7 +18,7 @@ const EXCLUDED_DIRS: &[&str] = &[
     ".git",
     "dist",
     "coverage",
-    ".forma-dev",
+    ".kmd",
 ];
 
 /// Maximum file size for indexing (must match markdown.rs).

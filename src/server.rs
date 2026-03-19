@@ -21,7 +21,7 @@ struct ClientAssets;
 pub fn build_router(state: AppState) -> Router {
     // No CORS layer needed — the frontend is served from the same origin.
     // Omitting CORS blocks cross-origin requests by default, which is
-    // important because forma-dev exposes process execution on localhost.
+    // important because kmd exposes process execution on localhost.
 
     let api = Router::new()
         // Docs routes — search must come before the wildcard

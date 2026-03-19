@@ -14,7 +14,7 @@ const EXCLUDED_DIRS: &[&str] = &[
     ".git",
     "dist",
     "coverage",
-    ".forma-dev",
+    ".kmd",
 ];
 
 // ---------------------------------------------------------------------------
@@ -47,16 +47,19 @@ pub struct PackageScripts {
 
 /// Walk the `project_root` directory, find all `package.json` files,
 /// respecting `.gitignore` and excluding known junk directories.
-/// Returns a list of packages with their scripts.
+/// Reads `.kmd/config.json` for extra excludes and max depth.
 pub fn discover_scripts(project_root: &Path) -> Vec<PackageScripts> {
+    let config = crate::db::read_config(project_root);
+    let extra: Vec<String> = config.exclude.clone();
     let mut packages = Vec::new();
 
     let walker = WalkBuilder::new(project_root)
         .hidden(false)
-        .filter_entry(|entry| {
+        .max_depth(Some(config.max_depth))
+        .filter_entry(move |entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
-                    if EXCLUDED_DIRS.contains(&name) {
+                    if EXCLUDED_DIRS.contains(&name) || extra.iter().any(|e| e == name) {
                         return false;
                     }
                 }

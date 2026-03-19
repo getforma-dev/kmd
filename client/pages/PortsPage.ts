@@ -50,7 +50,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
       setPorts(data.ports);
     })
     .catch((err) => {
-      console.error('[forma-dev] Failed to fetch ports:', err);
+      console.error('[kmd] Failed to fetch ports:', err);
     });
 
   // -------------------------------------------------------------------------
@@ -62,12 +62,12 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
       .then((r) => r.json())
       .then((data: { ok?: boolean; error?: string }) => {
         if (data.error) {
-          console.error('[forma-dev] Failed to kill port:', data.error);
+          console.error('[kmd] Failed to kill port:', data.error);
         }
         setKillingPort(null);
       })
       .catch((err) => {
-        console.error('[forma-dev] Failed to kill port:', err);
+        console.error('[kmd] Failed to kill port:', err);
         setKillingPort(null);
       });
   }

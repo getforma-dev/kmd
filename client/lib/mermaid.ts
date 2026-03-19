@@ -89,6 +89,6 @@ export async function renderMermaidDiagrams(): Promise<void> {
     const mermaid = await ensureMermaid();
     await mermaid.run({ nodes: Array.from(nodes) });
   } catch (err) {
-    console.warn('[forma-dev] Mermaid rendering failed:', err);
+    console.warn('[kmd] Mermaid rendering failed:', err);
   }
 }

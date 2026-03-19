@@ -1,7 +1,7 @@
 {
-  "name": "@getforma/dev-darwin-arm64",
+  "name": "@getforma/kmd-darwin-arm64",
   "version": "0.1.0",
-  "description": "forma-dev binary for macOS ARM64 (Apple Silicon)",
+  "description": "kmd binary for macOS ARM64 (Apple Silicon)",
   "license": "MIT",
   "os": ["darwin"],
   "cpu": ["arm64"],

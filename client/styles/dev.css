@@ -1,30 +1,39 @@
 /* ============================================================================
-   forma-dev — Gruvbox Dark Theme
+   K.md — Gruvbox Dark Theme
    ============================================================================ */
 
 /* --- Custom Properties --- */
 :root {
-  /* Gruvbox palette */
-  --gruvbox-bg: #282828;
-  --gruvbox-bg-soft: #32302f;
-  --gruvbox-bg-hard: #1d2021;
-  --gruvbox-fg: #ebdbb2;
-  --gruvbox-gray: #928374;
-  --gruvbox-red: #fb4934;
-  --gruvbox-green: #b8bb26;
-  --gruvbox-yellow: #fabd2f;
-  --gruvbox-blue: #83a598;
+  /* Gruvbox palette — Core */
+  --gruvbox-bg: #282828;       /* bg0-s: surface / card background */
+  --gruvbox-bg-soft: #32302f;  /* bg1: elevated surface / hover row */
+  --gruvbox-bg-hard: #1d2021;  /* bg0: page background */
+  --gruvbox-fg: #ebdbb2;       /* fg0: primary text */
+  --gruvbox-fg1: #d5c4a1;      /* fg1: secondary text */
+  --gruvbox-fg2: #a89984;      /* fg2: muted text */
+  --gruvbox-gray: #928374;     /* fg3: hint / disabled text */
+  --gruvbox-red: #fb4934;      /* status: error */
+  --gruvbox-green: #b8bb26;    /* status: running */
+  --gruvbox-yellow: #fabd2f;   /* accent: bright / hover */
+  --gruvbox-blue: #83a598;     /* status: info */
   --gruvbox-purple: #d3869b;
   --gruvbox-aqua: #8ec07c;
-  --gruvbox-orange: #fe8019;
-  --gruvbox-border: #3c3836;
+  --gruvbox-orange: #d65d0e;   /* accent: warm / warning */
+  --gruvbox-border: #3c3836;   /* bg2: borders, dividers */
+  --gruvbox-border-subtle: #504945; /* bg3: subtle borders */
+  --gruvbox-disabled: #665c54; /* bg4: disabled / inactive */
 
-  /* Accent */
-  --forma-green: #39FF14;
+  /* Accent — Gold Ramp */
+  --accent: #d79921;           /* primary gold */
+  --accent-bright: #fabd2f;    /* hover / focus */
+  --accent-deep: #b57614;      /* pressed state */
+  --accent-muted: #8f5e0a;     /* border accent */
 
   /* Typography */
-  --font-body: system-ui, -apple-system, sans-serif;
-  --font-code: "JetBrains Mono", "Fira Code", monospace;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-body: var(--font-sans);
+  --font-code: var(--font-mono);
 
   /* Layout */
   --sidebar-width: 240px;
@@ -133,9 +142,18 @@ code, pre, kbd {
 .sidebar-logo {
   font-size: 16px;
   font-weight: 700;
-  color: var(--forma-green);
+  color: var(--gruvbox-fg);
   font-family: var(--font-code);
   letter-spacing: -0.5px;
+}
+
+.sidebar-logo .dot {
+  color: var(--accent);
+}
+
+.sidebar-logo .md {
+  font-weight: 400;
+  color: var(--gruvbox-fg2);
 }
 
 .sidebar-version {
@@ -168,8 +186,8 @@ code, pre, kbd {
 }
 
 .nav-item.active {
-  border-left-color: var(--forma-green);
-  background: rgba(57, 255, 20, 0.06);
+  border-left-color: var(--accent);
+  background: rgba(215, 153, 33, 0.08);
   color: var(--gruvbox-fg);
 }
 
@@ -237,7 +255,7 @@ code, pre, kbd {
 }
 
 .search-input:focus {
-  border-color: var(--forma-green);
+  border-color: var(--accent);
 }
 
 .search-wrapper {
@@ -273,13 +291,13 @@ code, pre, kbd {
 }
 
 .btn-primary {
-  background: var(--forma-green);
+  background: var(--accent);
   color: var(--gruvbox-bg-hard);
   font-weight: 600;
 }
 
 .btn-primary:hover {
-  background: #45ff28;
+  background: var(--accent-bright);
 }
 
 .btn-danger {
@@ -313,8 +331,8 @@ code, pre, kbd {
 }
 
 .status-dot.active {
-  background: var(--forma-green);
-  box-shadow: 0 0 6px rgba(57, 255, 20, 0.4);
+  background: var(--gruvbox-green);
+  box-shadow: 0 0 6px rgba(184, 187, 38, 0.4);
 }
 
 /* --- File Tree --- */
@@ -339,8 +357,8 @@ code, pre, kbd {
 }
 
 .file-tree-item.selected {
-  background: rgba(57, 255, 20, 0.08);
-  color: var(--forma-green);
+  background: rgba(215, 153, 33, 0.08);
+  color: var(--accent);
 }
 
 .file-tree-item svg {

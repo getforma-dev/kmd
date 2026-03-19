@@ -1,7 +1,13 @@
 {
   "private": true,
   "scripts": {
-    "build:client": "bash build-client.sh"
+    "dev": "bash build-client.sh && cargo run",
+    "build": "bash build-client.sh && cargo build --release",
+    "build:client": "bash build-client.sh",
+    "build:server": "cargo build --release",
+    "start": "./target/release/kmd",
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed"
   },
   "dependencies": {
     "@getforma/core": "^1.0.7"

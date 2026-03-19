@@ -7,13 +7,15 @@ mod ws;
 use clap::Parser;
 use state::AppState;
 use std::env;
+use std::io::{self, BufRead};
 use std::net::SocketAddr;
+use std::path::Path;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-/// forma-dev — Developer command center for the FormaStack ecosystem.
+/// K.md — Developer command center for the FormaStack ecosystem.
 #[derive(Parser, Debug)]
-#[command(name = "forma-dev", version, about)]
+#[command(name = "kmd", version, about = "kausing much damage to dev workflow chaos")]
 struct Cli {
     /// Port to listen on
     #[arg(long, default_value_t = 4444)]
@@ -22,6 +24,60 @@ struct Cli {
     /// Don't open the browser automatically
     #[arg(long)]
     no_open: bool,
+
+    /// Skip the project root detection warning
+    #[arg(long)]
+    force: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Project root detection
+// ---------------------------------------------------------------------------
+
+/// Known project root marker files/directories.
+const PROJECT_MARKERS: &[&str] = &[".git", "package.json", "Cargo.toml", "pyproject.toml", ".kmd"];
+
+/// Check if the given directory looks like a project root.
+fn has_project_markers(dir: &Path) -> bool {
+    PROJECT_MARKERS.iter().any(|marker| dir.join(marker).exists())
+}
+
+/// Quick count of .md files without reading content (fast pre-scan).
+fn quick_count_md_files(dir: &Path) -> usize {
+    use ignore::WalkBuilder;
+
+    let walker = WalkBuilder::new(dir)
+        .hidden(false)
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
+                    if ["node_modules", "target", ".git", "dist", "coverage", ".kmd"]
+                        .contains(&name)
+                    {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .build();
+
+    let mut count = 0;
+    for result in walker {
+        if let Ok(entry) = result {
+            if entry.file_type().is_some_and(|ft| ft.is_file()) {
+                if entry
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+                {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
 }
 
 #[tokio::main]
@@ -30,7 +86,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "forma_dev=info".into()),
+                .unwrap_or_else(|_| "kmd=info".into()),
         )
         .init();
 
@@ -39,7 +95,54 @@ async fn main() {
     // Use the current working directory as the project root
     let project_root = env::current_dir().expect("Failed to determine current directory");
 
-    // Initialize shared application state (creates DB, broadcast channel, etc.)
+    // ANSI color codes (used in banner + warnings)
+    let bold = "\x1b[1m";
+    let dim = "\x1b[2m";
+    let yellow = "\x1b[33m";
+    let cyan = "\x1b[36m";
+    let reset = "\x1b[0m";
+
+    // -----------------------------------------------------------------------
+    // Tier 1 & 2: Project root detection + guardrails
+    // -----------------------------------------------------------------------
+    if !cli.force && !has_project_markers(&project_root) {
+        // No project markers found — do a quick pre-scan
+        let count = quick_count_md_files(&project_root);
+
+        if count > 500 {
+            // Tier 2: Large non-project directory — warn and prompt
+            eprintln!();
+            eprintln!(
+                "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
+                env!("CARGO_PKG_VERSION")
+            );
+            eprintln!("  {yellow}kausing much damage{reset}");
+            eprintln!("  {dim}──────────────────────────────{reset}");
+            eprintln!();
+            eprintln!(
+                "  {yellow}⚠{reset} Found {bold}{count}{reset} markdown files from {}",
+                project_root.display()
+            );
+            eprintln!("  This doesn't look like a project root.");
+            eprintln!("  Run from a project directory, or continue anyway?");
+            eprintln!();
+            eprintln!("  {dim}→ Press Enter to continue, Ctrl+C to cancel{reset}");
+
+            // Wait for user input
+            let stdin = io::stdin();
+            let _ = stdin.lock().lines().next();
+        } else {
+            // Small non-project directory — single-line note
+            eprintln!(
+                "  {dim}No project root detected, scanning from {}{reset}",
+                project_root.display()
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Initialize state (creates .kmd/ dir, DB, config.json)
+    // -----------------------------------------------------------------------
     let state = AppState::new(project_root.clone());
 
     // Channel to receive the file count from the indexing task
@@ -51,8 +154,6 @@ async fn main() {
         tokio::spawn(async move {
             tracing::info!("Starting markdown file indexing...");
 
-            // Discovery and indexing are synchronous (file I/O + SQLite),
-            // so run them on the blocking threadpool.
             let result = tokio::task::spawn_blocking(move || {
                 let files = services::markdown::discover_files(state.project_root());
                 let file_count = files.len();
@@ -65,7 +166,6 @@ async fn main() {
 
                 tracing::info!("Indexed {file_count} markdown file(s)");
 
-                // Notify all WebSocket clients that the index is ready
                 let _ = state.broadcast_tx().send(ws::ServerMessage::IndexReady {
                     file_count,
                 });
@@ -98,8 +198,6 @@ async fn main() {
             match services::watcher::start_watcher(state) {
                 Ok(watcher) => {
                     tracing::info!("File watcher active");
-                    // Keep the watcher alive — park this thread until the process exits.
-                    // The blocking thread will be dropped on shutdown.
                     std::mem::forget(watcher);
                 }
                 Err(err) => {
@@ -132,7 +230,6 @@ async fn main() {
         .expect("Failed to bind to address");
 
     // Wait (briefly) for the file count from indexing to show in the banner.
-    // If indexing hasn't finished in 2 seconds, print the banner without it.
     let file_count = tokio::time::timeout(
         tokio::time::Duration::from_secs(2),
         file_count_rx,
@@ -141,32 +238,29 @@ async fn main() {
     .ok()
     .and_then(|r| r.ok());
 
-    // Print startup banner with ANSI colors
-    let green = "\x1b[32m";
-    let bold = "\x1b[1m";
-    let dim = "\x1b[2m";
-    let reset = "\x1b[0m";
-
+    // Print startup banner
     println!();
     println!(
-        "  {bold}forma-dev{reset}  v{}",
+        "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
         env!("CARGO_PKG_VERSION")
     );
+    println!("  {yellow}kausing much damage{reset}");
     println!("  {dim}──────────────────────────────{reset}");
-    println!(
-        "  Local:   {green}http://localhost:{}{reset}",
-        cli.port
-    );
-    println!(
-        "  {dim}Root:    {}{reset}",
-        project_root.display()
-    );
     if let Some(count) = file_count {
         println!(
-            "  {dim}Docs:    {count} markdown file{}{reset}",
+            "  {dim}Docs{reset} {dim}······{reset} {count} file{} indexed",
             if count == 1 { "" } else { "s" }
         );
     }
+    println!(
+        "  {dim}Root{reset} {dim}······{reset} {}",
+        project_root.display()
+    );
+    println!();
+    println!(
+        "  {cyan}→ http://localhost:{}{reset}",
+        cli.port
+    );
     println!();
 
     // Open browser unless --no-open was passed
@@ -184,7 +278,7 @@ async fn main() {
         .await
         .expect("Server error");
 
-    println!("\n  {bold}forma-dev{reset} shut down cleanly.\n");
+    println!("\n  {bold}K{reset}{bold}\x1b[33m.\x1b[0m{dim}md{reset} shut down cleanly.\n");
 }
 
 /// Wait for Ctrl+C signal for graceful shutdown.

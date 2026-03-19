@@ -41,7 +41,7 @@ function createWSConnection(onMessage: (data: string) => void): WSManager {
 
     ws.onopen = () => {
       attempt = 0;
-      console.log('[forma-dev] WebSocket connected');
+      console.log('[kmd] WebSocket connected');
     };
 
     ws.onmessage = (e) => {
@@ -53,7 +53,7 @@ function createWSConnection(onMessage: (data: string) => void): WSManager {
       // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
       const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
       attempt++;
-      console.log(`[forma-dev] WebSocket closed, reconnecting in ${delay}ms...`);
+      console.log(`[kmd] WebSocket closed, reconnecting in ${delay}ms...`);
       reconnectTimer = setTimeout(connect, delay);
     };
 
@@ -95,7 +95,7 @@ function createWSBus() {
       try {
         handler(msg);
       } catch (err) {
-        console.error('[forma-dev] WS handler error:', err);
+        console.error('[kmd] WS handler error:', err);
       }
     }
   }

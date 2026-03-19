@@ -42,7 +42,7 @@ pub struct AppStateInner {
 }
 
 impl AppState {
-    /// Create a new AppState, initializing the SQLite DB under `project_root/.forma-dev/`.
+    /// Create a new AppState, initializing the SQLite DB under `project_root/.kmd/`.
     pub fn new(project_root: PathBuf) -> Self {
         let conn = db::init_db(&project_root).expect("Failed to initialize database");
 

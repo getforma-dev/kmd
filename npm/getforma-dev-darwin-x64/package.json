@@ -1,7 +1,7 @@
 {
-  "name": "@getforma/dev-darwin-x64",
+  "name": "@getforma/kmd-darwin-x64",
   "version": "0.1.0",
-  "description": "forma-dev binary for macOS x64 (Intel)",
+  "description": "kmd binary for macOS x64 (Intel)",
   "license": "MIT",
   "os": ["darwin"],
   "cpu": ["x64"],
