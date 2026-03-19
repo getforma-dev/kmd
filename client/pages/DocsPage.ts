@@ -685,7 +685,39 @@ export function DocsPage(props?: {
           }, () => focusMode() ? 'Exit focus' : 'Focus'),
         ),
         // Scrollable content area
-        h('div', { style: 'flex: 1; overflow-y: auto; padding: var(--space-lg);' },
+        h('div', {
+          style: 'flex: 1; overflow-y: auto; padding: var(--space-lg);',
+          ref: (el: Element) => {
+            // Save scroll position before unload
+            const scrollEl = el as HTMLElement;
+            const saveScroll = () => {
+              if (selectedPath()) {
+                sessionStorage.setItem('kmd:docScroll', String(scrollEl.scrollTop));
+              }
+            };
+            window.addEventListener('beforeunload', saveScroll);
+
+            // Restore scroll position after content loads
+            const restoreScroll = () => {
+              const saved = sessionStorage.getItem('kmd:docScroll');
+              if (saved) {
+                requestAnimationFrame(() => {
+                  scrollEl.scrollTop = parseInt(saved, 10) || 0;
+                  sessionStorage.removeItem('kmd:docScroll');
+                });
+              }
+            };
+
+            // Watch for content changes to restore scroll
+            const observer = new MutationObserver(() => {
+              if (scrollEl.querySelector('.markdown-body')) {
+                restoreScroll();
+                observer.disconnect();
+              }
+            });
+            observer.observe(scrollEl, { childList: true, subtree: true });
+          },
+        },
         createShow(
           () => !selectedPath(),
           () => h('div', { class: 'page-stub' }, 'Select a document from the sidebar.'),
