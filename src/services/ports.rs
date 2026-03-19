@@ -1,10 +1,14 @@
 //! Port monitoring service.
 //!
 //! Scans common development ports on localhost, identifies which processes
-//! are listening on them, and provides the ability to kill processes by port.
+//! are listening on them, tracks uptime, and provides the ability to kill
+//! processes by port.
 
 use crate::ws::PortInfo;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::net::TcpStream;
 
 /// Common development server ports to monitor.
@@ -15,11 +19,17 @@ const COMMON_PORTS: &[u16] = &[
 /// Timeout for TCP connection probes.
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(100);
 
+/// Tracks when ports were first seen active (for uptime calculation).
+static PORT_FIRST_SEEN: Mutex<Option<HashMap<u16, Instant>>> = Mutex::new(None);
+
+fn get_first_seen() -> std::sync::MutexGuard<'static, Option<HashMap<u16, Instant>>> {
+    PORT_FIRST_SEEN.lock().unwrap()
+}
+
 /// Scan all common dev ports and return their status.
 ///
-/// Uses `TcpStream::connect` with a short timeout to probe each port.
-/// For active ports on macOS/Linux, attempts to identify the process
-/// via `lsof`.
+/// Only returns active ports + metadata. Inactive ports are omitted from
+/// the response to reduce noise — the frontend shows a toggle for all ports.
 pub async fn scan_ports() -> Vec<PortInfo> {
     let mut handles = Vec::with_capacity(COMMON_PORTS.len());
 
@@ -28,8 +38,21 @@ pub async fn scan_ports() -> Vec<PortInfo> {
     }
 
     let mut results = Vec::with_capacity(COMMON_PORTS.len());
+    let now = Instant::now();
+
     for handle in handles {
-        if let Ok(info) = handle.await {
+        if let Ok(mut info) = handle.await {
+            // Track uptime
+            let mut first_seen = get_first_seen();
+            let map = first_seen.get_or_insert_with(HashMap::new);
+
+            if info.active {
+                let started = map.entry(info.port).or_insert(now);
+                info.uptime_secs = Some(now.duration_since(*started).as_secs());
+            } else {
+                map.remove(&info.port);
+            }
+
             results.push(info);
         }
     }
@@ -51,40 +74,38 @@ async fn probe_port(port: u16) -> PortInfo {
             active: false,
             pid: None,
             process_name: None,
+            command: None,
+            uptime_secs: None,
         };
     }
 
     // Port is open — try to identify the process
-    let (pid, process_name) = identify_process(port).await;
+    let (pid, process_name, command) = identify_process(port).await;
 
     PortInfo {
         port,
         active: true,
         pid,
         process_name,
+        command,
+        uptime_secs: None, // filled in by scan_ports
     }
 }
 
 /// Attempt to identify which process is listening on a port.
 ///
-/// On macOS/Linux, uses `lsof -i :<port> -t -s TCP:LISTEN` to find the PID,
-/// then reads the process name from `/proc/<pid>/comm` (Linux) or `ps` (macOS).
+/// On macOS/Linux, uses `lsof` to find the PID, then `ps` to get both
+/// the short name and full command line.
 #[cfg(unix)]
-async fn identify_process(port: u16) -> (Option<u32>, Option<String>) {
-    // Run lsof to find the PID
+async fn identify_process(port: u16) -> (Option<u32>, Option<String>, Option<String>) {
     let output = tokio::process::Command::new("lsof")
-        .args([
-            &format!("-i:{port}"),
-            "-t",
-            "-sTCP:LISTEN",
-        ])
+        .args([&format!("-i:{port}"), "-t", "-sTCP:LISTEN"])
         .output()
         .await;
 
     let pid = match output {
         Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            // lsof may return multiple PIDs; take the first one
             stdout
                 .lines()
                 .next()
@@ -93,21 +114,24 @@ async fn identify_process(port: u16) -> (Option<u32>, Option<String>) {
         _ => None,
     };
 
-    let process_name = match pid {
-        Some(p) => get_process_name(p).await,
-        None => None,
+    let (process_name, command) = match pid {
+        Some(p) => {
+            let name = get_process_name(p).await;
+            let cmd = get_process_command(p).await;
+            (name, cmd)
+        }
+        None => (None, None),
     };
 
-    (pid, process_name)
+    (pid, process_name, command)
 }
 
 #[cfg(not(unix))]
-async fn identify_process(_port: u16) -> (Option<u32>, Option<String>) {
-    // On non-Unix platforms, we skip process identification for now
-    (None, None)
+async fn identify_process(_port: u16) -> (Option<u32>, Option<String>, Option<String>) {
+    (None, None, None)
 }
 
-/// Get the process name for a given PID using `ps`.
+/// Get the short process name for a PID.
 #[cfg(unix)]
 async fn get_process_name(pid: u32) -> Option<String> {
     let output = tokio::process::Command::new("ps")
@@ -121,7 +145,6 @@ async fn get_process_name(pid: u32) -> Option<String> {
             if name.is_empty() {
                 None
             } else {
-                // Strip path prefix — just show the binary name
                 Some(
                     name.rsplit('/')
                         .next()
@@ -134,11 +157,35 @@ async fn get_process_name(pid: u32) -> Option<String> {
     }
 }
 
+/// Get the full command line for a PID (e.g. "node ./node_modules/.bin/vite --port 5173").
+#[cfg(unix)]
+async fn get_process_command(pid: u32) -> Option<String> {
+    let output = tokio::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "args="])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let cmd = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if cmd.is_empty() {
+                None
+            } else {
+                // Truncate very long command lines
+                if cmd.len() > 200 {
+                    Some(format!("{}…", &cmd[..200]))
+                } else {
+                    Some(cmd)
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Kill the process listening on a given port.
-///
-/// Finds the PID via `lsof`, then sends SIGTERM.
 pub async fn kill_port(port: u16) -> Result<(), String> {
-    let (pid, _) = identify_process(port).await;
+    let (pid, _, _) = identify_process(port).await;
 
     match pid {
         Some(p) => {

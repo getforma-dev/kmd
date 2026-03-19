@@ -41,6 +41,10 @@ pub struct PortInfo {
     pub active: bool,
     pub pid: Option<u32>,
     pub process_name: Option<String>,
+    /// Full command line (e.g. "node ./node_modules/.bin/vite --port 5173")
+    pub command: Option<String>,
+    /// Seconds since this port was first seen active (across scan cycles)
+    pub uptime_secs: Option<u64>,
 }
 
 /// Axum handler: upgrade an HTTP request to a WebSocket connection.

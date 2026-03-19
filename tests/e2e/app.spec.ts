@@ -285,17 +285,18 @@ test.describe('Script Runner', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Port Monitor', () => {
-  test('ports page loads and shows port table', async ({ page }) => {
+  test('ports page loads and shows active ports', async ({ page }) => {
     await page.goto('/#ports');
     await expect(page.locator('.main-header h1')).toHaveText('Ports');
     await page.waitForResponse(
       resp => resp.url().includes('/api/ports') && resp.status() === 200,
       { timeout: 5000 },
     );
-    await expect(page.locator('.port-table')).toBeVisible({ timeout: 3000 });
+    // Should show at least one active port (kmd itself on 4444)
+    await expect(page.locator('.status-dot.active').first()).toBeVisible({ timeout: 5000 });
   });
 
-  test('ports API returns scanned ports including kmd on 4444', async ({ page }) => {
+  test('ports API returns port 4444 with command and uptime', async ({ page }) => {
     const response = await page.request.get('/api/ports');
     const data = await response.json();
     expect(Array.isArray(data.ports)).toBe(true);
@@ -304,6 +305,9 @@ test.describe('Port Monitor', () => {
     const port4444 = data.ports.find((p: any) => p.port === 4444);
     expect(port4444).toBeTruthy();
     expect(port4444.active).toBe(true);
+    // New fields
+    expect(port4444.uptime_secs).toBeDefined();
+    expect(typeof port4444.uptime_secs).toBe('number');
   });
 
   test('WebSocket receives port scan updates', async ({ page }) => {
@@ -326,7 +330,7 @@ test.describe('Port Monitor', () => {
     expect(portsMsg.data).toBeTruthy();
   });
 
-  test('port table shows port 4444 as active', async ({ page }) => {
+  test('active port shows clickable link', async ({ page }) => {
     await page.goto('/#ports');
     await page.waitForResponse(
       resp => resp.url().includes('/api/ports') && resp.status() === 200,
@@ -334,12 +338,10 @@ test.describe('Port Monitor', () => {
     );
     await page.waitForTimeout(1000);
 
-    const portCell = page.locator('td.port-num').filter({ hasText: '4444' });
-    await expect(portCell).toBeVisible({ timeout: 5000 });
-
-    const activeIndicators = page.locator('.status-dot.active');
-    const count = await activeIndicators.count();
-    expect(count).toBeGreaterThan(0);
+    // Port 4444 should be a clickable link with href
+    const portLink = page.locator('a[href="http://localhost:4444"]');
+    await expect(portLink).toBeVisible({ timeout: 5000 });
+    expect(await portLink.getAttribute('target')).toBe('_blank');
   });
 });
 
