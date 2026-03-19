@@ -675,12 +675,12 @@ export function DocsPage(props?: {
       h('div', { style: 'flex: 1; min-width: 0; display: flex; flex-direction: column;' },
         // Breadcrumb bar — fixed at top, not inside scroll container
         h('div', {
-          style: 'flex-shrink: 0; height: 28px; display: flex; align-items: center; padding: 0 var(--space-lg); border-bottom: 1px solid var(--gruvbox-border); background: var(--gruvbox-bg);',
+          style: 'flex-shrink: 0; height: 28px; display: flex; align-items: center; padding: 0 var(--space-lg); border-bottom: 1px solid var(--gruvbox-border); background: var(--gruvbox-bg); gap: 8px;',
         },
-          h('div', { style: 'flex: 1; min-width: 0;' }, Breadcrumb()),
+          Breadcrumb(),
           h('button', {
             class: 'btn btn-ghost',
-            style: 'padding: 2px 10px; font-size: 10px; flex-shrink: 0;',
+            style: 'padding: 2px 10px; font-size: 10px; flex-shrink: 0; margin-left: auto;',
             onClick: () => setFocusMode(!focusMode()),
           }, () => focusMode() ? 'Exit focus' : 'Focus'),
         ),

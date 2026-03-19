@@ -768,8 +768,8 @@ code, pre, kbd {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--gruvbox-gray);
-  margin-bottom: var(--space-md);
-  padding: var(--space-xs) 0;
+  margin: 0;
+  padding: 0;
   flex-wrap: wrap;
 }
 
