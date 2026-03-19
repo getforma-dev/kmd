@@ -712,12 +712,12 @@ export function DocsPage(props?: {
               ),
               () => h('div', null,
                 h('div', {
-                  style: 'display: flex; align-items: center; position: sticky; top: 0; z-index: 10; padding: 2px 0;',
+                  style: 'display: flex; align-items: center; position: sticky; top: 0; z-index: 10; padding: 6px 0; margin: -6px 0 6px 0; background: var(--gruvbox-bg); border-bottom: 1px solid var(--gruvbox-border);',
                 },
-                  h('div', { style: 'flex: 1;' }, Breadcrumb()),
+                  h('div', { style: 'flex: 1; min-width: 0;' }, Breadcrumb()),
                   h('button', {
                     class: 'btn btn-ghost',
-                    style: 'padding: 1px 8px; font-size: 10px; flex-shrink: 0;',
+                    style: 'padding: 2px 10px; font-size: 10px; flex-shrink: 0;',
                     onClick: () => setFocusMode(!focusMode()),
                   }, () => focusMode() ? 'Exit focus' : 'Focus'),
                 ),
