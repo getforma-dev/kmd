@@ -380,16 +380,7 @@ function App() {
       h('div', { class: 'main-header' },
         HamburgerButton(),
         h('h1', null, () => PAGE_TITLES[route()]),
-        // Focus mode toggle — only visible on Docs page
-        createShow(
-          () => route() === 'docs',
-          () => h('button', {
-            class: 'btn btn-ghost',
-            style: 'padding: 2px 8px; font-size: 10px; margin-left: auto;',
-            onClick: () => setFocusMode(!focusMode()),
-          }, () => focusMode() ? 'Exit focus' : 'Focus'),
-          () => h('span', { style: 'margin-left: auto;' }),
-        ),
+        h('span', { style: 'margin-left: auto;' }),
         h('button', {
           class: 'kbd-hints palette-trigger',
           onClick: () => setPaletteOpen(true),

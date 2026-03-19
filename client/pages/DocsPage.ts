@@ -711,7 +711,16 @@ export function DocsPage(props?: {
                 }, 'Copy path'),
               ),
               () => h('div', null,
-                Breadcrumb(),
+                h('div', {
+                  style: 'display: flex; align-items: center; position: sticky; top: 0; z-index: 10; padding: 2px 0;',
+                },
+                  h('div', { style: 'flex: 1;' }, Breadcrumb()),
+                  h('button', {
+                    class: 'btn btn-ghost',
+                    style: 'padding: 1px 8px; font-size: 10px; flex-shrink: 0;',
+                    onClick: () => setFocusMode(!focusMode()),
+                  }, () => focusMode() ? 'Exit focus' : 'Focus'),
+                ),
                 h('div', {
                   class: 'markdown-body fade-in',
                   style: () => focusMode() ? 'max-width: 900px; margin: 0 auto;' : '',
