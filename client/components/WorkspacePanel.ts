@@ -7,12 +7,7 @@ import { h, createSignal, createEffect } from '@getforma/core';
 interface RootInfo {
   name: string;
   path: string;
-}
-
-interface SiblingInfo {
-  name: string;
-  path: string;
-  added: boolean;
+  absolute_path?: string;
 }
 
 interface MonorepoMember {
@@ -20,6 +15,7 @@ interface MonorepoMember {
   path: string;
   source: string;
   added: boolean;
+  parent?: string;
 }
 
 export interface WorkspacePanelProps {
@@ -28,35 +24,27 @@ export interface WorkspacePanelProps {
 }
 
 // ---------------------------------------------------------------------------
-// WorkspacePanel — modal overlay for managing workspace roots
+// WorkspacePanel — modal overlay for managing workspace folders
 // ---------------------------------------------------------------------------
 
 export function WorkspacePanel(props: WorkspacePanelProps) {
   const [roots, setRoots] = createSignal<RootInfo[]>([]);
-  const [siblings, setSiblings] = createSignal<SiblingInfo[]>([]);
   const [monorepoMembers, setMonorepoMembers] = createSignal<MonorepoMember[]>([]);
   const [inputValue, setInputValue] = createSignal('');
   const [error, setError] = createSignal('');
   const [loading, setLoading] = createSignal(false);
+  const [mode, setMode] = createSignal<string>('ephemeral');
 
   // -------------------------------------------------------------------------
-  // Fetch workspace roots and siblings
+  // Fetch workspace info
   // -------------------------------------------------------------------------
 
   function fetchRoots() {
     fetch('/api/workspace')
       .then((r) => r.json())
-      .then((data: { name: string; roots: RootInfo[] }) => {
+      .then((data: { name: string; roots: RootInfo[]; mode: string }) => {
         setRoots(data.roots || []);
-      })
-      .catch(() => {});
-  }
-
-  function fetchSiblings() {
-    fetch('/api/workspace/siblings')
-      .then((r) => r.json())
-      .then((data: { siblings: SiblingInfo[] }) => {
-        setSiblings(data.siblings || []);
+        setMode(data.mode || 'ephemeral');
       })
       .catch(() => {});
   }
@@ -72,7 +60,6 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
 
   function refreshAll() {
     fetchRoots();
-    fetchSiblings();
     fetchMonorepoMembers();
   }
 
@@ -83,7 +70,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
   // Add / Remove handlers
   // -------------------------------------------------------------------------
 
-  function addRoot(path: string) {
+  function addFolder(path: string) {
     if (!path.trim()) return;
     setLoading(true);
     setError('');
@@ -98,20 +85,20 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
         if (data.ok && data.roots) {
           setRoots(data.roots);
           setInputValue('');
-          fetchSiblings(); // refresh siblings to update "added" state
+          fetchMonorepoMembers();
         } else if (data.error) {
           setError(data.error);
         }
       })
       .catch((err: Error) => {
-        setError(err.message || 'Failed to add root');
+        setError(err.message || 'Failed to add folder');
       })
       .finally(() => {
         setLoading(false);
       });
   }
 
-  function removeRoot(path: string) {
+  function removeFolder(path: string) {
     setError('');
 
     fetch('/api/workspace/remove', {
@@ -123,27 +110,44 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
       .then((data: { ok?: boolean; roots?: RootInfo[]; error?: string }) => {
         if (data.ok && data.roots) {
           setRoots(data.roots);
-          fetchSiblings(); // refresh siblings
+          fetchMonorepoMembers();
         } else if (data.error) {
           setError(data.error);
         }
       })
       .catch((err: Error) => {
-        setError(err.message || 'Failed to remove root');
+        setError(err.message || 'Failed to remove folder');
       });
   }
 
   // -------------------------------------------------------------------------
-  // Roots list (reactive)
+  // Folders list (reactive)
   // -------------------------------------------------------------------------
 
-  function RootsList() {
+  function FoldersList() {
     const container = document.createElement('div');
     container.className = 'ws-panel-roots';
 
     createEffect(() => {
       const r = roots();
+      const m = mode();
       container.innerHTML = '';
+
+      if (m === 'ephemeral') {
+        const note = document.createElement('div');
+        note.style.cssText = 'font-size: 12px; color: var(--gruvbox-gray); padding: 8px 0;';
+        note.textContent = 'Ephemeral session — folders cannot be modified. Create a workspace with `kmd create <name>` to manage folders.';
+        container.appendChild(note);
+        return;
+      }
+
+      if (r.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size: 12px; color: var(--gruvbox-gray); padding: 8px 0;';
+        empty.textContent = 'No folders yet. Add one below.';
+        container.appendChild(empty);
+        return;
+      }
 
       for (const root of r) {
         const row = document.createElement('div');
@@ -159,62 +163,21 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
 
         const pathEl = document.createElement('span');
         pathEl.className = 'ws-panel-root-path';
-        pathEl.textContent = root.path;
+        pathEl.textContent = root.absolute_path || root.path;
         info.appendChild(pathEl);
 
         row.appendChild(info);
 
-        // Don't show remove button for the primary root "."
-        if (root.path !== '.') {
-          const removeBtn = document.createElement('button');
-          removeBtn.className = 'ws-panel-remove-btn';
-          removeBtn.title = 'Remove this root';
-          removeBtn.innerHTML = '&times;';
-          removeBtn.addEventListener('click', () => removeRoot(root.path));
-          row.appendChild(removeBtn);
-        }
+        // Show remove button for all folders in workspace mode
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'ws-panel-remove-btn';
+        removeBtn.title = 'Remove this folder';
+        removeBtn.innerHTML = '&times;';
+        removeBtn.addEventListener('click', () => removeFolder(root.path));
+        row.appendChild(removeBtn);
 
         container.appendChild(row);
       }
-    });
-
-    return container;
-  }
-
-  // -------------------------------------------------------------------------
-  // Siblings suggestions (reactive)
-  // -------------------------------------------------------------------------
-
-  function SiblingsList() {
-    const container = document.createElement('div');
-    container.className = 'ws-panel-siblings';
-
-    createEffect(() => {
-      const s = siblings();
-      container.innerHTML = '';
-
-      // Filter out already-added siblings
-      const available = s.filter((sib) => !sib.added);
-      if (available.length === 0) return;
-
-      const label = document.createElement('div');
-      label.className = 'ws-panel-siblings-label';
-      label.textContent = 'Sibling directories';
-      container.appendChild(label);
-
-      const pills = document.createElement('div');
-      pills.className = 'ws-panel-siblings-pills';
-
-      for (const sib of available) {
-        const pill = document.createElement('button');
-        pill.className = 'ws-panel-sibling-pill';
-        pill.textContent = sib.name;
-        pill.title = sib.path;
-        pill.addEventListener('click', () => addRoot(sib.path));
-        pills.appendChild(pill);
-      }
-
-      container.appendChild(pills);
     });
 
     return container;
@@ -230,7 +193,10 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
 
     createEffect(() => {
       const m = monorepoMembers();
+      const currentMode = mode();
       container.innerHTML = '';
+
+      if (currentMode !== 'workspace') return;
 
       // Filter out already-added members
       const available = m.filter((member) => !member.added);
@@ -258,7 +224,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
         badge.textContent = member.source;
         pill.appendChild(badge);
 
-        pill.addEventListener('click', () => addRoot(member.path));
+        pill.addEventListener('click', () => addFolder(member.path));
         pills.appendChild(pill);
       }
 
@@ -306,7 +272,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
   function handleInputKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       e.preventDefault();
-      addRoot(inputValue());
+      addFolder(inputValue());
     }
   }
 
@@ -337,20 +303,20 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
         }, 'Close'),
       ),
 
-      // Roots section
+      // Folders section
       h('div', { class: 'ws-panel-section' },
-        h('div', { class: 'ws-panel-section-title' }, 'Project Roots'),
-        RootsList(),
+        h('div', { class: 'ws-panel-section-title' }, 'Folders'),
+        FoldersList(),
       ),
 
-      // Add project section
+      // Add folder section (only in workspace mode)
       h('div', { class: 'ws-panel-section' },
-        h('div', { class: 'ws-panel-section-title' }, 'Add Project'),
+        h('div', { class: 'ws-panel-section-title' }, 'Add Folder'),
         h('div', { class: 'ws-panel-add-row' },
           h('input', {
             class: 'ws-panel-input',
             type: 'text',
-            placeholder: 'Path to project (e.g., ../my-app)',
+            placeholder: 'Absolute path (e.g., /Users/me/dev/project)',
             ref: (el: Element) => {
               inputRef = el as HTMLInputElement;
             },
@@ -362,13 +328,12 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
           h('button', {
             class: 'btn btn-primary',
             style: 'white-space: nowrap;',
-            onClick: () => addRoot(inputValue()),
+            onClick: () => addFolder(inputValue()),
             disabled: () => loading() || !inputValue().trim(),
           }, () => loading() ? 'Adding...' : 'Add'),
         ),
         ErrorDisplay(),
         MonorepoMembersList(),
-        SiblingsList(),
       ),
     ),
   );

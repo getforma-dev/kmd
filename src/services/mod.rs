@@ -15,7 +15,6 @@ pub const EXCLUDED_DIRS: &[&str] = &[
     ".git",
     "dist",
     "coverage",
-    ".kmd",
 ];
 
 /// Maximum file size (in bytes) that will be indexed and rendered.

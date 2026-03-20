@@ -64,17 +64,15 @@ pub fn discover_scripts(roots: &[WorkspaceRoot]) -> Vec<RootScripts> {
 /// Walk a single root directory, find all `package.json` files,
 /// respecting `.gitignore` and excluding known junk directories.
 fn discover_scripts_in_root(root_path: &Path) -> Vec<PackageScripts> {
-    let config = crate::db::read_config(root_path);
-    let extra: Vec<String> = config.exclude.clone();
     let mut packages = Vec::new();
 
     let walker = WalkBuilder::new(root_path)
         .hidden(false)
-        .max_depth(Some(config.max_depth))
+        .max_depth(Some(10))
         .filter_entry(move |entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
-                    if EXCLUDED_DIRS.contains(&name) || extra.iter().any(|e| e == name) {
+                    if EXCLUDED_DIRS.contains(&name) {
                         return false;
                     }
                 }

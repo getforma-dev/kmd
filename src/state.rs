@@ -1,5 +1,5 @@
 use crate::db;
-use crate::services::workspace::{self, WorkspaceConfig};
+use crate::services::workspace::WorkspaceConfig;
 use crate::ws::ServerMessage;
 use rusqlite::Connection;
 use serde::Serialize;
@@ -30,9 +30,9 @@ pub struct RunningProcess {
 /// A resolved workspace root directory.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceRoot {
-    /// Display name for the root (directory name or workspace name for ".").
+    /// Display name for the root (directory name).
     pub name: String,
-    /// Relative path as stored in workspace.json (e.g. "." or "packages/foo").
+    /// The folder path as stored in the config (absolute for workspaces, "." for ephemeral).
     pub relative_path: String,
     /// Fully resolved absolute path on disk.
     pub absolute_path: PathBuf,
@@ -55,25 +55,18 @@ pub struct AppStateInner {
     pub workspace_name: String,
     /// Resolved workspace roots (mutable so the API can add/remove roots at runtime).
     pub roots: Mutex<Vec<WorkspaceRoot>>,
-    /// The project root directory (where .kmd/ lives).
-    pub project_root: PathBuf,
     /// Whether this is running in workspace mode (true) or ephemeral mode (false).
     pub is_workspace: bool,
 }
 
 impl AppState {
-    /// Create a new AppState, initializing the SQLite DB in the given `db_dir`.
+    /// Create a new AppState for workspace mode.
     ///
-    /// - For workspace mode: `db_dir` is `project_root/.kmd/`
-    /// - For ephemeral mode: `db_dir` is a temp directory
-    pub fn new(project_root: PathBuf, ws_config: WorkspaceConfig, db_dir: &Path, is_workspace: bool) -> Self {
+    /// `db_dir` is `~/.kmd/data/<name>/`.
+    pub fn new_workspace(ws_config: WorkspaceConfig, db_dir: &Path) -> Self {
         let conn = db::init_db(db_dir).expect("Failed to initialize database");
-
-        // Broadcast channel with a reasonable buffer; slow consumers drop old messages.
         let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(256);
-
-        // Resolve workspace roots from the config
-        let roots = Self::resolve_roots(&project_root, &ws_config);
+        let roots = Self::resolve_workspace_roots(&ws_config);
 
         Self {
             inner: Arc::new(AppStateInner {
@@ -82,8 +75,32 @@ impl AppState {
                 processes: Mutex::new(HashMap::new()),
                 workspace_name: ws_config.name,
                 roots: Mutex::new(roots),
-                project_root,
-                is_workspace,
+                is_workspace: true,
+            }),
+        }
+    }
+
+    /// Create a new AppState for ephemeral mode.
+    ///
+    /// `cwd` is the current working directory. `db_dir` is a temp directory.
+    pub fn new_ephemeral(name: String, cwd: &Path, db_dir: &Path) -> Self {
+        let conn = db::init_db(db_dir).expect("Failed to initialize database");
+        let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(256);
+
+        let root = WorkspaceRoot {
+            name: name.clone(),
+            relative_path: ".".to_string(),
+            absolute_path: cwd.to_path_buf(),
+        };
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                db: Mutex::new(conn),
+                broadcast_tx,
+                processes: Mutex::new(HashMap::new()),
+                workspace_name: name,
+                roots: Mutex::new(vec![root]),
+                is_workspace: false,
             }),
         }
     }
@@ -119,39 +136,31 @@ impl AppState {
         *roots = new_roots;
     }
 
-    /// Get the project root directory (where .kmd/ lives).
-    pub fn project_root(&self) -> &Path {
-        &self.inner.project_root
-    }
-
     /// Whether this is running in workspace mode (true) or ephemeral mode (false).
     pub fn is_workspace(&self) -> bool {
         self.inner.is_workspace
     }
 
-    /// Resolve a workspace config's roots into WorkspaceRoot structs.
-    /// Skips roots whose path does not exist on disk.
-    pub fn resolve_roots(project_root: &Path, ws_config: &WorkspaceConfig) -> Vec<WorkspaceRoot> {
+    /// Resolve a workspace config's folders into WorkspaceRoot structs.
+    /// Folders are absolute paths; missing ones are skipped with a warning.
+    pub fn resolve_workspace_roots(ws_config: &WorkspaceConfig) -> Vec<WorkspaceRoot> {
         ws_config
-            .roots
+            .folders
             .iter()
-            .filter_map(|root_path| {
-                let abs = workspace::resolve_root(project_root, root_path);
+            .filter_map(|folder| {
+                let abs = PathBuf::from(folder);
                 if !abs.exists() {
-                    tracing::warn!("Skipping missing workspace root: {root_path}");
+                    tracing::warn!("Skipping missing workspace folder: {folder}");
                     return None;
                 }
-                let name = if root_path == "." {
-                    ws_config.name.clone()
-                } else {
-                    abs.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(root_path)
-                        .to_string()
-                };
+                let name = abs
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(folder)
+                    .to_string();
                 Some(WorkspaceRoot {
                     name,
-                    relative_path: root_path.clone(),
+                    relative_path: folder.clone(),
                     absolute_path: abs,
                 })
             })

@@ -5,29 +5,13 @@ use std::path::Path;
 /// Initialize the SQLite database at `db_dir/dev.db`, creating the directory
 /// and all tables/triggers if they don't already exist.
 ///
-/// For workspace mode, `db_dir` is `.kmd/` inside the project root.
+/// For workspace mode, `db_dir` is `~/.kmd/data/<name>/`.
 /// For ephemeral mode, `db_dir` is a temp directory.
-///
-/// Optionally writes `config.json` in the db_dir on first creation (does not overwrite).
 ///
 /// If the existing DB schema is outdated (pre-multi-root, missing `root`
 /// column), the tables are dropped and recreated.
 pub fn init_db(db_dir: &Path) -> rusqlite::Result<Connection> {
     fs::create_dir_all(db_dir).expect("Failed to create database directory");
-
-    // Write default config.json if it doesn't exist
-    let config_path = db_dir.join("config.json");
-    if !config_path.exists() {
-        let default_config = r#"{
-  "include": ["."],
-  "exclude": [],
-  "maxDepth": 10
-}
-"#;
-        if let Err(err) = fs::write(&config_path, default_config) {
-            tracing::warn!("Failed to write default config.json: {err}");
-        }
-    }
 
     let db_path = db_dir.join("dev.db");
     let conn = Connection::open(&db_path)?;
@@ -87,46 +71,6 @@ fn needs_migration(conn: &Connection) -> bool {
     !has_root
 }
 
-/// Read the config from `.kmd/config.json`, returning defaults if missing.
-pub fn read_config(project_root: &Path) -> KmdConfig {
-    let config_path = project_root.join(".kmd/config.json");
-    match fs::read_to_string(&config_path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => KmdConfig::default(),
-    }
-}
-
-/// Configuration for kmd, stored in `.kmd/config.json`.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KmdConfig {
-    /// Reserved for future use — multi-path include patterns.
-    #[serde(default = "default_include")]
-    #[allow(dead_code)]
-    pub include: Vec<String>,
-    #[serde(default)]
-    pub exclude: Vec<String>,
-    #[serde(default = "default_max_depth")]
-    pub max_depth: usize,
-}
-
-fn default_include() -> Vec<String> {
-    vec![".".to_string()]
-}
-
-fn default_max_depth() -> usize {
-    10
-}
-
-impl Default for KmdConfig {
-    fn default() -> Self {
-        Self {
-            include: default_include(),
-            exclude: Vec::new(),
-            max_depth: default_max_depth(),
-        }
-    }
-}
 
 /// SQL to drop old (pre-multi-root) tables and triggers.
 const DROP_OLD_SCHEMA: &str = r#"

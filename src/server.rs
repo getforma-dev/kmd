@@ -19,17 +19,13 @@ struct ClientAssets;
 
 /// Build the full Axum router with all routes and middleware.
 pub fn build_router(state: AppState) -> Router {
-    // No CORS layer needed — the frontend is served from the same origin.
-    // Omitting CORS blocks cross-origin requests by default, which is
-    // important because kmd exposes process execution on localhost.
-
     let api = Router::new()
         // Workspace info
         .route("/api/workspace", get(api_workspace_handler))
-        // Workspace management (hot-reload add/remove roots)
+        // Workspace management (hot-reload add/remove folders)
         .route("/api/workspace/add", post(api_workspace_add_handler))
         .route("/api/workspace/remove", post(api_workspace_remove_handler))
-        .route("/api/workspace/siblings", get(api_workspace_siblings_handler))
+        // Monorepo detection (useful when browsing folders)
         .route("/api/workspace/monorepo-members", get(api_workspace_monorepo_members_handler))
         // Docs routes — search must come before the wildcard
         .route("/api/docs", get(api_docs_tree))
@@ -87,7 +83,7 @@ async fn static_handler(req: Request<Body>) -> impl IntoResponse {
 // Workspace API handler
 // ---------------------------------------------------------------------------
 
-/// `GET /api/workspace` — Return workspace name, roots info, and mode.
+/// `GET /api/workspace` — Return workspace name, folders, and mode.
 async fn api_workspace_handler(State(state): State<AppState>) -> impl IntoResponse {
     let roots: Vec<serde_json::Value> = state
         .roots()
@@ -96,6 +92,7 @@ async fn api_workspace_handler(State(state): State<AppState>) -> impl IntoRespon
             serde_json::json!({
                 "name": r.name,
                 "path": r.relative_path,
+                "absolute_path": r.absolute_path.to_string_lossy(),
             })
         })
         .collect();
@@ -117,38 +114,50 @@ struct WorkspaceAddBody {
     paths: Vec<String>,
 }
 
-/// `POST /api/workspace/add` — Add one or more root directories to the workspace.
+/// `POST /api/workspace/add` — Add one or more folders to the workspace.
 ///
-/// Resolves paths relative to the server's project root, updates workspace.json,
-/// re-indexes markdown files, and broadcasts a refresh event.
+/// For workspace mode: updates the global config file, re-indexes, broadcasts refresh.
+/// For ephemeral mode: returns error (can't modify ephemeral).
 async fn api_workspace_add_handler(
     State(state): State<AppState>,
     Json(body): Json<WorkspaceAddBody>,
 ) -> impl IntoResponse {
     use crate::services::workspace;
 
-    let project_root = state.project_root().to_path_buf();
-
-    // Add to workspace.json — returns per-path results
-    let results = workspace::add_root(&project_root, &body.paths);
-
-    // If ALL paths were duplicates, return error instead of re-indexing
-    let any_added = results.iter().any(|r| !matches!(r, workspace::AddResult::AlreadyExists(_)));
-    if !any_added {
-        let dupes: Vec<String> = results.iter().filter_map(|r| {
-            if let workspace::AddResult::AlreadyExists(p) = r { Some(p.clone()) } else { None }
-        }).collect();
+    if !state.is_workspace() {
         return Json(serde_json::json!({
-            "error": format!("Already in workspace: {}", dupes.join(", ")),
+            "error": "Cannot add folders in ephemeral mode. Create a workspace first.",
+        })).into_response();
+    }
+
+    let ws_name = state.workspace_name().to_string();
+
+    // Add each path to the workspace config
+    let mut any_added = false;
+    let mut errors = Vec::new();
+
+    for path in &body.paths {
+        match workspace::add_folder(&ws_name, path) {
+            Ok(workspace::AddResult::Added) => any_added = true,
+            Ok(workspace::AddResult::AddedMissing) => any_added = true,
+            Ok(workspace::AddResult::AlreadyExists(p)) => {
+                errors.push(format!("Already in workspace: {p}"));
+            }
+            Err(err) => errors.push(err),
+        }
+    }
+
+    if !any_added && !errors.is_empty() {
+        return Json(serde_json::json!({
+            "error": errors.join("; "),
         })).into_response();
     }
 
     // Reload config and resolve roots
-    let ws_config = workspace::load_or_create_workspace(&project_root);
-    let new_roots = AppState::resolve_roots(&project_root, &ws_config);
-
-    // Update in-memory state
-    state.update_roots(new_roots);
+    if let Some(ws_config) = workspace::load_workspace(&ws_name) {
+        let new_roots = AppState::resolve_workspace_roots(&ws_config);
+        state.update_roots(new_roots);
+    }
 
     // Re-index markdown files in the background
     {
@@ -157,7 +166,7 @@ async fn api_workspace_add_handler(
             let result = tokio::task::spawn_blocking(move || {
                 let roots = state.roots();
                 let files = markdown::discover_files(&roots);
-                drop(roots); // release lock before DB work
+                drop(roots);
 
                 let conn = state.db();
                 if let Err(err) = markdown::index_files(&conn, &files) {
@@ -189,6 +198,7 @@ async fn api_workspace_add_handler(
             serde_json::json!({
                 "name": r.name,
                 "path": r.relative_path,
+                "absolute_path": r.absolute_path.to_string_lossy(),
             })
         })
         .collect();
@@ -205,26 +215,33 @@ struct WorkspaceRemoveBody {
     path: String,
 }
 
-/// `POST /api/workspace/remove` — Remove a root directory from the workspace.
-///
-/// Updates workspace.json and the in-memory roots. Broadcasts a refresh event.
+/// `POST /api/workspace/remove` — Remove a folder from the workspace.
 async fn api_workspace_remove_handler(
     State(state): State<AppState>,
     Json(body): Json<WorkspaceRemoveBody>,
 ) -> impl IntoResponse {
     use crate::services::workspace;
 
-    let project_root = state.project_root().to_path_buf();
+    if !state.is_workspace() {
+        return Json(serde_json::json!({
+            "error": "Cannot remove folders in ephemeral mode.",
+        }));
+    }
 
-    // Remove from workspace.json
-    workspace::remove_root(&project_root, &body.path);
+    let ws_name = state.workspace_name().to_string();
+
+    // Remove from config
+    if let Err(err) = workspace::remove_folder(&ws_name, &body.path) {
+        return Json(serde_json::json!({
+            "error": err,
+        }));
+    }
 
     // Reload config and resolve roots
-    let ws_config = workspace::load_or_create_workspace(&project_root);
-    let new_roots = AppState::resolve_roots(&project_root, &ws_config);
-
-    // Update in-memory state
-    state.update_roots(new_roots);
+    if let Some(ws_config) = workspace::load_workspace(&ws_name) {
+        let new_roots = AppState::resolve_workspace_roots(&ws_config);
+        state.update_roots(new_roots);
+    }
 
     // Broadcast so frontend refreshes
     let _ = state.broadcast_tx().send(ws::ServerMessage::FileChange {
@@ -240,6 +257,7 @@ async fn api_workspace_remove_handler(
             serde_json::json!({
                 "name": r.name,
                 "path": r.relative_path,
+                "absolute_path": r.absolute_path.to_string_lossy(),
             })
         })
         .collect();
@@ -251,95 +269,48 @@ async fn api_workspace_remove_handler(
 }
 
 // ---------------------------------------------------------------------------
-// Workspace siblings API handler
-// ---------------------------------------------------------------------------
-
-/// `GET /api/workspace/siblings` — Return sibling directories of the project root.
-///
-/// Lists subdirectories in the parent of the project root, filtering out hidden
-/// directories and the project root itself. Returns relative paths like `../sibling`.
-async fn api_workspace_siblings_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let project_root = state.project_root().to_path_buf();
-
-    let siblings: Vec<serde_json::Value> = match project_root.parent() {
-        Some(parent_dir) => {
-            let project_name = project_root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-
-            // Read existing roots so we can mark which siblings are already added
-            let existing_roots: Vec<String> = state
-                .roots()
-                .iter()
-                .map(|r| r.relative_path.clone())
-                .collect();
-
-            match std::fs::read_dir(parent_dir) {
-                Ok(entries) => entries
-                    .filter_map(|entry| {
-                        let entry = entry.ok()?;
-                        let ft = entry.file_type().ok()?;
-                        if !ft.is_dir() {
-                            return None;
-                        }
-                        let name = entry.file_name().to_str()?.to_string();
-                        // Skip hidden directories and the project root itself
-                        if name.starts_with('.') || name == project_name {
-                            return None;
-                        }
-                        let rel_path = format!("../{name}");
-                        let already_added = existing_roots.contains(&rel_path);
-                        Some(serde_json::json!({
-                            "name": name,
-                            "path": rel_path,
-                            "added": already_added,
-                        }))
-                    })
-                    .collect(),
-                Err(_) => Vec::new(),
-            }
-        }
-        None => Vec::new(),
-    };
-
-    Json(serde_json::json!({ "siblings": siblings }))
-}
-
-// ---------------------------------------------------------------------------
 // Monorepo members API handler
 // ---------------------------------------------------------------------------
 
 /// `GET /api/workspace/monorepo-members` — Detect monorepo member projects.
 ///
-/// Scans the project root for monorepo indicators (pnpm, npm workspaces, lerna,
-/// turbo, nx, cargo) and returns detected member projects with their paths.
+/// Scans each workspace folder for monorepo indicators and returns detected members.
 async fn api_workspace_monorepo_members_handler(State(state): State<AppState>) -> impl IntoResponse {
     use crate::services::workspace;
 
-    let project_root = state.project_root().to_path_buf();
-    let members = workspace::detect_monorepo_members(&project_root);
+    let roots = state.roots();
+    let mut all_members = Vec::new();
 
-    // Check which members are already added as workspace roots
-    let existing_roots: Vec<String> = state
-        .roots()
+    // Check each root for monorepo members
+    for root in roots.iter() {
+        let members = workspace::detect_monorepo_members(&root.absolute_path);
+        for m in members {
+            // Convert member paths to absolute
+            let abs_path = root.absolute_path.join(&m.path);
+            all_members.push(serde_json::json!({
+                "name": m.name,
+                "path": abs_path.to_string_lossy(),
+                "source": m.source,
+                "parent": root.absolute_path.to_string_lossy(),
+            }));
+        }
+    }
+
+    // Check which members are already in the workspace
+    let existing_folders: Vec<String> = roots
         .iter()
         .map(|r| r.relative_path.clone())
         .collect();
+    drop(roots);
 
-    let members_json: Vec<serde_json::Value> = members
+    let members_json: Vec<serde_json::Value> = all_members
         .iter()
         .map(|m| {
-            let added = existing_roots.contains(&m.path) || existing_roots.iter().any(|r| {
-                // Also check if the root matches with "./" prefix or without
-                r.trim_start_matches("./") == m.path || m.path.trim_start_matches("./") == r.as_str()
-            });
-            serde_json::json!({
-                "name": m.name,
-                "path": m.path,
-                "source": m.source,
-                "added": added,
-            })
+            let path = m.get("path").and_then(|p| p.as_str()).unwrap_or("");
+            let added = existing_folders.contains(&path.to_string());
+            let mut member = m.clone();
+            member.as_object_mut().unwrap().insert("added".to_string(), serde_json::json!(added));
+            member
         })
         .collect();
 
@@ -391,7 +362,7 @@ struct DocRenderQuery {
     root: Option<String>,
 }
 
-/// `GET /api/docs/*path?root=.` — Render a single markdown file to HTML.
+/// `GET /api/docs/*path?root=<folder>` — Render a single markdown file to HTML.
 async fn api_docs_render(
     State(state): State<AppState>,
     Path(file_path): Path<String>,
@@ -566,7 +537,6 @@ struct ShellExecBody {
 }
 
 /// `POST /api/shell/exec` — Execute a shell command in a workspace root.
-/// Spawns as a managed process with stdout/stderr streaming via WebSocket.
 async fn api_shell_exec_handler(
     State(state): State<AppState>,
     Json(body): Json<ShellExecBody>,
@@ -595,7 +565,6 @@ async fn api_ports_handler() -> impl IntoResponse {
 /// `POST /api/ports/scan` — Trigger an immediate port scan and broadcast results.
 async fn api_ports_scan_handler(State(state): State<AppState>) -> impl IntoResponse {
     let port_list = ports::scan_ports().await;
-    // Broadcast to all WS clients immediately
     let _ = state
         .broadcast_tx()
         .send(crate::ws::ServerMessage::Ports {
@@ -605,9 +574,6 @@ async fn api_ports_scan_handler(State(state): State<AppState>) -> impl IntoRespo
 }
 
 /// `POST /api/ports/:port/kill` — Kill the process listening on a port.
-/// Returns { ok: true, confirmed: true } if verified dead,
-/// { ok: true, confirmed: false } if SIGTERM sent but process may linger,
-/// or { error: "..." } on failure.
 async fn api_port_kill_handler(Path(port): Path<u16>) -> impl IntoResponse {
     match ports::kill_port(port).await {
         Ok(confirmed) => Json(serde_json::json!({
@@ -624,13 +590,12 @@ async fn api_port_kill_handler(Path(port): Path<u16>) -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Hidden ports persistence (.kmd/ports.json)
+// Hidden ports persistence (~/.kmd/ports.json)
 // ---------------------------------------------------------------------------
 
 fn ports_json_path() -> std::path::PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join(".kmd/ports.json")
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".kmd").join("ports.json")
 }
 
 fn read_hidden_ports() -> Vec<u16> {
@@ -643,6 +608,10 @@ fn read_hidden_ports() -> Vec<u16> {
 
 fn write_hidden_ports(hidden: &[u16]) {
     let path = ports_json_path();
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     if let Ok(json) = serde_json::to_string_pretty(hidden) {
         let _ = std::fs::write(&path, format!("{json}\n"));
     }
@@ -655,7 +624,6 @@ async fn api_ports_hidden_get() -> impl IntoResponse {
 }
 
 /// `POST /api/ports/hidden` — Set the hidden ports list.
-/// Body: { "hidden": [5433, 5434] }
 async fn api_ports_hidden_set(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
     if let Some(arr) = body.get("hidden").and_then(|v| v.as_array()) {
         let hidden: Vec<u16> = arr

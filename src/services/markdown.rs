@@ -74,9 +74,8 @@ pub fn discover_files(roots: &[WorkspaceRoot]) -> Vec<MdFile> {
     let mut all_files = Vec::new();
 
     for root in roots {
-        let config = crate::db::read_config(&root.absolute_path);
         let root_files =
-            discover_files_in_root(&root.relative_path, &root.absolute_path, &config.exclude, config.max_depth);
+            discover_files_in_root(&root.relative_path, &root.absolute_path, &[], 10);
         all_files.extend(root_files);
     }
 
