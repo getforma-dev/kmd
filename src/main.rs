@@ -68,8 +68,16 @@ enum Commands {
         /// Path to remove from project roots
         path: String,
     },
-    /// Print workspace info
-    List,
+    /// List projects and info (alias: list)
+    #[command(alias = "list")]
+    Ls {
+        /// Show all folders including empty ones
+        #[arg(short, long)]
+        all: bool,
+        /// Sort by script count (highest first)
+        #[arg(short, long)]
+        sort: bool,
+    },
     /// Initialize .kmd/ directory without starting the server
     Init {
         /// Workspace name
@@ -259,8 +267,8 @@ async fn main() {
         // ---------------------------------------------------------------
         // kmd list — works in both modes
         // ---------------------------------------------------------------
-        Some(Commands::List) => {
-            services::workspace::list_workspace(&project_root);
+        Some(Commands::Ls { all, sort }) => {
+            services::workspace::list_workspace(&project_root, all, sort);
             return;
         }
         // ---------------------------------------------------------------

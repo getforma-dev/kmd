@@ -173,7 +173,7 @@ pub fn remove_root(cwd: &Path, path: &str) {
 
 /// Print workspace info to stdout. Unified view for both modes.
 /// Does a quick scan of each root to show doc and package counts.
-pub fn list_workspace(cwd: &Path) {
+pub fn list_workspace(cwd: &Path, show_all: bool, sort_by_scripts: bool) {
     let bold = "\x1b[1m";
     let dim = "\x1b[2m";
     let yellow = "\x1b[33m";
@@ -318,8 +318,15 @@ pub fn list_workspace(cwd: &Path) {
                 any_sub_project_name = child_projects.first().map(|(n, _)| n.clone());
             }
 
-            // Count folders that actually contain .md files (what the sidebar shows)
-            let folders_with_docs = count_child_dirs_with_docs(&abs);
+            // Count folders (with -a shows all, otherwise only those with docs)
+            let folders_with_docs = if show_all {
+                fs::read_dir(&abs).map(|e| e.flatten().filter(|e| {
+                    e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                        && e.file_name().to_str().map(|n| !n.starts_with('.') && n != "node_modules" && n != "target" && n != "dist").unwrap_or(false)
+                }).count()).unwrap_or(0)
+            } else {
+                count_child_dirs_with_docs(&abs)
+            };
 
             if folders_with_docs > 0 {
                 println!(
@@ -330,22 +337,25 @@ pub fn list_workspace(cwd: &Path) {
                     "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str}{reset}"
                 );
             }
-            // Show ALL folders with docs, color-coded:
-            // Gold = has scripts (project), Dim = docs only
-            let folders_info = get_child_folder_info(&abs);
-            for (i, (fname, has_scripts)) in folders_info.iter().enumerate() {
+            // Show ALL folders with content, color-coded
+            let mut folders_info = get_child_folder_info(&abs, show_all);
+            if sort_by_scripts {
+                folders_info.sort_by(|a, b| b.scripts.cmp(&a.scripts).then(a.name.cmp(&b.name)));
+            }
+            for (i, fi) in folders_info.iter().enumerate() {
                 if i % 3 == 0 {
                     if i > 0 { println!(); }
                     print!("    ");
                 }
-                if *has_scripts {
-                    // Gold — runnable project
-                    print!("{yellow}{fname}/{reset}");
+                if fi.scripts > 0 {
+                    print!("{yellow}{}/{reset}", fi.name);
+                } else if fi.docs > 0 {
+                    print!("{dim}{}/{reset}", fi.name);
                 } else {
-                    // Dim — docs only
-                    print!("{dim}{fname}/{reset}");
+                    // Empty folder (only with -a)
+                    print!("{dim}{}/{reset}", fi.name);
                 }
-                let pad = 24usize.saturating_sub(fname.len() + 1);
+                let pad = 24usize.saturating_sub(fi.name.len() + 1);
                 print!("{:width$}", "", width = pad);
             }
             if !folders_info.is_empty() {
@@ -428,7 +438,14 @@ fn find_child_projects(parent: &Path) -> Vec<(String, Vec<String>)> {
 
 /// Get child folder info: name + whether it has scripts (for color coding).
 /// Only includes folders that contain .md files (matches sidebar).
-fn get_child_folder_info(parent: &Path) -> Vec<(String, bool)> {
+/// Info about a child folder: name, doc count, script count.
+struct FolderInfo {
+    name: String,
+    docs: usize,
+    scripts: usize,
+}
+
+fn get_child_folder_info(parent: &Path, include_empty: bool) -> Vec<FolderInfo> {
     let entries = match fs::read_dir(parent) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
@@ -447,11 +464,11 @@ fn get_child_folder_info(parent: &Path) -> Vec<(String, bool)> {
             continue;
         }
         let (docs, scripts, _) = quick_scan_counts(&entry.path());
-        if docs > 0 {
-            folders.push((name, scripts > 0));
+        if docs > 0 || scripts > 0 || include_empty {
+            folders.push(FolderInfo { name, docs, scripts });
         }
     }
-    folders.sort_by(|a, b| a.0.cmp(&b.0));
+    folders.sort_by(|a, b| a.name.cmp(&b.name));
     folders
 }
 
@@ -492,8 +509,7 @@ fn quick_scan_counts(dir: &Path) -> (usize, usize, bool) {
     use super::EXCLUDED_DIRS;
 
     let walker = WalkBuilder::new(dir)
-        .hidden(true)
-        .max_depth(Some(5))
+        .hidden(false) // match the actual indexer settings
         .filter_entry(|entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
