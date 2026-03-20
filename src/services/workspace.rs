@@ -180,6 +180,8 @@ pub fn list_workspace(cwd: &Path) {
     let white = "\x1b[37m";
     let reset = "\x1b[0m";
 
+    let is_workspace = load_workspace(cwd).is_some();
+
     let (name, roots, mode_line) = if let Some(config) = load_workspace(cwd) {
         let name = config.name.clone();
         let roots = config.roots.clone();
@@ -201,6 +203,54 @@ pub fn list_workspace(cwd: &Path) {
     );
     println!("  {dim}──────────────────────────────{reset}");
     println!("  {dim}Mode{reset} {dim}·····{reset} {mode_line}");
+
+    // In ephemeral mode, check if this looks like a project directory
+    if !is_workspace {
+        const PROJECT_MARKERS: &[&str] = &[".git", "package.json", "Cargo.toml", "pyproject.toml", "go.mod", "Makefile", ".kmd"];
+        let has_markers = PROJECT_MARKERS.iter().any(|m| cwd.join(m).exists());
+        if !has_markers {
+            println!();
+            println!(
+                "  {yellow}⚠{reset} This doesn't look like a project directory."
+            );
+            println!(
+                "  {dim}No project markers found (.git, package.json, Cargo.toml, etc.){reset}"
+            );
+
+            // Scan immediate children for project directories
+            let child_projects = find_child_projects(cwd);
+            if !child_projects.is_empty() {
+                println!();
+                println!(
+                    "  {dim}Found {} project{} nearby:{reset}",
+                    child_projects.len(),
+                    if child_projects.len() == 1 { "" } else { "s" }
+                );
+                for (child_name, child_markers) in &child_projects {
+                    let markers_str = child_markers.join(", ");
+                    println!(
+                        "    {white}{child_name}/{reset} {dim}({markers_str}){reset}"
+                    );
+                }
+                println!();
+                println!(
+                    "  {dim}Try:{reset} cd {child_project} && kmd",
+                    child_project = child_projects[0].0
+                );
+                println!(
+                    "  {dim}Or create a workspace here:{reset} kmd init && kmd add {child_dirs}",
+                    child_dirs = child_projects.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(" ")
+                );
+            } else {
+                println!();
+                println!(
+                    "  {dim}Run kmd from a project folder, or run{reset} kmd init {dim}to create a workspace.{reset}"
+                );
+            }
+            println!();
+            return;
+        }
+    }
 
     if roots.len() > 1 {
         println!(
@@ -264,6 +314,45 @@ pub fn list_workspace(cwd: &Path) {
         );
         println!();
     }
+}
+
+/// Find child directories that look like projects (have project markers).
+/// Returns Vec<(dir_name, Vec<marker_names>)>.
+fn find_child_projects(parent: &Path) -> Vec<(String, Vec<String>)> {
+    const PROJECT_MARKERS: &[&str] = &[".git", "package.json", "Cargo.toml", "pyproject.toml", "go.mod", "Makefile"];
+    let mut projects = Vec::new();
+
+    let entries = match fs::read_dir(parent) {
+        Ok(e) => e,
+        Err(_) => return projects,
+    };
+
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let dir_name = match entry.file_name().to_str() {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if dir_name.starts_with('.') || dir_name == "node_modules" || dir_name == "target" {
+            continue;
+        }
+
+        let dir_path = entry.path();
+        let mut markers = Vec::new();
+        for marker in PROJECT_MARKERS {
+            if dir_path.join(marker).exists() {
+                markers.push(marker.to_string());
+            }
+        }
+        if !markers.is_empty() {
+            projects.push((dir_name, markers));
+        }
+    }
+
+    projects.sort_by(|a, b| a.0.cmp(&b.0));
+    projects
 }
 
 /// Quick count of .md files and package.json files in a directory (no content reading).
