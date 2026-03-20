@@ -243,14 +243,11 @@ pub fn list_workspace(cwd: &Path) {
                     );
                 }
                 println!();
-                if let Some((first, _)) = child_projects.first() {
-                    println!(
-                        "  {dim}Quick session:{reset} cd {first} && kmd",
-                        first = first
-                    );
-                }
                 println!(
-                    "  {dim}Create workspace:{reset} kmd init"
+                    "  {dim}Quick session:{reset} cd <project> && kmd"
+                );
+                println!(
+                    "  {dim}Multi-project workspace:{reset} kmd init {dim}then{reset} kmd add <project>"
                 );
             } else {
                 println!();
