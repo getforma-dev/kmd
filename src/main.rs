@@ -615,30 +615,29 @@ async fn run_server(
         eprintln!("  {dim}──────────────────────────────{reset}");
         eprintln!();
 
-        // Count total child directories (to detect non-project folders like FormaStack)
-        let total_child_dirs = std::fs::read_dir(&project_root)
-            .map(|entries| {
-                entries.flatten().filter(|e| {
-                    e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
-                        && e.file_name().to_str().map(|n| !n.starts_with('.')).unwrap_or(false)
-                        && e.file_name().to_str().map(|n| n != "node_modules" && n != "target").unwrap_or(true)
-                }).count()
-            })
-            .unwrap_or(0);
-        let other_folders = total_child_dirs.saturating_sub(project_count);
-
         eprintln!("  {yellow}⚠{reset} This doesn't look like a project directory.");
-        if project_count > 0 && count > 0 {
-            let mut desc = format!("{bold}{project_count}{reset} project{}", if project_count == 1 { "" } else { "s" });
-            if other_folders > 0 {
-                desc.push_str(&format!(" and {other_folders} other folder{}", if other_folders == 1 { "" } else { "s" }));
+        if count > 0 {
+            // Count visible folders (what will show in the sidebar)
+            let folder_count = std::fs::read_dir(&project_root)
+                .map(|entries| {
+                    entries.flatten().filter(|e| {
+                        e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                            && e.file_name().to_str().map(|n| !n.starts_with('.')).unwrap_or(false)
+                            && e.file_name().to_str().map(|n| {
+                                n != "node_modules" && n != "target" && n != "dist" && n != "coverage"
+                            }).unwrap_or(true)
+                    }).count()
+                })
+                .unwrap_or(0);
+
+            if folder_count > 0 {
+                eprintln!(
+                    "  Found {bold}{count}{reset} docs across {bold}{folder_count}{reset} folder{}",
+                    if folder_count == 1 { "" } else { "s" }
+                );
+            } else {
+                eprintln!("  Found {bold}{count}{reset} docs");
             }
-            eprintln!("  Found {bold}{count}{reset} docs across {desc}");
-        } else if count > 0 {
-            eprintln!(
-                "  Found {bold}{count}{reset} markdown files from {}",
-                project_root.display()
-            );
         }
         eprintln!(
             "  {dim}No project markers found (.git, package.json, Cargo.toml, etc.){reset}"
@@ -647,11 +646,7 @@ async fn run_server(
         eprintln!();
         eprintln!("  {dim}Quick session:{reset}              cd <project> && kmd");
         eprintln!("  {dim}Multi-project workspace:{reset}    kmd init {dim}then{reset} kmd add <project>");
-        if project_count > 0 {
-            eprintln!("  {dim}Start server anyway:{reset}         kmd --force {dim}({count} docs, {project_count} projects){reset}");
-        } else {
-            eprintln!("  {dim}Start server anyway:{reset}         kmd --force {dim}({count} files){reset}");
-        }
+        eprintln!("  {dim}Start server anyway:{reset}         kmd --force {dim}({count} docs){reset}");
         if project_count > 0 {
             eprintln!("  {dim}See project details:{reset}         kmd list");
         }
