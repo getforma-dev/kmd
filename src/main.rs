@@ -611,6 +611,7 @@ async fn run_server(
         eprintln!(
             "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} {dim}—{reset} {dir_name}"
         );
+        eprintln!("  {yellow}kausing much damage{reset}");
         eprintln!("  {dim}──────────────────────────────{reset}");
         eprintln!();
 
