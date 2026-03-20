@@ -152,8 +152,24 @@ fn quick_count_md_files(dir: &Path) -> usize {
         })
         .build();
 
+    let dim = "\x1b[2m";
+    let reset = "\x1b[0m";
+    let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
     let mut count = 0;
+    let mut scanned = 0u64;
+    let mut spin_idx = 0;
+
     for result in walker {
+        scanned += 1;
+        // Update spinner every 500 entries
+        if scanned % 500 == 0 {
+            spin_idx = (spin_idx + 1) % spinner.len();
+            eprint!(
+                "\r  {dim}{} Scanning... {count} docs found ({scanned} files scanned){reset}",
+                spinner[spin_idx]
+            );
+        }
         if let Ok(entry) = result {
             if entry.file_type().is_some_and(|ft| ft.is_file()) {
                 if entry
@@ -167,6 +183,8 @@ fn quick_count_md_files(dir: &Path) -> usize {
             }
         }
     }
+    // Clear the spinner line
+    eprint!("\x1b[2K\r");
     count
 }
 
