@@ -127,8 +127,19 @@ async fn api_workspace_add_handler(
 
     let project_root = state.project_root().to_path_buf();
 
-    // Add to workspace.json
-    workspace::add_root(&project_root, &body.paths);
+    // Add to workspace.json — returns per-path results
+    let results = workspace::add_root(&project_root, &body.paths);
+
+    // If ALL paths were duplicates, return error instead of re-indexing
+    let any_added = results.iter().any(|r| !matches!(r, workspace::AddResult::AlreadyExists(_)));
+    if !any_added {
+        let dupes: Vec<String> = results.iter().filter_map(|r| {
+            if let workspace::AddResult::AlreadyExists(p) = r { Some(p.clone()) } else { None }
+        }).collect();
+        return Json(serde_json::json!({
+            "error": format!("Already in workspace: {}", dupes.join(", ")),
+        })).into_response();
+    }
 
     // Reload config and resolve roots
     let ws_config = workspace::load_or_create_workspace(&project_root);
@@ -183,7 +194,7 @@ async fn api_workspace_add_handler(
     Json(serde_json::json!({
         "ok": true,
         "roots": roots,
-    }))
+    })).into_response()
 }
 
 /// Request body for the workspace remove endpoint.

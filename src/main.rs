@@ -179,8 +179,25 @@ async fn main() {
     match cli.command {
         // Non-serve subcommands
         Some(Commands::Add { paths }) => {
+            // Resolve paths to absolute so the server can make them relative to its root
+            let abs_paths: Vec<String> = paths
+                .iter()
+                .map(|p| {
+                    let resolved = if p == "." {
+                        project_root.clone()
+                    } else {
+                        project_root.join(p)
+                    };
+                    resolved
+                        .canonicalize()
+                        .unwrap_or(resolved)
+                        .to_string_lossy()
+                        .to_string()
+                })
+                .collect();
+
             let port = get_workspace_port(&project_root);
-            if try_api_add(port, &paths) {
+            if try_api_add(port, &abs_paths) {
                 eprintln!("  (server notified — hot-reloading roots)");
             } else {
                 // Server not running, fall back to file-based edit

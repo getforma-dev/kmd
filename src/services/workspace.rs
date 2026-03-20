@@ -65,30 +65,55 @@ pub fn load_or_create_workspace(cwd: &Path) -> WorkspaceConfig {
     config
 }
 
-/// Add one or more root paths to the workspace.
-pub fn add_root(cwd: &Path, paths: &[String]) {
+/// Result of adding a root path.
+pub enum AddResult {
+    Added(String),
+    AlreadyExists(String),
+    AddedMissing(String),
+}
+
+/// Add one or more root paths to the workspace. Returns results per path.
+/// Accepts both relative and absolute paths. Absolute paths are converted
+/// to relative paths from `cwd`.
+pub fn add_root(cwd: &Path, paths: &[String]) -> Vec<AddResult> {
     let mut config = load_or_create_workspace(cwd);
+    let mut results = Vec::new();
+    let cwd_canonical = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
 
     for path in paths {
-        let normalized = normalize_root(path);
+        // Convert absolute paths to relative from cwd
+        let relative = if std::path::Path::new(path).is_absolute() {
+            let abs = std::path::PathBuf::from(path);
+            match pathdiff_relative(&cwd_canonical, &abs) {
+                Some(rel) => rel,
+                None => path.clone(),
+            }
+        } else {
+            path.clone()
+        };
+        let normalized = normalize_root(&relative);
 
         if config.roots.contains(&normalized) {
             eprintln!("  Root already exists: {normalized}");
+            results.push(AddResult::AlreadyExists(normalized));
             continue;
         }
 
-        // Validate the path exists on disk
         let abs = resolve_root(cwd, &normalized);
         if !abs.exists() {
             eprintln!("  Warning: path does not exist: {}", abs.display());
             eprintln!("  Adding anyway — it will be skipped until it exists.");
+            config.roots.push(normalized.clone());
+            results.push(AddResult::AddedMissing(normalized));
+        } else {
+            config.roots.push(normalized.clone());
+            eprintln!("  Added root: {normalized}");
+            results.push(AddResult::Added(normalized));
         }
-
-        config.roots.push(normalized.clone());
-        eprintln!("  Added root: {normalized}");
     }
 
     write_config(cwd, &config);
+    results
 }
 
 /// Remove a root path from the workspace.
@@ -175,6 +200,44 @@ fn validate_roots(cwd: &Path, config: &mut WorkspaceConfig) {
             );
         }
     }
+}
+
+/// Compute a relative path from `base` to `target`.
+/// Returns `None` if no relative path can be computed.
+fn pathdiff_relative(base: &Path, target: &Path) -> Option<String> {
+    // If target == base, it's "."
+    if target == base {
+        return Some(".".to_string());
+    }
+
+    // If target is inside base, strip the prefix
+    if let Ok(rel) = target.strip_prefix(base) {
+        return Some(rel.to_string_lossy().replace('\\', "/"));
+    }
+
+    // Walk up from base to find common ancestor
+    let mut base_parts: Vec<_> = base.components().collect();
+    let target_parts: Vec<_> = target.components().collect();
+
+    let common = base_parts
+        .iter()
+        .zip(target_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    if common == 0 {
+        return None;
+    }
+
+    let ups = base_parts.len() - common;
+    let downs: Vec<_> = target_parts[common..]
+        .iter()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+
+    let mut result = vec!["..".to_string(); ups];
+    result.extend(downs);
+    Some(result.join("/"))
 }
 
 /// Normalize a root path: use forward slashes, strip trailing slashes.
