@@ -306,13 +306,39 @@ pub fn list_workspace(cwd: &Path) {
             );
         }
 
-        // Counts
+        // Counts + sub-project detection
+        let child_projects = find_child_projects(&abs);
+        let sub_count = child_projects.len();
+
         let doc_str = if doc_count == 1 { "doc" } else { "docs" };
         let script_str = if script_count == 1 { "script" } else { "scripts" };
         let cap_marker = if capped { "+" } else { "" };
-        println!(
-            "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str}{reset}"
-        );
+
+        if sub_count > 1 {
+            println!(
+                "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str} · {sub_count} sub-projects{reset}"
+            );
+            // Show sub-project names in columns
+            let names: Vec<&str> = child_projects.iter().map(|(n, _)| n.as_str()).collect();
+            print!("    {dim}");
+            for (i, name) in names.iter().enumerate() {
+                print!("{name}/");
+                if i < names.len() - 1 {
+                    if (i + 1) % 3 == 0 {
+                        print!("{reset}\n    {dim}");
+                    } else {
+                        // Pad to column width
+                        let pad = 24usize.saturating_sub(name.len() + 1);
+                        print!("{:width$}", "", width = pad);
+                    }
+                }
+            }
+            println!("{reset}");
+        } else {
+            println!(
+                "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str}{reset}"
+            );
+        }
         println!();
     }
 
