@@ -29,7 +29,8 @@ export function TerminalPage() {
 
   // Parent that holds all terminal containers (each session gets its own div)
   const terminalsParent = document.createElement('div');
-  terminalsParent.style.cssText = 'flex: 1; min-height: 0; position: relative; overflow: hidden; background: var(--gruvbox-bg-hard);';
+  // Hardcoded to match xterm.js theme background — stays dark even in light mode
+  terminalsParent.style.cssText = 'flex: 1; min-height: 0; position: relative; overflow: hidden; background: #1d2021;';
 
   const sessionMap = new Map<string, SessionEntry>();
 
@@ -240,7 +241,8 @@ export function TerminalPage() {
 
     // Create a dedicated container for this terminal session
     const container = document.createElement('div');
-    container.style.cssText = 'position: absolute; inset: 0; display: none; padding: 4px 0 0 8px; background: var(--gruvbox-bg-hard);';
+    // Hardcoded to match xterm.js theme — always dark regardless of app theme
+    container.style.cssText = 'position: absolute; inset: 0; display: none; padding: 4px 0 0 8px; background: #1d2021;';
 
     // Hide all other containers
     for (const [, entry] of sessionMap) {

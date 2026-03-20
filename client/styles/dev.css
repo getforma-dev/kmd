@@ -527,9 +527,7 @@ code, pre, kbd {
   color: var(--gruvbox-fg);
 }
 
-[data-theme="light"] .terminal:not(.xterm) {
-  background: #f9f5d7;
-}
+/* Terminal backgrounds stay dark in both themes (consistent with PTY terminal) */
 
 .terminal-line {
   white-space: pre-wrap;

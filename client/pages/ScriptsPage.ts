@@ -1000,7 +1000,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       ProcessTabs(),
       HistoryPanel(),
       h('div', {
-        style: 'flex: 1; overflow: hidden; padding: 4px 0 0 0; background: var(--gruvbox-bg-hard);',
+        style: 'flex: 1; overflow: hidden; padding: 4px 0 0 0; background: #1d2021;',
       },
         createShow(
           () => selectedProcessId() !== null || viewingHistoryId() !== null,
