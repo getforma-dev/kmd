@@ -171,51 +171,137 @@ pub fn remove_root(cwd: &Path, path: &str) {
     write_config(cwd, &config);
 }
 
-/// Print workspace info to stdout. Works in both modes.
+/// Print workspace info to stdout. Unified view for both modes.
+/// Does a quick scan of each root to show doc and package counts.
 pub fn list_workspace(cwd: &Path) {
     let bold = "\x1b[1m";
     let dim = "\x1b[2m";
     let yellow = "\x1b[33m";
+    let white = "\x1b[37m";
     let reset = "\x1b[0m";
 
-    if let Some(config) = load_workspace(cwd) {
-        // Workspace mode
-        println!();
-        println!(
-            "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} workspace"
-        );
-        println!("  {dim}──────────────────────────────{reset}");
-        println!("  {dim}Name{reset}  {dim}·····{reset} {}", config.name);
-        println!("  {dim}Port{reset}  {dim}·····{reset} {} (fixed)", config.port);
-        println!(
-            "  {dim}Roots{reset} {dim}····{reset} {} root{}",
-            config.roots.len(),
-            if config.roots.len() == 1 { "" } else { "s" }
-        );
+    let (name, roots, mode_line) = if let Some(config) = load_workspace(cwd) {
+        let name = config.name.clone();
+        let roots = config.roots.clone();
+        let mode = format!("workspace (port {} fixed)", config.port);
+        (name, roots, mode)
+    } else {
+        let name = cwd
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(".")
+            .to_string();
+        (name, vec![".".to_string()], "ephemeral (port auto)".to_string())
+    };
 
-        for (i, root) in config.roots.iter().enumerate() {
-            let abs = resolve_root(cwd, root);
-            let exists = abs.exists();
-            let marker = if exists { " " } else { "!" };
-            let status = if exists { "" } else { " (missing)" };
+    // Header
+    println!();
+    println!(
+        "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} {dim}—{reset} {name}"
+    );
+    println!("  {dim}──────────────────────────────{reset}");
+    println!("  {dim}Mode{reset} {dim}·····{reset} {mode_line}");
+
+    if roots.len() > 1 {
+        println!(
+            "  {dim}Roots{reset} {dim}····{reset} {} projects",
+            roots.len()
+        );
+    }
+    println!();
+
+    // Per-root scan
+    let mut total_docs = 0usize;
+    let mut total_pkgs = 0usize;
+
+    for root in &roots {
+        let abs = resolve_root(cwd, root);
+        let display_name = abs
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(root)
+            .to_string();
+
+        if !abs.exists() {
+            println!("  {yellow}!{reset} {root} {dim}(missing){reset}");
+            println!();
+            continue;
+        }
+
+        let (doc_count, pkg_count) = quick_scan_counts(&abs);
+        total_docs += doc_count;
+        total_pkgs += pkg_count;
+
+        // Root header
+        if roots.len() > 1 {
             println!(
-                "  {dim}{:>3}.{reset} {marker} {root}{dim}{status}{reset}",
-                i + 1
+                "  {white}{root}{reset} {dim}({display_name}){reset}"
+            );
+        } else {
+            println!(
+                "  {white}.{reset} {dim}({display_name}){reset}"
             );
         }
-        println!();
-    } else {
-        // Ephemeral mode
-        println!();
+
+        // Counts
+        let doc_str = if doc_count == 1 { "doc" } else { "docs" };
+        let pkg_str = if pkg_count == 1 { "package" } else { "packages" };
         println!(
-            "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} {dim}(ephemeral){reset}"
+            "    {dim}{doc_count} {doc_str} · {pkg_count} {pkg_str}{reset}"
         );
-        println!("  {dim}──────────────────────────────{reset}");
-        println!("  {dim}Mode{reset}  {dim}·····{reset} ephemeral");
-        println!("  {dim}Root{reset}  {dim}·····{reset} {}", cwd.display());
-        println!("  {dim}Port{reset}  {dim}·····{reset} auto (4445-4460)");
         println!();
     }
+
+    // Total line
+    if roots.len() > 1 {
+        let doc_str = if total_docs == 1 { "doc" } else { "docs" };
+        let pkg_str = if total_pkgs == 1 { "package" } else { "packages" };
+        println!(
+            "  {dim}Total: {total_docs} {doc_str} · {total_pkgs} {pkg_str}{reset}"
+        );
+        println!();
+    }
+}
+
+/// Quick count of .md files and package.json files in a directory (no content reading).
+fn quick_scan_counts(dir: &Path) -> (usize, usize) {
+    use ignore::WalkBuilder;
+    use super::EXCLUDED_DIRS;
+
+    let walker = WalkBuilder::new(dir)
+        .hidden(false)
+        .max_depth(Some(10))
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
+                    if EXCLUDED_DIRS.contains(&name) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .build();
+
+    let mut docs = 0;
+    let mut pkgs = 0;
+
+    for result in walker {
+        if let Ok(entry) = result {
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+                docs += 1;
+            }
+            if path.file_name().and_then(|n| n.to_str()) == Some("package.json") {
+                pkgs += 1;
+            }
+        }
+    }
+
+    (docs, pkgs)
 }
 
 // ---------------------------------------------------------------------------
