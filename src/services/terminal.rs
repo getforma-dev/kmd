@@ -5,6 +5,9 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
+/// Maximum number of concurrent terminal sessions.
+const MAX_SESSIONS: usize = 10;
+
 /// Handle stored for each active terminal session.
 /// The reader is handed off to the WebSocket task at creation time;
 /// we keep the writer (for keystrokes), master (for resize), and child.
@@ -51,6 +54,15 @@ impl TerminalManager {
         cols: u16,
         rows: u16,
     ) -> Result<(String, Box<dyn Read + Send>), String> {
+        {
+            let sessions = self.sessions.lock().expect("terminal sessions mutex poisoned");
+            if sessions.len() >= MAX_SESSIONS {
+                return Err(format!(
+                    "Maximum number of terminal sessions ({MAX_SESSIONS}) reached. Kill an existing session first."
+                ));
+            }
+        }
+
         let pty_system = native_pty_system();
 
         let pair = pty_system

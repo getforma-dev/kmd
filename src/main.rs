@@ -260,6 +260,10 @@ async fn run_server(
         ws_config.name = name;
     }
 
+    // Use workspace config port as default, with CLI --port as override.
+    // CLI default is 4444; if user didn't pass --port explicitly, prefer workspace config.
+    let port = if port != 4444 { port } else { ws_config.port };
+
     // -----------------------------------------------------------------------
     // Tier 1 & 2: Project root detection + guardrails per root
     // -----------------------------------------------------------------------
@@ -367,14 +371,20 @@ async fn run_server(
         });
     }
 
-    // Kick off background port scanning task (polls every 5 seconds)
+    // Kick off background port scanning task (polls every 5 seconds).
+    // scan_ports calls blocking `ps` commands internally, so we wrap each
+    // iteration in spawn_blocking to avoid stalling the async runtime.
     {
         let state = state.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
             loop {
                 interval.tick().await;
-                let ports = services::ports::scan_ports().await;
+                let ports = tokio::task::spawn_blocking(|| {
+                    tokio::runtime::Handle::current().block_on(services::ports::scan_ports())
+                })
+                .await
+                .unwrap_or_default();
                 let _ = state.broadcast_tx().send(ws::ServerMessage::Ports { ports });
             }
         });

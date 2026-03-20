@@ -29,7 +29,7 @@ export function TerminalPage() {
 
   // Parent that holds all terminal containers (each session gets its own div)
   const terminalsParent = document.createElement('div');
-  terminalsParent.style.cssText = 'flex: 1; min-height: 0; position: relative; overflow: hidden; background: #1d2021;';
+  terminalsParent.style.cssText = 'flex: 1; min-height: 0; position: relative; overflow: hidden; background: var(--gruvbox-bg-hard);';
 
   const sessionMap = new Map<string, SessionEntry>();
 
@@ -202,6 +202,7 @@ export function TerminalPage() {
     const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal`);
     ws.binaryType = 'arraybuffer';
 
+    // xterm.js theme requires literal hex colors (CSS variables are not supported)
     const term = new Terminal({
       theme: {
         background: '#1d2021',
@@ -239,7 +240,7 @@ export function TerminalPage() {
 
     // Create a dedicated container for this terminal session
     const container = document.createElement('div');
-    container.style.cssText = 'position: absolute; inset: 0; display: none; padding: 4px 0 0 8px; background: #1d2021;';
+    container.style.cssText = 'position: absolute; inset: 0; display: none; padding: 4px 0 0 8px; background: var(--gruvbox-bg-hard);';
 
     // Hide all other containers
     for (const [, entry] of sessionMap) {

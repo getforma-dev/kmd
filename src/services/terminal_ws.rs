@@ -3,6 +3,7 @@ use axum::{
         ws::{Message, WebSocket},
         Query, WebSocketUpgrade,
     },
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -184,7 +185,11 @@ pub async fn kill_terminal_session(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     match terminal::manager().kill_session(&id) {
-        Ok(()) => Json(serde_json::json!({ "ok": true })),
-        Err(err) => Json(serde_json::json!({ "error": err })),
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": err })),
+        )
+            .into_response(),
     }
 }

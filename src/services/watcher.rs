@@ -11,18 +11,7 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-/// Directories to always ignore from the watcher.
-const EXCLUDED_DIRS: &[&str] = &[
-    "node_modules",
-    "target",
-    ".git",
-    "dist",
-    "coverage",
-    ".kmd",
-];
-
-/// Maximum file size for indexing (must match markdown.rs).
-const MAX_FILE_SIZE: u64 = 500 * 1024;
+use super::{EXCLUDED_DIRS, MAX_FILE_SIZE};
 
 /// Start a file watcher that monitors all workspace roots recursively.
 ///

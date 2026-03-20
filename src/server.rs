@@ -379,7 +379,9 @@ async fn api_port_kill_handler(Path(port): Path<u16>) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 fn ports_json_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(".kmd/ports.json")
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".kmd/ports.json")
 }
 
 fn read_hidden_ports() -> Vec<u16> {

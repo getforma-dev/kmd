@@ -24,7 +24,6 @@ function parseRoute(hash: string): Route {
 // ---------------------------------------------------------------------------
 
 interface WSManager {
-  send: (msg: string) => void;
   close: () => void;
 }
 
@@ -68,11 +67,6 @@ function createWSConnection(onMessage: (data: string) => void): WSManager {
   connect();
 
   return {
-    send(msg: string) {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(msg);
-      }
-    },
     close() {
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -154,10 +148,7 @@ function App() {
     localStorage.setItem('kmd:focusMode', focusMode() ? 'true' : 'false');
   });
 
-  // Apply initial theme
-  applyTheme(theme());
-
-  // Persist and apply theme changes
+  // Persist and apply theme changes (the effect runs immediately, handling initial apply)
   createEffect(() => {
     const t = theme();
     applyTheme(t);

@@ -12,19 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// Maximum file size (in bytes) that will be indexed and rendered.
-/// Files larger than this are listed in the tree but return `truncated: true`.
-const MAX_FILE_SIZE: u64 = 500 * 1024; // 500 KB
-
-/// Directories to always exclude, even if not in .gitignore.
-const EXCLUDED_DIRS: &[&str] = &[
-    "node_modules",
-    "target",
-    ".git",
-    "dist",
-    "coverage",
-    ".kmd",
-];
+use super::{EXCLUDED_DIRS, MAX_FILE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Data types

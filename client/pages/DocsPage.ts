@@ -128,6 +128,10 @@ export function DocsPage(props?: {
     if (searchTimer) clearTimeout(searchTimer);
   });
 
+  // Track scroll listener to prevent accumulation across re-renders
+  let currentScrollContainer: HTMLElement | null = null;
+  let currentScrollHandler: (() => void) | null = null;
+
   // Helper: check if any root has files
   const hasFiles = (): boolean => roots().some((r) => r.children.length > 0);
 
@@ -366,6 +370,13 @@ export function DocsPage(props?: {
       setTocEntries(entries);
 
       // Track active heading via scroll position (simpler + more reliable than IntersectionObserver)
+      // Remove previous scroll listener before adding a new one to prevent accumulation
+      if (currentScrollContainer && currentScrollHandler) {
+        currentScrollContainer.removeEventListener('scroll', currentScrollHandler);
+        currentScrollContainer = null;
+        currentScrollHandler = null;
+      }
+
       if (entries.length >= 3) {
         const scrollContainer = markdownBody.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
         if (scrollContainer) {
@@ -389,6 +400,8 @@ export function DocsPage(props?: {
             setActiveTocId(activeId);
           };
 
+          currentScrollContainer = scrollContainer;
+          currentScrollHandler = updateActiveHeading;
           scrollContainer.addEventListener('scroll', updateActiveHeading, { passive: true });
           // Run once to set initial state
           updateActiveHeading();

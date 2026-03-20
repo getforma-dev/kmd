@@ -8,15 +8,7 @@ use ignore::WalkBuilder;
 use serde::Serialize;
 use std::path::Path;
 
-/// Directories to always exclude, even if not in .gitignore.
-const EXCLUDED_DIRS: &[&str] = &[
-    "node_modules",
-    "target",
-    ".git",
-    "dist",
-    "coverage",
-    ".kmd",
-];
+use super::EXCLUDED_DIRS;
 
 // ---------------------------------------------------------------------------
 // Data types

@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import path from 'path';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -16,7 +17,7 @@ export default defineConfig({
     timeout: 30_000,
     reuseExistingServer: false,
     // Run from the monorepo root so it discovers all 340+ files
-    cwd: '/Users/victorvillacis/dev/forma/getforma-dev',
+    cwd: path.resolve(__dirname, '..'),
   },
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },

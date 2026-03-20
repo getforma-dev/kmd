@@ -290,16 +290,7 @@ code, pre, kbd {
   opacity: 0.6;
 }
 
-.kbd {
-  display: inline-block;
-  padding: 1px 5px;
-  font-family: var(--font-code);
-  font-size: 10px;
-  color: var(--gruvbox-gray);
-  background: var(--gruvbox-bg-hard);
-  border: 1px solid var(--gruvbox-border);
-  border-radius: 3px;
-}
+/* .kbd styles are defined in the "Keyboard shortcut hints" section below */
 
 /* --- Main Content --- */
 .main {
@@ -524,7 +515,7 @@ code, pre, kbd {
 /* --- Terminal / Output Panel --- */
 /* Script output terminal (not xterm.js — scoped to avoid conflict) */
 .terminal:not(.xterm) {
-  background: #1d2021;
+  background: var(--gruvbox-bg-hard);
   border: none;
   border-radius: 0;
   padding: 4px 8px;

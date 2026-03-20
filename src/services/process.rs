@@ -11,96 +11,26 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use uuid::Uuid;
 
-/// Spawn `npm run <script_name>` in the given package directory.
-///
-/// The `root` parameter is the workspace root key (e.g. "." or "packages/foo")
-/// and `package_path` is the relative path within that root to the package directory.
-///
-/// Returns the process UUID on success. The process stdout/stderr are streamed
-/// to all WebSocket clients via `ServerMessage::Stdout` / `ServerMessage::Stderr`,
-/// and a `ServerMessage::Exit` is broadcast when the process terminates.
-pub fn run_script(
+/// Shared helper: register a spawned child process, set up stdout/stderr readers,
+/// and spawn an exit-waiter task. Returns the process UUID on success.
+fn spawn_managed_process(
     state: &AppState,
-    root: &str,
-    package_path: &str,
-    script_name: &str,
+    mut child: tokio::process::Child,
+    meta: ProcessInfo,
 ) -> Result<String, String> {
-    let workspace_root = state
-        .roots()
-        .iter()
-        .find(|r| r.relative_path == root)
-        .ok_or_else(|| format!("Unknown workspace root: {root}"))?;
-
-    let root_abs = &workspace_root.absolute_path;
-
-    let cwd = if package_path == "." {
-        root_abs.clone()
-    } else {
-        root_abs.join(package_path)
-    };
-
-    if !cwd.is_dir() {
-        return Err(format!("Directory not found: {}", cwd.display()));
-    }
-
-    // Prevent path traversal: ensure CWD stays within the workspace root
-    let canonical_cwd = cwd
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve path: {e}"))?;
-    let canonical_root = root_abs
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve root: {e}"))?;
-    if !canonical_cwd.starts_with(&canonical_root) {
-        return Err("Path traversal detected: directory is outside workspace root".to_string());
-    }
-
-    let process_id = Uuid::new_v4().to_string();
-
-    // Spawn in a new process group so we can kill the entire tree.
-    // On Unix, process_group(0) makes the child the leader of a new group.
-    let mut cmd = Command::new("npm");
-    cmd.args(["run", script_name])
-        .current_dir(&cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    // On Unix, put the child in its own process group so we can kill the entire
-    // tree (npm + node + vite, etc.) with a single killpg() call.
-    #[cfg(unix)]
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setpgid(0, 0);
-            Ok(())
-        });
-    }
-
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn process: {e}"))?;
-
-    // Capture the OS PID before taking stdout/stderr
+    let process_id = meta.id.clone();
     let os_pid = child.id();
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let meta = ProcessInfo {
-        id: process_id.clone(),
-        package_path: package_path.to_string(),
-        script_name: script_name.to_string(),
-        started_at_secs: now,
-        pid: os_pid,
-    };
-
     // Store the running process
+    let meta_with_pid = ProcessInfo { pid: os_pid, ..meta };
     {
         let mut procs = state.processes();
         procs.insert(
             process_id.clone(),
-            RunningProcess { child, meta },
+            RunningProcess { child, meta: meta_with_pid },
         );
     }
 
@@ -183,6 +113,87 @@ pub fn run_script(
     Ok(process_id)
 }
 
+/// Spawn `npm run <script_name>` in the given package directory.
+///
+/// The `root` parameter is the workspace root key (e.g. "." or "packages/foo")
+/// and `package_path` is the relative path within that root to the package directory.
+///
+/// Returns the process UUID on success. The process stdout/stderr are streamed
+/// to all WebSocket clients via `ServerMessage::Stdout` / `ServerMessage::Stderr`,
+/// and a `ServerMessage::Exit` is broadcast when the process terminates.
+pub fn run_script(
+    state: &AppState,
+    root: &str,
+    package_path: &str,
+    script_name: &str,
+) -> Result<String, String> {
+    let workspace_root = state
+        .roots()
+        .iter()
+        .find(|r| r.relative_path == root)
+        .ok_or_else(|| format!("Unknown workspace root: {root}"))?;
+
+    let root_abs = &workspace_root.absolute_path;
+
+    let cwd = if package_path == "." {
+        root_abs.clone()
+    } else {
+        root_abs.join(package_path)
+    };
+
+    if !cwd.is_dir() {
+        return Err(format!("Directory not found: {}", cwd.display()));
+    }
+
+    // Prevent path traversal: ensure CWD stays within the workspace root
+    let canonical_cwd = cwd
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve path: {e}"))?;
+    let canonical_root = root_abs
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve root: {e}"))?;
+    if !canonical_cwd.starts_with(&canonical_root) {
+        return Err("Path traversal detected: directory is outside workspace root".to_string());
+    }
+
+    let process_id = Uuid::new_v4().to_string();
+
+    // Spawn in a new process group so we can kill the entire tree.
+    // On Unix, process_group(0) makes the child the leader of a new group.
+    let mut cmd = Command::new("npm");
+    cmd.args(["run", script_name])
+        .current_dir(&cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    // On Unix, put the child in its own process group so we can kill the entire
+    // tree (npm + node + vite, etc.) with a single killpg() call.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+
+    let child = cmd.spawn().map_err(|e| format!("Failed to spawn process: {e}"))?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let meta = ProcessInfo {
+        id: process_id,
+        package_path: package_path.to_string(),
+        script_name: script_name.to_string(),
+        started_at_secs: now,
+        pid: None,
+    };
+
+    spawn_managed_process(state, child, meta)
+}
+
 /// Kill a running process and its entire process group.
 pub fn kill_process(state: &AppState, process_id: &str) -> Result<(), String> {
     let mut procs = state.processes();
@@ -244,6 +255,8 @@ pub fn run_shell_command(
         .find(|r| r.relative_path == root)
         .ok_or_else(|| format!("Unknown workspace root: {root}"))?;
 
+    // Safety: cwd is always the workspace root's absolute_path itself (not user-supplied),
+    // so path traversal is not possible — the directory is already constrained to a known root.
     let cwd = &workspace_root.absolute_path;
 
     if !cwd.is_dir() {
@@ -266,10 +279,7 @@ pub fn run_shell_command(
         });
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn shell: {e}"))?;
-    let os_pid = child.id();
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+    let child = cmd.spawn().map_err(|e| format!("Failed to spawn shell: {e}"))?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -277,88 +287,12 @@ pub fn run_shell_command(
         .as_secs();
 
     let meta = ProcessInfo {
-        id: process_id.clone(),
+        id: process_id,
         package_path: ".".to_string(),
         script_name: command.to_string(),
         started_at_secs: now,
-        pid: os_pid,
+        pid: None,
     };
 
-    {
-        let mut procs = state.processes();
-        procs.insert(process_id.clone(), RunningProcess { child, meta });
-    }
-
-    let tx = state.broadcast_tx();
-
-    if let Some(stdout) = stdout {
-        let pid = process_id.clone();
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = tx.send(ServerMessage::Stdout {
-                    process_id: pid.clone(),
-                    line,
-                });
-            }
-        });
-    }
-
-    if let Some(stderr) = stderr {
-        let pid = process_id.clone();
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let reader = BufReader::new(stderr);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = tx.send(ServerMessage::Stderr {
-                    process_id: pid.clone(),
-                    line,
-                });
-            }
-        });
-    }
-
-    {
-        let pid = process_id.clone();
-        let state = state.clone();
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            loop {
-                let status = {
-                    let mut procs = state.processes();
-                    if let Some(running) = procs.get_mut(&pid) {
-                        match running.child.try_wait() {
-                            Ok(Some(status)) => Some(status.code()),
-                            Ok(None) => None,
-                            Err(_) => Some(None),
-                        }
-                    } else {
-                        break;
-                    }
-                };
-                match status {
-                    Some(code) => {
-                        {
-                            let mut procs = state.processes();
-                            procs.remove(&pid);
-                        }
-                        let _ = tx.send(ServerMessage::Exit {
-                            process_id: pid,
-                            code,
-                        });
-                        break;
-                    }
-                    None => {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
-                }
-            }
-        });
-    }
-
-    Ok(process_id)
+    spawn_managed_process(state, child, meta)
 }

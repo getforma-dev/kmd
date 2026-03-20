@@ -621,16 +621,6 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   }
 
   // -------------------------------------------------------------------------
-  // Root group header (only shown in multi-root mode)
-  // -------------------------------------------------------------------------
-
-  function RootHeader(name: string) {
-    return h('div', {
-      style: 'font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.1em; padding: 0 0 var(--space-sm) 0;',
-    }, name);
-  }
-
-  // -------------------------------------------------------------------------
   // Process tabs -- bottom section header (imperatively updated)
   // -------------------------------------------------------------------------
 
@@ -1010,7 +1000,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       ProcessTabs(),
       HistoryPanel(),
       h('div', {
-        style: 'flex: 1; overflow: hidden; padding: 4px 0 0 0; background: #1d2021;',
+        style: 'flex: 1; overflow: hidden; padding: 4px 0 0 0; background: var(--gruvbox-bg-hard);',
       },
         createShow(
           () => selectedProcessId() !== null || viewingHistoryId() !== null,
