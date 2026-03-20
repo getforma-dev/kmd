@@ -522,7 +522,8 @@ code, pre, kbd {
 }
 
 /* --- Terminal / Output Panel --- */
-.terminal {
+/* Script output terminal (not xterm.js — scoped to avoid conflict) */
+.terminal:not(.xterm) {
   background: var(--terminal-bg);
   border: 1px solid var(--gruvbox-border);
   border-radius: var(--radius-md);
