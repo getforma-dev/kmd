@@ -228,7 +228,9 @@ pub fn list_workspace(cwd: &Path) {
             continue;
         }
 
-        let (doc_count, pkg_count) = quick_scan_counts(&abs);
+        eprint!("  {dim}Scanning {display_name}...{reset}");
+        let (doc_count, pkg_count, capped) = quick_scan_counts(&abs);
+        eprint!("\x1b[2K\r"); // ANSI: clear entire line, return to start
         total_docs += doc_count;
         total_pkgs += pkg_count;
 
@@ -246,8 +248,9 @@ pub fn list_workspace(cwd: &Path) {
         // Counts
         let doc_str = if doc_count == 1 { "doc" } else { "docs" };
         let pkg_str = if pkg_count == 1 { "package" } else { "packages" };
+        let cap_marker = if capped { "+" } else { "" };
         println!(
-            "    {dim}{doc_count} {doc_str} · {pkg_count} {pkg_str}{reset}"
+            "    {dim}{doc_count}{cap_marker} {doc_str} · {pkg_count}{cap_marker} {pkg_str}{reset}"
         );
         println!();
     }
@@ -265,7 +268,8 @@ pub fn list_workspace(cwd: &Path) {
 
 /// Quick count of .md files and package.json files in a directory (no content reading).
 /// Caps at 10,000 entries to avoid hanging on huge directories like ~.
-fn quick_scan_counts(dir: &Path) -> (usize, usize) {
+/// Returns (docs, packages, was_capped).
+fn quick_scan_counts(dir: &Path) -> (usize, usize, bool) {
     use ignore::WalkBuilder;
     use super::EXCLUDED_DIRS;
 
@@ -287,11 +291,13 @@ fn quick_scan_counts(dir: &Path) -> (usize, usize) {
     let mut docs = 0;
     let mut pkgs = 0;
     let mut scanned = 0;
+    let mut capped = false;
     const MAX_ENTRIES: usize = 10_000;
 
     for result in walker {
         scanned += 1;
         if scanned > MAX_ENTRIES {
+            capped = true;
             break;
         }
         if let Ok(entry) = result {
@@ -308,7 +314,7 @@ fn quick_scan_counts(dir: &Path) -> (usize, usize) {
         }
     }
 
-    (docs, pkgs)
+    (docs, pkgs, capped)
 }
 
 // ---------------------------------------------------------------------------
