@@ -11,8 +11,9 @@ interface SessionEntry {
   term: Terminal;
   ws: WebSocket;
   fit: FitAddon;
-  container: HTMLDivElement; // each session has its own container
+  container: HTMLDivElement;
   resizeHandler: () => void;
+  containerObserver: ResizeObserver;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,12 +104,17 @@ export function TerminalPage() {
 
     setActiveSession(id);
 
-    // Fit the newly visible terminal after layout settles
+    // Fit the newly visible terminal after layout settles + sync PTY
     const entry = sessionMap.get(id);
     if (entry) {
       requestAnimationFrame(() => {
-        entry.fit.fit();
-        entry.term.focus();
+        requestAnimationFrame(() => {
+          try { entry.fit.fit(); } catch {}
+          if (entry.ws.readyState === WebSocket.OPEN && entry.term.cols > 0 && entry.term.rows > 0) {
+            entry.ws.send(JSON.stringify({ type: 'resize', cols: entry.term.cols, rows: entry.term.rows }));
+          }
+          entry.term.focus();
+        });
       });
     }
   }
@@ -117,7 +123,7 @@ export function TerminalPage() {
     const entry = sessionMap.get(id);
     if (!entry) return;
 
-    // Close WebSocket (this kills the PTY session on the server)
+    entry.containerObserver.disconnect();
     entry.ws.close();
     entry.term.dispose();
     window.removeEventListener('resize', entry.resizeHandler);
@@ -195,9 +201,29 @@ export function TerminalPage() {
 
     terminalsParent.appendChild(container);
 
-    const resizeHandler = () => {
-      if (activeSession() === localId) {
+    // Single function to fit terminal and sync PTY dimensions
+    function fitAndSync() {
+      try {
         fitAddon.fit();
+      } catch { return; }
+      if (ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    }
+
+    // ResizeObserver on this session's container — catches all resize scenarios
+    const containerResizeObserver = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect && rect.width > 0 && rect.height > 0 && container.style.display !== 'none') {
+        fitAndSync();
+      }
+    });
+    containerResizeObserver.observe(container);
+
+    // Also listen for window resize as fallback
+    const resizeHandler = () => {
+      if (activeSession() === localId && container.style.display !== 'none') {
+        fitAndSync();
       }
     };
     window.addEventListener('resize', resizeHandler);
@@ -209,15 +235,12 @@ export function TerminalPage() {
       // Open xterm into this session's dedicated container
       term.open(container);
 
-      // Fit after layout
+      // Fit after layout settles — double RAF for safety
       requestAnimationFrame(() => {
-        fitAddon.fit();
-        term.focus();
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
-          );
-        }
+        requestAnimationFrame(() => {
+          fitAndSync();
+          term.focus();
+        });
       });
     };
 
@@ -263,6 +286,7 @@ export function TerminalPage() {
       fit: fitAddon,
       container,
       resizeHandler,
+      containerObserver: containerResizeObserver,
     });
 
     return localId;
@@ -275,25 +299,15 @@ export function TerminalPage() {
     updateTabBar();
   });
 
-  // Fit active terminal when parent resizes + create first session when visible
-  const resizeObserver = new ResizeObserver((entries) => {
+  // Create first session when the terminal tab becomes visible
+  const parentResizeObserver = new ResizeObserver((entries) => {
     const rect = entries[0]?.contentRect;
-    if (rect && rect.width > 0 && rect.height > 0) {
-      // Container is visible and has size
-      if (!firstSessionCreated) {
-        firstSessionCreated = true;
-        createSession();
-      }
-      const active = activeSession();
-      if (active) {
-        const entry = sessionMap.get(active);
-        if (entry) {
-          entry.fit.fit();
-        }
-      }
+    if (rect && rect.width > 0 && rect.height > 0 && !firstSessionCreated) {
+      firstSessionCreated = true;
+      createSession();
     }
   });
-  resizeObserver.observe(terminalsParent);
+  parentResizeObserver.observe(terminalsParent);
 
   // Create first session only when the terminal tab becomes visible.
   // We detect this via ResizeObserver — when the container goes from 0 to non-zero size.
@@ -301,8 +315,9 @@ export function TerminalPage() {
 
   // Cleanup
   onCleanup(() => {
-    resizeObserver.disconnect();
+    parentResizeObserver.disconnect();
     for (const [, entry] of sessionMap) {
+      entry.containerObserver.disconnect();
       window.removeEventListener('resize', entry.resizeHandler);
       entry.ws.close();
       entry.term.dispose();
