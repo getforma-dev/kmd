@@ -330,22 +330,31 @@ pub fn list_workspace(cwd: &Path) {
                     "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str}{reset}"
                 );
             }
-            // Show sub-project names in columns
-            let names: Vec<&str> = child_projects.iter().map(|(n, _)| n.as_str()).collect();
-            print!("    {dim}");
-            for (i, name) in names.iter().enumerate() {
-                print!("{name}/");
-                if i < names.len() - 1 {
-                    if (i + 1) % 3 == 0 {
-                        print!("{reset}\n    {dim}");
-                    } else {
-                        // Pad to column width
-                        let pad = 24usize.saturating_sub(name.len() + 1);
-                        print!("{:width$}", "", width = pad);
-                    }
+            // Show ALL folders with docs, color-coded:
+            // Gold = has scripts (project), Dim = docs only
+            let folders_info = get_child_folder_info(&abs);
+            for (i, (fname, has_scripts)) in folders_info.iter().enumerate() {
+                if i % 3 == 0 {
+                    if i > 0 { println!(); }
+                    print!("    ");
                 }
+                if *has_scripts {
+                    // Gold — runnable project
+                    print!("{yellow}{fname}/{reset}");
+                } else {
+                    // Dim — docs only
+                    print!("{dim}{fname}/{reset}");
+                }
+                let pad = 24usize.saturating_sub(fname.len() + 1);
+                print!("{:width$}", "", width = pad);
             }
-            println!("{reset}");
+            if !folders_info.is_empty() {
+                println!();
+            }
+            // Legend
+            if folders_info.iter().any(|(_, s)| *s) && folders_info.iter().any(|(_, s)| !*s) {
+                println!("    {dim}gold = scripts + docs · gray = docs only{reset}");
+            }
         } else {
             println!(
                 "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str}{reset}"
@@ -416,6 +425,35 @@ fn find_child_projects(parent: &Path) -> Vec<(String, Vec<String>)> {
 
     projects.sort_by(|a, b| a.0.cmp(&b.0));
     projects
+}
+
+/// Get child folder info: name + whether it has scripts (for color coding).
+/// Only includes folders that contain .md files (matches sidebar).
+fn get_child_folder_info(parent: &Path) -> Vec<(String, bool)> {
+    let entries = match fs::read_dir(parent) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut folders = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = match entry.file_name().to_str() {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
+            continue;
+        }
+        let (docs, scripts, _) = quick_scan_counts(&entry.path());
+        if docs > 0 {
+            folders.push((name, scripts > 0));
+        }
+    }
+    folders.sort_by(|a, b| a.0.cmp(&b.0));
+    folders
 }
 
 /// Count immediate child directories that contain at least one .md file.
