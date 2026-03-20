@@ -611,14 +611,14 @@ async fn run_server(
                 "  {yellow}!{reset} Found {bold}{count}{reset} markdown files from {}",
                 project_root.display()
             );
-            eprintln!("  This doesn't look like a project root.");
-            eprintln!("  Run from a project directory, or continue anyway?");
+            eprintln!("  This doesn't look like a project directory.");
             eprintln!();
-            eprintln!("  {dim}-> Press Enter to continue, Ctrl+C to cancel{reset}");
-            eprintln!("  {dim}   Use --force to skip this warning next time{reset}");
-
-            let stdin = io::stdin();
-            let _ = stdin.lock().lines().next();
+            eprintln!("  {dim}What you probably want:{reset}");
+            eprintln!("    cd ~/my-project && kmd     {dim}Quick session in a project{reset}");
+            eprintln!("    kmd init                    {dim}Create a workspace here{reset}");
+            eprintln!("    kmd --force                 {dim}Start the server anyway{reset}");
+            eprintln!();
+            std::process::exit(0);
         } else if count > 0 {
             eprintln!(
                 "  {dim}No project root detected, scanning from {}{reset}",
