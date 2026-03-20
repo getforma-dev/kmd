@@ -612,7 +612,6 @@ async fn run_server(
             "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} {dim}—{reset} {dir_name}"
         );
         eprintln!("  {dim}──────────────────────────────{reset}");
-        eprintln!("  {dim}Mode{reset} {dim}·····{reset} ephemeral (port auto)");
         eprintln!();
 
         if project_count > 0 && count > 0 {
