@@ -8,8 +8,8 @@
     "start": "./target/release/kmd",
     "test": "npx playwright test",
     "test:headed": "npx playwright test --headed",
-    "link": "ln -sf $(pwd)/target/release/kmd /usr/local/bin/kmd && echo 'Linked: kmd → /usr/local/bin/kmd'",
-    "unlink": "rm -f /usr/local/bin/kmd && echo 'Unlinked: /usr/local/bin/kmd removed'"
+    "link": "mkdir -p ~/.local/bin && ln -sf $(pwd)/target/release/kmd ~/.local/bin/kmd && echo 'Linked: kmd → ~/.local/bin/kmd' && echo 'Make sure ~/.local/bin is in your PATH'",
+    "unlink": "rm -f ~/.local/bin/kmd && echo 'Unlinked: ~/.local/bin/kmd removed'"
   },
   "dependencies": {
     "@getforma/core": "^1.0.7",
