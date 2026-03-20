@@ -137,8 +137,7 @@ fn quick_count_md_files(dir: &Path) -> usize {
     use ignore::WalkBuilder;
 
     let walker = WalkBuilder::new(dir)
-        .hidden(true) // skip .cache, .npm, .local, etc.
-        .max_depth(Some(5))
+        .hidden(false)
         .filter_entry(|entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
@@ -152,7 +151,6 @@ fn quick_count_md_files(dir: &Path) -> usize {
             true
         })
         .build();
-    const MAX_ENTRIES: u64 = 50_000;
 
     let dim = "\x1b[2m";
     let reset = "\x1b[0m";
@@ -164,9 +162,6 @@ fn quick_count_md_files(dir: &Path) -> usize {
 
     for result in walker {
         scanned += 1;
-        if scanned > MAX_ENTRIES {
-            break;
-        }
         if scanned % 500 == 0 {
             spin_idx = (spin_idx + 1) % spinner.len();
             eprint!(
