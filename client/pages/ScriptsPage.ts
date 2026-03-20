@@ -1015,7 +1015,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           },
             h('span', {
               style: 'color: var(--gruvbox-gray); font-style: italic;',
-            }, 'Run a script or type a command below'),
+            }, 'Run a script to see output here'),
           ),
         ),
       ),
