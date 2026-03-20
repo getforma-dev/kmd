@@ -29,6 +29,7 @@ pub fn build_router(state: AppState) -> Router {
         // Workspace management (hot-reload add/remove roots)
         .route("/api/workspace/add", post(api_workspace_add_handler))
         .route("/api/workspace/remove", post(api_workspace_remove_handler))
+        .route("/api/workspace/siblings", get(api_workspace_siblings_handler))
         // Docs routes — search must come before the wildcard
         .route("/api/docs", get(api_docs_tree))
         .route("/api/docs/search", get(api_docs_search))
@@ -234,6 +235,62 @@ async fn api_workspace_remove_handler(
         "ok": true,
         "roots": roots,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Workspace siblings API handler
+// ---------------------------------------------------------------------------
+
+/// `GET /api/workspace/siblings` — Return sibling directories of the project root.
+///
+/// Lists subdirectories in the parent of the project root, filtering out hidden
+/// directories and the project root itself. Returns relative paths like `../sibling`.
+async fn api_workspace_siblings_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let project_root = state.project_root().to_path_buf();
+
+    let siblings: Vec<serde_json::Value> = match project_root.parent() {
+        Some(parent_dir) => {
+            let project_name = project_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+
+            // Read existing roots so we can mark which siblings are already added
+            let existing_roots: Vec<String> = state
+                .roots()
+                .iter()
+                .map(|r| r.relative_path.clone())
+                .collect();
+
+            match std::fs::read_dir(parent_dir) {
+                Ok(entries) => entries
+                    .filter_map(|entry| {
+                        let entry = entry.ok()?;
+                        let ft = entry.file_type().ok()?;
+                        if !ft.is_dir() {
+                            return None;
+                        }
+                        let name = entry.file_name().to_str()?.to_string();
+                        // Skip hidden directories and the project root itself
+                        if name.starts_with('.') || name == project_name {
+                            return None;
+                        }
+                        let rel_path = format!("../{name}");
+                        let already_added = existing_roots.contains(&rel_path);
+                        Some(serde_json::json!({
+                            "name": name,
+                            "path": rel_path,
+                            "added": already_added,
+                        }))
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        }
+        None => Vec::new(),
+    };
+
+    Json(serde_json::json!({ "siblings": siblings }))
 }
 
 // ---------------------------------------------------------------------------

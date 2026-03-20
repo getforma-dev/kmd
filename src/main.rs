@@ -9,7 +9,7 @@ use state::AppState;
 use std::env;
 use std::io::{self, BufRead};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
@@ -255,9 +255,74 @@ async fn main() {
 // ---------------------------------------------------------------------------
 
 /// Read the workspace config to determine which port the server is (likely) on.
+///
+/// Priority:
+/// 1. `.kmd/server.lock` — if it exists and the PID is alive, use that port
+/// 2. `workspace.json` port field
+/// 3. Default 4444
 fn get_workspace_port(project_root: &Path) -> u16 {
+    // Try lockfile first
+    if let Some(port) = read_lockfile_port(project_root) {
+        return port;
+    }
+    // Fall back to workspace.json
     let config = services::workspace::load_or_create_workspace(project_root);
     config.port
+}
+
+// ---------------------------------------------------------------------------
+// Server lockfile helpers (.kmd/server.lock)
+// ---------------------------------------------------------------------------
+
+/// Lockfile content: `{"pid": <pid>, "port": <port>}`
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ServerLock {
+    pid: u32,
+    port: u16,
+}
+
+fn lockfile_path(project_root: &Path) -> PathBuf {
+    project_root.join(".kmd").join("server.lock")
+}
+
+/// Write the server lockfile after binding.
+fn write_lockfile(project_root: &Path, port: u16) {
+    let lock = ServerLock {
+        pid: std::process::id(),
+        port,
+    };
+    let kmd_dir = project_root.join(".kmd");
+    let _ = std::fs::create_dir_all(&kmd_dir);
+    if let Ok(json) = serde_json::to_string(&lock) {
+        let _ = std::fs::write(lockfile_path(project_root), format!("{json}\n"));
+    }
+}
+
+/// Delete the server lockfile on shutdown.
+fn delete_lockfile(project_root: &Path) {
+    let _ = std::fs::remove_file(lockfile_path(project_root));
+}
+
+/// Read the lockfile and return the port if the recorded PID is still alive.
+fn read_lockfile_port(project_root: &Path) -> Option<u16> {
+    let path = lockfile_path(project_root);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let lock: ServerLock = serde_json::from_str(&content).ok()?;
+
+    // Check if the PID is alive using kill -0
+    if is_pid_alive(lock.pid) {
+        Some(lock.port)
+    } else {
+        // Stale lockfile — clean it up
+        let _ = std::fs::remove_file(&path);
+        None
+    }
+}
+
+/// Check if a process with the given PID is alive (Unix: kill(pid, 0)).
+fn is_pid_alive(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) checks process existence without sending a signal.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
 /// Try to POST to a running kmd server's /api/workspace/add endpoint.
@@ -529,6 +594,9 @@ async fn run_server(
 
     let listener = listener.expect("Failed to bind to any port");
 
+    // Write the server lockfile so CLI commands can find the actual port
+    write_lockfile(&project_root, actual_port);
+
     // Wait (briefly) for the file count from indexing to show in the banner.
     let file_count = tokio::time::timeout(
         tokio::time::Duration::from_secs(2),
@@ -598,6 +666,9 @@ async fn run_server(
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("Server error");
+
+    // Clean up the server lockfile
+    delete_lockfile(&project_root);
 
     println!("\n  {bold}K{reset}{bold}\x1b[33m.\x1b[0m{dim}md{reset} shut down cleanly.\n");
 }

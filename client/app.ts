@@ -2,6 +2,7 @@ import { createSignal, createEffect, createSwitch, createShow, mount, h, onClean
 import { Sidebar, type Route } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
 import { HelpPanel } from './components/HelpPanel';
+import { WorkspacePanel } from './components/WorkspacePanel';
 import { DocsPage } from './pages/DocsPage';
 import { ScriptsPage } from './pages/ScriptsPage';
 import { PortsPage } from './pages/PortsPage';
@@ -137,6 +138,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = createSignal(localStorage.getItem('kmd:sidebar') !== 'closed');
   const [paletteOpen, setPaletteOpen] = createSignal(false);
   const [helpOpen, setHelpOpen] = createSignal(false);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = createSignal(false);
   const [focusMode, setFocusMode] = createSignal(localStorage.getItem('kmd:focusMode') === 'true');
   const [theme, setTheme] = createSignal(getInitialTheme());
 
@@ -245,8 +247,12 @@ function App() {
       return;
     }
 
-    // Escape — close help/palette if open, otherwise clear search
+    // Escape — close help/palette/workspace panel if open, otherwise clear search
     if (e.key === 'Escape') {
+      if (workspacePanelOpen()) {
+        setWorkspacePanelOpen(false);
+        return;
+      }
       if (helpOpen()) {
         setHelpOpen(false);
         return;
@@ -323,6 +329,9 @@ function App() {
       case 'help':
         setHelpOpen(true);
         break;
+      case 'workspace-settings':
+        setWorkspacePanelOpen(true);
+        break;
     }
     setPaletteOpen(false);
   }
@@ -384,7 +393,7 @@ function App() {
   }
 
   return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
-    Sidebar({ route, workspaceName, theme, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true) }),
+    Sidebar({ route, workspaceName, theme, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         HamburgerButton(),
@@ -420,6 +429,12 @@ function App() {
     createShow(
       () => helpOpen(),
       () => HelpPanel({ onClose: () => setHelpOpen(false) }),
+      () => h('div', { style: 'display: none;' }),
+    ),
+    // Workspace settings panel overlay
+    createShow(
+      () => workspacePanelOpen(),
+      () => WorkspacePanel({ onClose: () => setWorkspacePanelOpen(false), workspaceName }),
       () => h('div', { style: 'display: none;' }),
     ),
   );
