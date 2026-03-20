@@ -274,6 +274,7 @@ pub fn list_workspace(cwd: &Path) {
     // Per-root scan
     let mut total_docs = 0usize;
     let mut total_scripts = 0usize;
+    let mut any_sub_project_name: Option<String> = None;
 
     for root in &roots {
         let abs = resolve_root(cwd, root);
@@ -315,6 +316,9 @@ pub fn list_workspace(cwd: &Path) {
         let cap_marker = if capped { "+" } else { "" };
 
         if sub_count > 1 {
+            if any_sub_project_name.is_none() {
+                any_sub_project_name = child_projects.first().map(|(n, _)| n.clone());
+            }
             println!(
                 "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str} · {sub_count} sub-projects{reset}"
             );
@@ -348,6 +352,14 @@ pub fn list_workspace(cwd: &Path) {
         let script_str = if total_scripts == 1 { "script" } else { "scripts" };
         println!(
             "  {dim}Total: {total_docs} {doc_str} · {total_scripts} {script_str}{reset}"
+        );
+        println!();
+    }
+
+    // Hint for sub-projects
+    if let Some(example) = any_sub_project_name {
+        println!(
+            "  {dim}Open a single project:{reset} cd {example} && kmd"
         );
         println!();
     }
