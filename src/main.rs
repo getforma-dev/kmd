@@ -635,9 +635,12 @@ async fn run_server(
         eprintln!("  {dim}Quick session:{reset}              cd <project> && kmd");
         eprintln!("  {dim}Multi-project workspace:{reset}    kmd init {dim}then{reset} kmd add <project>");
         if project_count > 0 {
-            eprintln!("  {dim}Start anyway:{reset}               kmd --force {dim}({count} docs, {project_count} projects){reset}");
+            eprintln!("  {dim}Start server anyway:{reset}         kmd --force {dim}({count} docs, {project_count} projects){reset}");
         } else {
-            eprintln!("  {dim}Start anyway:{reset}               kmd --force {dim}({count} files){reset}");
+            eprintln!("  {dim}Start server anyway:{reset}         kmd --force {dim}({count} files){reset}");
+        }
+        if project_count > 0 {
+            eprintln!("  {dim}See project details:{reset}         kmd list");
         }
         eprintln!();
         std::process::exit(0);
