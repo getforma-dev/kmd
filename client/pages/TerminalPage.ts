@@ -191,7 +191,7 @@ export function TerminalPage() {
 
     // Create a dedicated container for this terminal session
     const container = document.createElement('div');
-    container.style.cssText = 'position: absolute; inset: 0; display: none;';
+    container.style.cssText = 'position: absolute; inset: 0; display: none; padding: 4px 0 0 8px;';
 
     // Hide all other containers
     for (const [, entry] of sessionMap) {
