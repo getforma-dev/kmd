@@ -26,6 +26,9 @@ pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         // Workspace info
         .route("/api/workspace", get(api_workspace_handler))
+        // Workspace management (hot-reload add/remove roots)
+        .route("/api/workspace/add", post(api_workspace_add_handler))
+        .route("/api/workspace/remove", post(api_workspace_remove_handler))
         // Docs routes — search must come before the wildcard
         .route("/api/docs", get(api_docs_tree))
         .route("/api/docs/search", get(api_docs_search))
@@ -102,13 +105,147 @@ async fn api_workspace_handler(State(state): State<AppState>) -> impl IntoRespon
 }
 
 // ---------------------------------------------------------------------------
+// Workspace management API handlers (hot-reload)
+// ---------------------------------------------------------------------------
+
+/// Request body for the workspace add endpoint.
+#[derive(Deserialize)]
+struct WorkspaceAddBody {
+    paths: Vec<String>,
+}
+
+/// `POST /api/workspace/add` — Add one or more root directories to the workspace.
+///
+/// Resolves paths relative to the server's project root, updates workspace.json,
+/// re-indexes markdown files, and broadcasts a refresh event.
+async fn api_workspace_add_handler(
+    State(state): State<AppState>,
+    Json(body): Json<WorkspaceAddBody>,
+) -> impl IntoResponse {
+    use crate::services::workspace;
+
+    let project_root = state.project_root().to_path_buf();
+
+    // Add to workspace.json
+    workspace::add_root(&project_root, &body.paths);
+
+    // Reload config and resolve roots
+    let ws_config = workspace::load_or_create_workspace(&project_root);
+    let new_roots = AppState::resolve_roots(&project_root, &ws_config);
+
+    // Update in-memory state
+    state.update_roots(new_roots);
+
+    // Re-index markdown files in the background
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                let roots = state.roots();
+                let files = markdown::discover_files(&roots);
+                drop(roots); // release lock before DB work
+
+                let conn = state.db();
+                if let Err(err) = markdown::index_files(&conn, &files) {
+                    tracing::error!("Re-index after workspace add failed: {err}");
+                    return;
+                }
+
+                let file_count = files.len();
+                tracing::info!("Re-indexed {file_count} markdown file(s) after workspace add");
+
+                let _ = state.broadcast_tx().send(ws::ServerMessage::FileChange {
+                    path: String::new(),
+                    kind: "workspace_change".to_string(),
+                });
+            })
+            .await;
+
+            if let Err(err) = result {
+                tracing::error!("Re-index task panicked after workspace add: {err}");
+            }
+        });
+    }
+
+    // Return current roots
+    let roots: Vec<serde_json::Value> = state
+        .roots()
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "name": r.name,
+                "path": r.relative_path,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "ok": true,
+        "roots": roots,
+    }))
+}
+
+/// Request body for the workspace remove endpoint.
+#[derive(Deserialize)]
+struct WorkspaceRemoveBody {
+    path: String,
+}
+
+/// `POST /api/workspace/remove` — Remove a root directory from the workspace.
+///
+/// Updates workspace.json and the in-memory roots. Broadcasts a refresh event.
+async fn api_workspace_remove_handler(
+    State(state): State<AppState>,
+    Json(body): Json<WorkspaceRemoveBody>,
+) -> impl IntoResponse {
+    use crate::services::workspace;
+
+    let project_root = state.project_root().to_path_buf();
+
+    // Remove from workspace.json
+    workspace::remove_root(&project_root, &body.path);
+
+    // Reload config and resolve roots
+    let ws_config = workspace::load_or_create_workspace(&project_root);
+    let new_roots = AppState::resolve_roots(&project_root, &ws_config);
+
+    // Update in-memory state
+    state.update_roots(new_roots);
+
+    // Broadcast so frontend refreshes
+    let _ = state.broadcast_tx().send(ws::ServerMessage::FileChange {
+        path: String::new(),
+        kind: "workspace_change".to_string(),
+    });
+
+    // Return current roots
+    let roots: Vec<serde_json::Value> = state
+        .roots()
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "name": r.name,
+                "path": r.relative_path,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "ok": true,
+        "roots": roots,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Docs API handlers
 // ---------------------------------------------------------------------------
 
 /// `GET /api/docs` — Return the markdown file tree, grouped by roots.
 async fn api_docs_tree(State(state): State<AppState>) -> impl IntoResponse {
-    let files = markdown::discover_files(state.roots());
-    let root_trees = markdown::build_root_trees(&files, state.roots());
+    let roots = state.roots();
+    let files = markdown::discover_files(&roots);
+    let root_trees = markdown::build_root_trees(&files, &roots);
+    drop(roots);
     Json(serde_json::json!({ "roots": root_trees }))
 }
 
@@ -153,7 +290,7 @@ async fn api_docs_render(
     let root_key = params.root.as_deref().unwrap_or(".");
 
     // Find the workspace root
-    let workspace_root = match state.roots().iter().find(|r| r.relative_path == root_key) {
+    let workspace_root = match state.roots().iter().find(|r| r.relative_path == root_key).cloned() {
         Some(r) => r,
         None => {
             return (
@@ -256,7 +393,9 @@ async fn api_docs_patch(
 
 /// `GET /api/scripts` — Discover all packages and their npm scripts, grouped by root.
 async fn api_scripts_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let root_scripts = scripts::discover_scripts(state.roots());
+    let roots = state.roots();
+    let root_scripts = scripts::discover_scripts(&roots);
+    drop(roots);
     Json(serde_json::json!({ "roots": root_scripts }))
 }
 

@@ -179,11 +179,23 @@ async fn main() {
     match cli.command {
         // Non-serve subcommands
         Some(Commands::Add { paths }) => {
-            services::workspace::add_root(&project_root, &paths);
+            let port = get_workspace_port(&project_root);
+            if try_api_add(port, &paths) {
+                eprintln!("  (server notified — hot-reloading roots)");
+            } else {
+                // Server not running, fall back to file-based edit
+                services::workspace::add_root(&project_root, &paths);
+            }
             return;
         }
         Some(Commands::Remove { path }) => {
-            services::workspace::remove_root(&project_root, &path);
+            let port = get_workspace_port(&project_root);
+            if try_api_remove(port, &path) {
+                eprintln!("  (server notified — hot-reloading roots)");
+            } else {
+                // Server not running, fall back to file-based edit
+                services::workspace::remove_root(&project_root, &path);
+            }
             return;
         }
         Some(Commands::List) => {
@@ -236,6 +248,100 @@ async fn main() {
             .await;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// CLI -> running server communication helpers
+// ---------------------------------------------------------------------------
+
+/// Read the workspace config to determine which port the server is (likely) on.
+fn get_workspace_port(project_root: &Path) -> u16 {
+    let config = services::workspace::load_or_create_workspace(project_root);
+    config.port
+}
+
+/// Try to POST to a running kmd server's /api/workspace/add endpoint.
+/// Returns true if the server responded successfully, false if unreachable.
+fn try_api_add(port: u16, paths: &[String]) -> bool {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let body = serde_json::json!({ "paths": paths }).to_string();
+    let request = format!(
+        "POST /api/workspace/add HTTP/1.1\r\n\
+         Host: localhost:{port}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        body.len()
+    );
+
+    let addr = format!("127.0.0.1:{port}");
+    let mut stream = match TcpStream::connect_timeout(
+        &addr.parse().unwrap(),
+        Duration::from_millis(500),
+    ) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .ok();
+
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+
+    response.contains("200 OK") && response.contains("\"ok\":true")
+}
+
+/// Try to POST to a running kmd server's /api/workspace/remove endpoint.
+/// Returns true if the server responded successfully, false if unreachable.
+fn try_api_remove(port: u16, path: &str) -> bool {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let body = serde_json::json!({ "path": path }).to_string();
+    let request = format!(
+        "POST /api/workspace/remove HTTP/1.1\r\n\
+         Host: localhost:{port}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        body.len()
+    );
+
+    let addr = format!("127.0.0.1:{port}");
+    let mut stream = match TcpStream::connect_timeout(
+        &addr.parse().unwrap(),
+        Duration::from_millis(500),
+    ) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .ok();
+
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+
+    response.contains("200 OK") && response.contains("\"ok\":true")
 }
 
 async fn run_server(
@@ -319,7 +425,9 @@ async fn run_server(
             tracing::info!("Starting markdown file indexing...");
 
             let result = tokio::task::spawn_blocking(move || {
-                let files = services::markdown::discover_files(state.roots());
+                let roots = state.roots();
+                let files = services::markdown::discover_files(&roots);
+                drop(roots); // release lock before DB work
                 let file_count = files.len();
 
                 let conn = state.db();
@@ -432,39 +540,42 @@ async fn run_server(
 
     // Print startup banner
     let ws_name = state.workspace_name();
-    let root_count = state.roots().len();
+    {
+        let roots = state.roots();
+        let root_count = roots.len();
 
-    println!();
-    println!(
-        "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
-        env!("CARGO_PKG_VERSION")
-    );
-    println!("  {yellow}kausing much damage{reset}");
-    println!("  {dim}-------------------------------{reset}");
-    println!(
-        "  {dim}Name{reset} {dim}······{reset} {ws_name}"
-    );
-    if let Some(count) = file_count {
+        println!();
         println!(
-            "  {dim}Docs{reset} {dim}······{reset} {count} file{} indexed",
-            if count == 1 { "" } else { "s" }
+            "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
+            env!("CARGO_PKG_VERSION")
         );
-    }
-    if root_count == 1 {
+        println!("  {yellow}kausing much damage{reset}");
+        println!("  {dim}-------------------------------{reset}");
         println!(
-            "  {dim}Root{reset} {dim}······{reset} {}",
-            state.roots()[0].absolute_path.display()
+            "  {dim}Name{reset} {dim}······{reset} {ws_name}"
         );
-    } else {
-        println!(
-            "  {dim}Roots{reset} {dim}·····{reset} {root_count} directories"
-        );
-        for root in state.roots() {
+        if let Some(count) = file_count {
             println!(
-                "  {dim}       ·{reset} {} {dim}({}){reset}",
-                root.relative_path,
-                root.absolute_path.display()
+                "  {dim}Docs{reset} {dim}······{reset} {count} file{} indexed",
+                if count == 1 { "" } else { "s" }
             );
+        }
+        if root_count == 1 {
+            println!(
+                "  {dim}Root{reset} {dim}······{reset} {}",
+                roots[0].absolute_path.display()
+            );
+        } else {
+            println!(
+                "  {dim}Roots{reset} {dim}·····{reset} {root_count} directories"
+            );
+            for root in roots.iter() {
+                println!(
+                    "  {dim}       ·{reset} {} {dim}({}){reset}",
+                    root.relative_path,
+                    root.absolute_path.display()
+                );
+            }
         }
     }
     println!();

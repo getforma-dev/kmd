@@ -131,6 +131,7 @@ pub fn run_script(
         .roots()
         .iter()
         .find(|r| r.relative_path == root)
+        .cloned()
         .ok_or_else(|| format!("Unknown workspace root: {root}"))?;
 
     let root_abs = &workspace_root.absolute_path;
@@ -253,6 +254,7 @@ pub fn run_shell_command(
         .roots()
         .iter()
         .find(|r| r.relative_path == root)
+        .cloned()
         .ok_or_else(|| format!("Unknown workspace root: {root}"))?;
 
     // Safety: cwd is always the workspace root's absolute_path itself (not user-supplied),

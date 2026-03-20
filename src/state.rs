@@ -4,7 +4,7 @@ use crate::ws::ServerMessage;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::process::Child;
 use tokio::sync::broadcast;
@@ -53,8 +53,10 @@ pub struct AppStateInner {
     pub processes: Mutex<HashMap<String, RunningProcess>>,
     /// Workspace name.
     pub workspace_name: String,
-    /// Resolved workspace roots.
-    pub roots: Vec<WorkspaceRoot>,
+    /// Resolved workspace roots (mutable so the API can add/remove roots at runtime).
+    pub roots: Mutex<Vec<WorkspaceRoot>>,
+    /// The project root directory (where .kmd/ lives).
+    pub project_root: PathBuf,
 }
 
 impl AppState {
@@ -66,30 +68,7 @@ impl AppState {
         let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(256);
 
         // Resolve workspace roots from the config
-        let roots: Vec<WorkspaceRoot> = ws_config
-            .roots
-            .iter()
-            .filter_map(|root_path| {
-                let abs = workspace::resolve_root(&project_root, root_path);
-                if !abs.exists() {
-                    tracing::warn!("Skipping missing workspace root: {root_path}");
-                    return None;
-                }
-                let name = if root_path == "." {
-                    ws_config.name.clone()
-                } else {
-                    abs.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(root_path)
-                        .to_string()
-                };
-                Some(WorkspaceRoot {
-                    name,
-                    relative_path: root_path.clone(),
-                    absolute_path: abs,
-                })
-            })
-            .collect();
+        let roots = Self::resolve_roots(&project_root, &ws_config);
 
         Self {
             inner: Arc::new(AppStateInner {
@@ -97,7 +76,8 @@ impl AppState {
                 broadcast_tx,
                 processes: Mutex::new(HashMap::new()),
                 workspace_name: ws_config.name,
-                roots,
+                roots: Mutex::new(roots),
+                project_root,
             }),
         }
     }
@@ -122,8 +102,48 @@ impl AppState {
         &self.inner.workspace_name
     }
 
-    /// Get the resolved workspace roots.
-    pub fn roots(&self) -> &[WorkspaceRoot] {
-        &self.inner.roots
+    /// Get the resolved workspace roots (locks the mutex).
+    pub fn roots(&self) -> std::sync::MutexGuard<'_, Vec<WorkspaceRoot>> {
+        self.inner.roots.lock().expect("Roots mutex poisoned")
+    }
+
+    /// Replace the workspace roots with a new set.
+    pub fn update_roots(&self, new_roots: Vec<WorkspaceRoot>) {
+        let mut roots = self.inner.roots.lock().expect("Roots mutex poisoned");
+        *roots = new_roots;
+    }
+
+    /// Get the project root directory (where .kmd/ lives).
+    pub fn project_root(&self) -> &Path {
+        &self.inner.project_root
+    }
+
+    /// Resolve a workspace config's roots into WorkspaceRoot structs.
+    /// Skips roots whose path does not exist on disk.
+    pub fn resolve_roots(project_root: &Path, ws_config: &WorkspaceConfig) -> Vec<WorkspaceRoot> {
+        ws_config
+            .roots
+            .iter()
+            .filter_map(|root_path| {
+                let abs = workspace::resolve_root(project_root, root_path);
+                if !abs.exists() {
+                    tracing::warn!("Skipping missing workspace root: {root_path}");
+                    return None;
+                }
+                let name = if root_path == "." {
+                    ws_config.name.clone()
+                } else {
+                    abs.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(root_path)
+                        .to_string()
+                };
+                Some(WorkspaceRoot {
+                    name,
+                    relative_path: root_path.clone(),
+                    absolute_path: abs,
+                })
+            })
+            .collect()
     }
 }
