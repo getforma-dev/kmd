@@ -632,26 +632,20 @@ async fn run_server(
         eprintln!();
         eprintln!("  {dim}What you probably want:{reset}");
         if let Some((first, _)) = child_projects.first() {
-            eprintln!("    cd {first} && kmd       {dim}Quick session in a project{reset}");
+            eprintln!("    cd {first} && kmd   {dim}Quick session in a project{reset}");
         } else {
             eprintln!("    cd ~/my-project && kmd  {dim}Quick session in a project{reset}");
         }
-        if project_count > 1 {
-            let all_names: Vec<&str> = child_projects.iter().map(|(n, _)| n.as_str()).collect();
-            let add_cmd = if all_names.len() > 3 {
-                format!("{} ... ({project_count} total)", all_names[..3].join(" "))
-            } else {
-                all_names.join(" ")
-            };
-            eprintln!("    kmd init && kmd add {add_cmd}");
-            eprintln!("                        {dim}Create workspace with all {project_count} projects{reset}");
+        if let Some((first, _)) = child_projects.first() {
+            eprintln!("    kmd init               {dim}Create a workspace here{reset}");
+            eprintln!("    kmd add {first}    {dim}Then add projects one by one{reset}");
         } else {
-            eprintln!("    kmd init            {dim}Create a workspace here{reset}");
+            eprintln!("    kmd init               {dim}Create a workspace here{reset}");
         }
         if project_count > 0 {
-            eprintln!("    kmd --force         {dim}Start anyway ({count} docs, {project_count} projects){reset}");
+            eprintln!("    kmd --force             {dim}Start anyway ({count} docs, {project_count} projects){reset}");
         } else {
-            eprintln!("    kmd --force         {dim}Start anyway ({count} files){reset}");
+            eprintln!("    kmd --force             {dim}Start anyway ({count} files){reset}");
         }
         eprintln!();
         std::process::exit(0);

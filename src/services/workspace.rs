@@ -242,6 +242,16 @@ pub fn list_workspace(cwd: &Path) {
                         "    {dim}{docs} {doc_str} · {scripts} {script_str}{reset}"
                     );
                 }
+                println!();
+                if let Some((first, _)) = child_projects.first() {
+                    println!(
+                        "  {dim}Quick session:{reset} cd {first} && kmd",
+                        first = first
+                    );
+                }
+                println!(
+                    "  {dim}Create workspace:{reset} kmd init"
+                );
             } else {
                 println!();
                 println!(
