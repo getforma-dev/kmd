@@ -598,7 +598,10 @@ async fn run_server(
     if !force && !is_workspace_mode && !has_project_markers(&project_root) {
         let count = quick_count_md_files(&project_root);
 
-        // No project markers — show guidance and exit (any file count)
+        // No project markers — show guidance and exit
+        let child_projects = services::workspace::find_child_projects_public(&project_root);
+        let project_count = child_projects.len();
+
         eprintln!();
         eprintln!(
             "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
@@ -607,7 +610,13 @@ async fn run_server(
         eprintln!("  {yellow}kausing much damage{reset}");
         eprintln!("  {dim}-------------------------------{reset}");
         eprintln!();
-        if count > 0 {
+
+        if project_count > 0 && count > 0 {
+            eprintln!(
+                "  {yellow}!{reset} Found {bold}{count}{reset} docs across {bold}{project_count}{reset} project{}",
+                if project_count == 1 { "" } else { "s" }
+            );
+        } else if count > 0 {
             eprintln!(
                 "  {yellow}!{reset} Found {bold}{count}{reset} markdown files from {}",
                 project_root.display()
@@ -620,30 +629,30 @@ async fn run_server(
         }
         eprintln!("  This doesn't look like a project directory.");
 
-        // Check for child projects to suggest
-        let child_projects = services::workspace::find_child_projects_public(&project_root);
-        if !child_projects.is_empty() {
-            eprintln!();
-            eprintln!(
-                "  {dim}Found {} project{} nearby:{reset}",
-                child_projects.len(),
-                if child_projects.len() == 1 { "" } else { "s" }
-            );
-            for (name, markers) in &child_projects {
-                let markers_str = markers.join(", ");
-                eprintln!("    {name}/  {dim}({markers_str}){reset}");
-            }
-        }
-
         eprintln!();
         eprintln!("  {dim}What you probably want:{reset}");
         if let Some((first, _)) = child_projects.first() {
-            eprintln!("    cd {first} && kmd           {dim}Quick session in a project{reset}");
+            eprintln!("    cd {first} && kmd       {dim}Quick session in a project{reset}");
         } else {
             eprintln!("    cd ~/my-project && kmd  {dim}Quick session in a project{reset}");
         }
-        eprintln!("    kmd init                {dim}Create a workspace here{reset}");
-        eprintln!("    kmd --force             {dim}Start the server anyway ({count} files){reset}");
+        if project_count > 1 {
+            let all_names: Vec<&str> = child_projects.iter().map(|(n, _)| n.as_str()).collect();
+            let add_cmd = if all_names.len() > 3 {
+                format!("{} ... ({project_count} total)", all_names[..3].join(" "))
+            } else {
+                all_names.join(" ")
+            };
+            eprintln!("    kmd init && kmd add {add_cmd}");
+            eprintln!("                        {dim}Create workspace with all {project_count} projects{reset}");
+        } else {
+            eprintln!("    kmd init            {dim}Create a workspace here{reset}");
+        }
+        if project_count > 0 {
+            eprintln!("    kmd --force         {dim}Start anyway ({count} docs, {project_count} projects){reset}");
+        } else {
+            eprintln!("    kmd --force         {dim}Start anyway ({count} files){reset}");
+        }
         eprintln!();
         std::process::exit(0);
     }

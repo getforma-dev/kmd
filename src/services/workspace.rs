@@ -217,7 +217,7 @@ pub fn list_workspace(cwd: &Path) {
                 "  {dim}No project markers found (.git, package.json, Cargo.toml, etc.){reset}"
             );
 
-            // Scan immediate children for project directories
+            // Scan immediate children for project directories — show detail
             let child_projects = find_child_projects(cwd);
             if !child_projects.is_empty() {
                 println!();
@@ -226,21 +226,22 @@ pub fn list_workspace(cwd: &Path) {
                     child_projects.len(),
                     if child_projects.len() == 1 { "" } else { "s" }
                 );
+                println!();
                 for (child_name, child_markers) in &child_projects {
                     let markers_str = child_markers.join(", ");
+                    let child_path = cwd.join(child_name);
+                    eprint!("  {dim}Scanning {child_name}...{reset}");
+                    let (docs, scripts, _) = quick_scan_counts(&child_path);
+                    eprint!("\x1b[2K\r");
+                    let doc_str = if docs == 1 { "doc" } else { "docs" };
+                    let script_str = if scripts == 1 { "script" } else { "scripts" };
                     println!(
-                        "    {white}{child_name}/{reset} {dim}({markers_str}){reset}"
+                        "  {white}{child_name}/{reset}  {dim}({markers_str}){reset}"
+                    );
+                    println!(
+                        "    {dim}{docs} {doc_str} · {scripts} {script_str}{reset}"
                     );
                 }
-                println!();
-                println!(
-                    "  {dim}Try:{reset} cd {child_project} && kmd",
-                    child_project = child_projects[0].0
-                );
-                println!(
-                    "  {dim}Or create a workspace here:{reset} kmd init && kmd add {child_dirs}",
-                    child_dirs = child_projects.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(" ")
-                );
             } else {
                 println!();
                 println!(
