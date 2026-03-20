@@ -15,6 +15,13 @@ interface SiblingInfo {
   added: boolean;
 }
 
+interface MonorepoMember {
+  name: string;
+  path: string;
+  source: string;
+  added: boolean;
+}
+
 export interface WorkspacePanelProps {
   onClose: () => void;
   workspaceName: () => string;
@@ -27,6 +34,7 @@ export interface WorkspacePanelProps {
 export function WorkspacePanel(props: WorkspacePanelProps) {
   const [roots, setRoots] = createSignal<RootInfo[]>([]);
   const [siblings, setSiblings] = createSignal<SiblingInfo[]>([]);
+  const [monorepoMembers, setMonorepoMembers] = createSignal<MonorepoMember[]>([]);
   const [inputValue, setInputValue] = createSignal('');
   const [error, setError] = createSignal('');
   const [loading, setLoading] = createSignal(false);
@@ -53,9 +61,19 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
       .catch(() => {});
   }
 
+  function fetchMonorepoMembers() {
+    fetch('/api/workspace/monorepo-members')
+      .then((r) => r.json())
+      .then((data: { members: MonorepoMember[] }) => {
+        setMonorepoMembers(data.members || []);
+      })
+      .catch(() => {});
+  }
+
   function refreshAll() {
     fetchRoots();
     fetchSiblings();
+    fetchMonorepoMembers();
   }
 
   // Initial fetch
@@ -203,6 +221,54 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
   }
 
   // -------------------------------------------------------------------------
+  // Monorepo members suggestions (reactive)
+  // -------------------------------------------------------------------------
+
+  function MonorepoMembersList() {
+    const container = document.createElement('div');
+    container.className = 'ws-panel-monorepo';
+
+    createEffect(() => {
+      const m = monorepoMembers();
+      container.innerHTML = '';
+
+      // Filter out already-added members
+      const available = m.filter((member) => !member.added);
+      if (available.length === 0) return;
+
+      const label = document.createElement('div');
+      label.className = 'ws-panel-siblings-label';
+      label.textContent = 'Detected projects';
+      container.appendChild(label);
+
+      const pills = document.createElement('div');
+      pills.className = 'ws-panel-siblings-pills';
+
+      for (const member of available) {
+        const pill = document.createElement('button');
+        pill.className = 'ws-panel-sibling-pill';
+        pill.title = member.path;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = member.name;
+        pill.appendChild(nameSpan);
+
+        const badge = document.createElement('span');
+        badge.className = 'ws-panel-source-badge';
+        badge.textContent = member.source;
+        pill.appendChild(badge);
+
+        pill.addEventListener('click', () => addRoot(member.path));
+        pills.appendChild(pill);
+      }
+
+      container.appendChild(pills);
+    });
+
+    return container;
+  }
+
+  // -------------------------------------------------------------------------
   // Error display (reactive)
   // -------------------------------------------------------------------------
 
@@ -301,6 +367,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
           }, () => loading() ? 'Adding...' : 'Add'),
         ),
         ErrorDisplay(),
+        MonorepoMembersList(),
         SiblingsList(),
       ),
     ),

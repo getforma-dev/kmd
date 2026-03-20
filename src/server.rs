@@ -30,6 +30,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/workspace/add", post(api_workspace_add_handler))
         .route("/api/workspace/remove", post(api_workspace_remove_handler))
         .route("/api/workspace/siblings", get(api_workspace_siblings_handler))
+        .route("/api/workspace/monorepo-members", get(api_workspace_monorepo_members_handler))
         // Docs routes — search must come before the wildcard
         .route("/api/docs", get(api_docs_tree))
         .route("/api/docs/search", get(api_docs_search))
@@ -302,6 +303,46 @@ async fn api_workspace_siblings_handler(State(state): State<AppState>) -> impl I
     };
 
     Json(serde_json::json!({ "siblings": siblings }))
+}
+
+// ---------------------------------------------------------------------------
+// Monorepo members API handler
+// ---------------------------------------------------------------------------
+
+/// `GET /api/workspace/monorepo-members` — Detect monorepo member projects.
+///
+/// Scans the project root for monorepo indicators (pnpm, npm workspaces, lerna,
+/// turbo, nx, cargo) and returns detected member projects with their paths.
+async fn api_workspace_monorepo_members_handler(State(state): State<AppState>) -> impl IntoResponse {
+    use crate::services::workspace;
+
+    let project_root = state.project_root().to_path_buf();
+    let members = workspace::detect_monorepo_members(&project_root);
+
+    // Check which members are already added as workspace roots
+    let existing_roots: Vec<String> = state
+        .roots()
+        .iter()
+        .map(|r| r.relative_path.clone())
+        .collect();
+
+    let members_json: Vec<serde_json::Value> = members
+        .iter()
+        .map(|m| {
+            let added = existing_roots.contains(&m.path) || existing_roots.iter().any(|r| {
+                // Also check if the root matches with "./" prefix or without
+                r.trim_start_matches("./") == m.path || m.path.trim_start_matches("./") == r.as_str()
+            });
+            serde_json::json!({
+                "name": m.name,
+                "path": m.path,
+                "source": m.source,
+                "added": added,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({ "members": members_json }))
 }
 
 // ---------------------------------------------------------------------------

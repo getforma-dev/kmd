@@ -1263,6 +1263,25 @@ code, pre, kbd {
   border-color: var(--accent-muted);
 }
 
+/* Monorepo source badge inside pills */
+.ws-panel-source-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-family: var(--font-code);
+  color: var(--gruvbox-gray);
+  background: var(--gruvbox-border);
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Collapsible root header in multi-root file tree */
+.file-tree-root-header:hover {
+  color: var(--gruvbox-fg1);
+}
+
 /* --- Responsive --- */
 @media (max-width: 768px) {
   .sidebar {

@@ -85,6 +85,7 @@ export function HelpPanel(props: { onClose: () => void }) {
         Row('Docs tab', `${mod}1`),
         Row('Scripts tab', `${mod}2`),
         Row('Ports tab', `${mod}3`),
+        Row('Terminal tab', `${mod}4`),
         Row('Close / clear', 'Esc'),
         Row('Help', '?'),
       ),

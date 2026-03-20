@@ -511,24 +511,40 @@ export function DocsPage(props?: {
         () => h('div', { style: 'padding: var(--space-sm) var(--space-md); color: var(--gruvbox-gray); font-size: 13px;' }, 'Searching...'),
         () => createShow(
           () => searchResults().length > 0,
-          () => h('div', null,
-            ...searchResults().map((result) =>
-              h('div', {
-                class: 'file-tree-item',
-                onClick: () => handleSearchResultClick(result.path, result.root),
-                style: 'flex-direction: column; align-items: flex-start; gap: 2px; padding: var(--space-sm) var(--space-md);',
-              },
-                h('span', {
-                  class: 'name',
-                  style: 'color: var(--gruvbox-blue); font-family: var(--font-code); font-size: 12px;',
-                }, result.path),
-                h('span', {
-                  style: 'color: var(--gruvbox-gray); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;',
-                  dangerouslySetInnerHTML: { __html: result.snippet },
-                }),
-              )
-            ),
-          ),
+          () => {
+            const isMultiRoot = roots().length > 1;
+            // Build a map from root path -> root name for display
+            const rootNameMap: Record<string, string> = {};
+            if (isMultiRoot) {
+              for (const r of roots()) {
+                rootNameMap[r.path] = r.name;
+              }
+            }
+
+            return h('div', null,
+              ...searchResults().map((result) => {
+                // In multi-root mode, prefix with root name
+                const displayPath = isMultiRoot && rootNameMap[result.root]
+                  ? `${rootNameMap[result.root]}/ ${result.path}`
+                  : result.path;
+
+                return h('div', {
+                  class: 'file-tree-item',
+                  onClick: () => handleSearchResultClick(result.path, result.root),
+                  style: 'flex-direction: column; align-items: flex-start; gap: 2px; padding: var(--space-sm) var(--space-md);',
+                },
+                  h('span', {
+                    class: 'name',
+                    style: 'color: var(--gruvbox-blue); font-family: var(--font-code); font-size: 12px;',
+                  }, displayPath),
+                  h('span', {
+                    style: 'color: var(--gruvbox-gray); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;',
+                    dangerouslySetInnerHTML: { __html: result.snippet },
+                  }),
+                );
+              }),
+            );
+          },
           () => h('div', {
             style: 'padding: var(--space-lg) var(--space-md); color: var(--gruvbox-gray); font-size: 13px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);',
           },

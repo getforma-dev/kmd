@@ -176,6 +176,252 @@ pub fn list_workspace(cwd: &Path) {
 }
 
 // ---------------------------------------------------------------------------
+// Monorepo detection
+// ---------------------------------------------------------------------------
+
+/// A detected member project within a monorepo.
+#[derive(Debug, Clone, Serialize)]
+pub struct MonorepoMember {
+    pub name: String,
+    pub path: String, // relative to project_root
+    pub source: String, // "pnpm", "npm", "lerna", "turbo", "nx", "cargo"
+}
+
+/// Detect monorepo member projects by scanning for known monorepo indicator files.
+///
+/// Checks for pnpm-workspace.yaml, package.json workspaces, lerna.json, turbo.json,
+/// nx.json, and Cargo.toml [workspace]. When an indicator is found, scans immediate
+/// subdirectories (and one level deeper for patterns like `packages/*/`) for
+/// package.json or Cargo.toml files.
+pub fn detect_monorepo_members(project_root: &Path) -> Vec<MonorepoMember> {
+    let source = detect_monorepo_source(project_root);
+    let source = match source {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    if source == "cargo" {
+        return detect_cargo_members(project_root);
+    }
+
+    // JS/TS monorepo: scan for package.json files in subdirectories
+    detect_js_members(project_root, &source)
+}
+
+/// Check which monorepo tool is in use at the project root.
+fn detect_monorepo_source(project_root: &Path) -> Option<String> {
+    // Check in priority order — more specific tools first
+    if project_root.join("pnpm-workspace.yaml").exists() {
+        return Some("pnpm".to_string());
+    }
+    if project_root.join("lerna.json").exists() {
+        return Some("lerna".to_string());
+    }
+    if project_root.join("turbo.json").exists() {
+        return Some("turbo".to_string());
+    }
+    if project_root.join("nx.json").exists() {
+        return Some("nx".to_string());
+    }
+
+    // Check package.json for "workspaces" field
+    let pkg_path = project_root.join("package.json");
+    if pkg_path.exists() {
+        if let Ok(content) = fs::read_to_string(&pkg_path) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                if parsed.get("workspaces").is_some() {
+                    return Some("npm".to_string());
+                }
+            }
+        }
+    }
+
+    // Check Cargo.toml for [workspace] section
+    let cargo_path = project_root.join("Cargo.toml");
+    if cargo_path.exists() {
+        if let Ok(content) = fs::read_to_string(&cargo_path) {
+            if content.contains("[workspace]") {
+                return Some("cargo".to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Scan for JS/TS monorepo members (subdirs containing package.json).
+fn detect_js_members(project_root: &Path, source: &str) -> Vec<MonorepoMember> {
+    let mut members = Vec::new();
+
+    // Scan immediate subdirectories
+    if let Ok(entries) = fs::read_dir(project_root) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let dir_name = match entry.file_name().to_str() {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            // Skip hidden dirs, node_modules, dist, etc.
+            if dir_name.starts_with('.')
+                || dir_name == "node_modules"
+                || dir_name == "dist"
+                || dir_name == "build"
+                || dir_name == "target"
+            {
+                continue;
+            }
+
+            let dir_path = entry.path();
+            let pkg_json = dir_path.join("package.json");
+
+            if pkg_json.exists() {
+                // This subdir is itself a package
+                let name = read_package_name(&pkg_json).unwrap_or_else(|| dir_name.clone());
+                members.push(MonorepoMember {
+                    name,
+                    path: dir_name.clone(),
+                    source: source.to_string(),
+                });
+            }
+
+            // Also scan one level deeper (for patterns like packages/foo, apps/bar)
+            if let Ok(sub_entries) = fs::read_dir(&dir_path) {
+                for sub_entry in sub_entries.flatten() {
+                    if !sub_entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    let sub_name = match sub_entry.file_name().to_str() {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    if sub_name.starts_with('.')
+                        || sub_name == "node_modules"
+                        || sub_name == "dist"
+                        || sub_name == "build"
+                    {
+                        continue;
+                    }
+                    let sub_pkg = sub_entry.path().join("package.json");
+                    if sub_pkg.exists() {
+                        let name = read_package_name(&sub_pkg).unwrap_or_else(|| sub_name.clone());
+                        let rel_path = format!("{dir_name}/{sub_name}");
+                        members.push(MonorepoMember {
+                            name,
+                            path: rel_path,
+                            source: source.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    members.sort_by(|a, b| a.path.cmp(&b.path));
+    members
+}
+
+/// Scan for Cargo workspace members (subdirs containing Cargo.toml).
+fn detect_cargo_members(project_root: &Path) -> Vec<MonorepoMember> {
+    let mut members = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(project_root) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let dir_name = match entry.file_name().to_str() {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if dir_name.starts_with('.')
+                || dir_name == "target"
+                || dir_name == "node_modules"
+            {
+                continue;
+            }
+
+            let dir_path = entry.path();
+            let cargo_toml = dir_path.join("Cargo.toml");
+
+            if cargo_toml.exists() {
+                let name = read_cargo_package_name(&cargo_toml).unwrap_or_else(|| dir_name.clone());
+                members.push(MonorepoMember {
+                    name,
+                    path: dir_name.clone(),
+                    source: "cargo".to_string(),
+                });
+            }
+
+            // One level deeper
+            if let Ok(sub_entries) = fs::read_dir(&dir_path) {
+                for sub_entry in sub_entries.flatten() {
+                    if !sub_entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    let sub_name = match sub_entry.file_name().to_str() {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    if sub_name.starts_with('.') || sub_name == "target" {
+                        continue;
+                    }
+                    let sub_cargo = sub_entry.path().join("Cargo.toml");
+                    if sub_cargo.exists() {
+                        let name = read_cargo_package_name(&sub_cargo).unwrap_or_else(|| sub_name.clone());
+                        let rel_path = format!("{dir_name}/{sub_name}");
+                        members.push(MonorepoMember {
+                            name,
+                            path: rel_path,
+                            source: "cargo".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    members.sort_by(|a, b| a.path.cmp(&b.path));
+    members
+}
+
+/// Read the "name" field from a package.json file.
+fn read_package_name(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+    parsed.get("name")?.as_str().map(|s| s.to_string())
+}
+
+/// Read the package name from a Cargo.toml (simple string search, no TOML dep).
+fn read_cargo_package_name(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    // Look for `name = "..."` under [package] section
+    let mut in_package = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[package]" {
+            in_package = true;
+            continue;
+        }
+        if trimmed.starts_with('[') && trimmed != "[package]" {
+            in_package = false;
+            continue;
+        }
+        if in_package && trimmed.starts_with("name") {
+            // Parse: name = "foo"
+            if let Some(val) = trimmed.split('=').nth(1) {
+                let val = val.trim().trim_matches('"').trim_matches('\'');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 

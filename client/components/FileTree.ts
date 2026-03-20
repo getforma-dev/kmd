@@ -1,4 +1,4 @@
-import { h, createSignal } from '@getforma/core';
+import { h, createSignal, createEffect } from '@getforma/core';
 
 export interface TreeNode {
   name: string;
@@ -124,9 +124,39 @@ export function FileTree(props: FileTreeProps) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Collapse state persistence for multi-root headers
+// ---------------------------------------------------------------------------
+
+const COLLAPSED_ROOTS_KEY = 'kmd:collapsedRoots';
+
+function loadCollapsedRoots(): Set<string> {
+  try {
+    const stored = localStorage.getItem(COLLAPSED_ROOTS_KEY);
+    if (stored) {
+      const arr = JSON.parse(stored) as string[];
+      return new Set(arr);
+    }
+  } catch {
+    // ignore
+  }
+  return new Set();
+}
+
+function saveCollapsedRoots(collapsed: Set<string>) {
+  try {
+    localStorage.setItem(COLLAPSED_ROOTS_KEY, JSON.stringify([...collapsed]));
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Multi-root file tree: shows root group headers when there are 2+ roots,
  * looks identical to single-root when there is only one root.
+ *
+ * When multiple roots are present, each root section has a clickable chevron
+ * toggle to collapse/expand. Collapse state is persisted in localStorage.
  */
 export function MultiRootFileTree(props: MultiRootFileTreeProps) {
   const { roots, selectedPath, selectedRoot, onSelect } = props;
@@ -145,23 +175,61 @@ export function MultiRootFileTree(props: MultiRootFileTreeProps) {
     );
   }
 
-  // Multi-root: show root headers
+  // Multi-root: show collapsible root headers
+  const initialCollapsed = loadCollapsedRoots();
+  const [collapsedRoots, setCollapsedRoots] = createSignal<Set<string>>(initialCollapsed);
+
+  // Persist whenever collapse state changes
+  createEffect(() => {
+    saveCollapsedRoots(collapsedRoots());
+  });
+
+  function toggleRoot(rootPath: string) {
+    setCollapsedRoots((prev) => {
+      const next = new Set(prev);
+      if (next.has(rootPath)) {
+        next.delete(rootPath);
+      } else {
+        next.add(rootPath);
+      }
+      return next;
+    });
+  }
+
   return h('div', { class: 'file-tree' },
-    ...roots.map((root) =>
-      h('div', null,
-        // Root header
+    ...roots.map((root) => {
+      const [isCollapsed, setIsCollapsed] = createSignal(initialCollapsed.has(root.path));
+
+      // Sync with global collapsed set
+      createEffect(() => {
+        setIsCollapsed(collapsedRoots().has(root.path));
+      });
+
+      return h('div', null,
+        // Collapsible root header
         h('div', {
-          style: 'font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.1em; padding: var(--space-sm) var(--space-md); margin-top: var(--space-xs);',
-        }, root.name),
-        // Tree items for this root
-        ...root.children.map((node) =>
-          TreeItem({
-            node,
-            selectedPath,
-            onSelect: (path: string) => onSelect(path, root.path),
-          })
+          class: 'file-tree-root-header',
+          style: 'font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.1em; padding: var(--space-sm) var(--space-md); margin-top: var(--space-xs); cursor: pointer; display: flex; align-items: center; gap: 4px; user-select: none;',
+          onClick: () => toggleRoot(root.path),
+        },
+          h('span', {
+            style: () => `display: inline-block; font-size: 10px; transition: transform 0.15s ease; transform: rotate(${isCollapsed() ? '0' : '90'}deg);`,
+          }, '\u25B8'),
+          h('span', null, root.name),
         ),
-      )
-    ),
+        // Tree items for this root (collapsible)
+        h('div', {
+          style: () => isCollapsed() ? 'display: none;' : '',
+        },
+          ...root.children.map((node) =>
+            TreeItem({
+              node,
+              selectedPath,
+              onSelect: (path: string) => onSelect(path, root.path),
+            })
+          ),
+        ),
+      );
+    }),
   );
 }
