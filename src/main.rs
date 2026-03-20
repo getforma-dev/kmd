@@ -615,6 +615,7 @@ async fn run_server(
             eprintln!("  Run from a project directory, or continue anyway?");
             eprintln!();
             eprintln!("  {dim}-> Press Enter to continue, Ctrl+C to cancel{reset}");
+            eprintln!("  {dim}   Use --force to skip this warning next time{reset}");
 
             let stdin = io::stdin();
             let _ = stdin.lock().lines().next();
