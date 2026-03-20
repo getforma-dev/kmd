@@ -188,39 +188,6 @@ fn quick_count_md_files(dir: &Path) -> usize {
     count
 }
 
-/// Check for project markers per root, warn if >500 files across rootless dirs.
-fn check_root_guardrails(cwd: &Path, roots: &[String], force: bool) {
-    if force {
-        return;
-    }
-
-    for root in roots {
-        let root_path = if root == "." {
-            cwd.to_path_buf()
-        } else {
-            cwd.join(root)
-        };
-
-        if !root_path.exists() {
-            continue;
-        }
-
-        if !has_project_markers(&root_path) {
-            let count = quick_count_md_files(&root_path);
-            if count > 500 {
-                let dim = "\x1b[2m";
-                let yellow = "\x1b[33m";
-                let bold = "\x1b[1m";
-                let reset = "\x1b[0m";
-                eprintln!(
-                    "  {yellow}!{reset} Root '{root}' has {bold}{count}{reset} markdown files and no project markers."
-                );
-                eprintln!("  {dim}Use --force to skip this warning.{reset}");
-            }
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() {
     // Initialize tracing (structured logging)
@@ -626,16 +593,12 @@ async fn run_server(
     };
 
     // -----------------------------------------------------------------------
-    // Tier 1 & 2: Project root detection + guardrails per root
+    // Guardrails: single scan, reuse count
     // -----------------------------------------------------------------------
-    check_root_guardrails(&project_root, &ws_config.roots, force);
-
-    if !force && !has_project_markers(&project_root) {
-        // No project markers found at the workspace level — do a quick pre-scan
+    if !force && !is_workspace_mode && !has_project_markers(&project_root) {
         let count = quick_count_md_files(&project_root);
 
         if count > 500 {
-            // Tier 2: Large non-project directory — warn and prompt
             eprintln!();
             eprintln!(
                 "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
@@ -653,11 +616,9 @@ async fn run_server(
             eprintln!();
             eprintln!("  {dim}-> Press Enter to continue, Ctrl+C to cancel{reset}");
 
-            // Wait for user input
             let stdin = io::stdin();
             let _ = stdin.lock().lines().next();
-        } else if !is_workspace_mode {
-            // Ephemeral, small non-project directory — single-line note
+        } else if count > 0 {
             eprintln!(
                 "  {dim}No project root detected, scanning from {}{reset}",
                 project_root.display()
