@@ -317,9 +317,26 @@ pub fn list_workspace(cwd: &Path) {
             if any_sub_project_name.is_none() {
                 any_sub_project_name = child_projects.first().map(|(n, _)| n.clone());
             }
-            println!(
-                "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str} · {sub_count} sub-projects{reset}"
-            );
+            // Count total visible folders to detect non-project dirs with content
+            let total_visible_dirs = fs::read_dir(&abs)
+                .map(|entries| {
+                    entries.flatten().filter(|e| {
+                        e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                            && e.file_name().to_str().map(|n| !n.starts_with('.') && n != "node_modules" && n != "target" && n != "dist").unwrap_or(false)
+                    }).count()
+                })
+                .unwrap_or(0);
+            let other_folders = total_visible_dirs.saturating_sub(sub_count);
+
+            if other_folders > 0 {
+                println!(
+                    "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str} · {sub_count} sub-projects + {other_folders} other folders{reset}"
+                );
+            } else {
+                println!(
+                    "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str} · {sub_count} sub-projects{reset}"
+                );
+            }
             // Show sub-project names in columns
             let names: Vec<&str> = child_projects.iter().map(|(n, _)| n.as_str()).collect();
             print!("    {dim}");
