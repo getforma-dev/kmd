@@ -71,7 +71,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   const [killingPort, setKillingPort] = createSignal<number | null>(null);
   const [killResult, setKillResult] = createSignal<{ port: number; success: boolean; error?: string } | null>(null);
   const [showHidden, setShowHidden] = createSignal(false);
-  const [showSystem, setShowSystem] = createSignal(false);
+  const [collapsedCategories, setCollapsedCategories] = createSignal<Set<string>>(new Set(['system']));
   const [scanning, setScanning] = createSignal(false);
 
   // Feature 9: managed processes for PID matching
@@ -210,8 +210,8 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
     const result = killResult();
     const showHid = showHidden();
 
-    const showSys = showSystem();
-    const managed = managedProcesses(); // Feature 9: read managed processes
+    const collapsed = collapsedCategories();
+    const managed = managedProcesses();
     const visible = portList.filter((p) => !hidden.includes(p.port));
     const hiddenList = portList.filter((p) => hidden.includes(p.port));
 
@@ -237,21 +237,12 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
       const catPorts = groups[cat];
       if (!catPorts || catPorts.length === 0) continue;
 
-      // System category: collapsed toggle
-      if (cat === 'system' && !showSys) {
-        const toggle = document.createElement('button');
-        toggle.className = 'btn btn-ghost';
-        toggle.style.cssText = 'font-size: 10px; padding: 3px 8px; margin-top: 8px;';
-        toggle.textContent = `Show ${catPorts.length} system port${catPorts.length === 1 ? '' : 's'}`;
-        toggle.onclick = () => setShowSystem(true);
-        mainContainer.appendChild(toggle);
-        continue;
-      }
+      const isCollapsed = collapsed.has(cat);
 
       const section = document.createElement('div');
       section.style.cssText = 'margin-bottom: 16px;';
 
-      // Category header
+      // Category header with collapse toggle
       const header = document.createElement('div');
       header.style.cssText = `
         font-family: var(--font-mono, var(--font-code));
@@ -263,20 +254,33 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
         padding-left: 2px;
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
+        cursor: pointer;
+        user-select: none;
       `;
-      header.textContent = `${CATEGORY_LABELS[cat] || cat} · ${catPorts.length}`;
 
-      if (cat === 'system') {
-        const collapseBtn = document.createElement('button');
-        collapseBtn.className = 'btn btn-ghost';
-        collapseBtn.style.cssText = 'font-size: 9px; padding: 1px 6px;';
-        collapseBtn.textContent = 'collapse';
-        collapseBtn.onclick = () => setShowSystem(false);
-        header.appendChild(collapseBtn);
-      }
+      const chevron = document.createElement('span');
+      chevron.style.cssText = 'font-size: 9px; transition: transform 0.15s;';
+      chevron.textContent = isCollapsed ? '▸' : '▾';
+      header.appendChild(chevron);
+
+      const labelText = document.createTextNode(`${CATEGORY_LABELS[cat] || cat} · ${catPorts.length}`);
+      header.appendChild(labelText);
+
+      header.onclick = () => {
+        setCollapsedCategories((prev) => {
+          const next = new Set(prev);
+          if (next.has(cat)) { next.delete(cat); } else { next.add(cat); }
+          return next;
+        });
+      };
 
       section.appendChild(header);
+
+      if (isCollapsed) {
+        mainContainer.appendChild(section);
+        continue;
+      }
 
       // Port cards
       const cards = document.createElement('div');
