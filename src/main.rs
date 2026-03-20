@@ -594,10 +594,12 @@ async fn run_server(
     // -----------------------------------------------------------------------
     // Guardrails: single scan, reuse count
     // -----------------------------------------------------------------------
-    if !force && !is_workspace_mode && !has_project_markers(&project_root) {
+    if !force && !is_workspace_mode {
+        let has_markers = has_project_markers(&project_root);
         let count = quick_count_md_files(&project_root);
 
-        // No project markers — show guidance and exit
+        // Case 1: No project markers — show guidance and exit
+        if !has_markers {
         let child_projects = services::workspace::find_child_projects_public(&project_root);
         let project_count = child_projects.len();
 
@@ -649,6 +651,20 @@ async fn run_server(
         eprintln!("  {dim}See project details:{reset}         kmd list");
         eprintln!();
         std::process::exit(0);
+        }
+
+        // Case 2: Has project markers but unusually large (500+ docs) — warn but allow
+        if has_markers && count > 500 {
+            eprintln!();
+            eprintln!(
+                "  {yellow}⚠{reset} This project has {bold}{count}{reset} docs — that's a lot."
+            );
+            eprintln!(
+                "  {dim}Press Enter to continue, Ctrl+C to cancel. Use --force to skip this.{reset}"
+            );
+            let stdin = io::stdin();
+            let _ = stdin.lock().lines().next();
+        }
     }
 
     // -----------------------------------------------------------------------
