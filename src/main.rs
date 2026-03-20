@@ -57,15 +57,15 @@ enum Commands {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Add one or more root directories to the workspace
+    /// Add one or more project roots to the workspace
     Add {
-        /// Paths to add as workspace roots
+        /// Paths to add as project roots
         #[arg(required = true)]
         paths: Vec<String>,
     },
-    /// Remove a root directory from the workspace
+    /// Remove a project root from the workspace
     Remove {
-        /// Path to remove from workspace roots
+        /// Path to remove from project roots
         path: String,
     },
     /// Print workspace info
@@ -232,7 +232,7 @@ async fn main() {
 
             let port = get_workspace_port(&project_root);
             if try_api_add(port, &abs_paths) {
-                eprintln!("  (server notified — hot-reloading roots)");
+                eprintln!("  (server notified — hot-reloading project roots)");
             } else {
                 // Server not running, fall back to file-based edit
                 services::workspace::add_root(&project_root, &paths);
@@ -250,7 +250,7 @@ async fn main() {
 
             let port = get_workspace_port(&project_root);
             if try_api_remove(port, &path) {
-                eprintln!("  (server notified — hot-reloading roots)");
+                eprintln!("  (server notified — hot-reloading project roots)");
             } else {
                 // Server not running, fall back to file-based edit
                 services::workspace::remove_root(&project_root, &path);
@@ -866,7 +866,7 @@ async fn run_server(
                 );
             } else {
                 println!(
-                    "  {dim}Roots{reset} {dim}·····{reset} {root_count} directories"
+                    "  {dim}Projects{reset} {dim}··{reset} {root_count} project roots"
                 );
                 for root in roots.iter() {
                     println!(
@@ -897,7 +897,7 @@ async fn run_server(
                 );
             } else {
                 println!(
-                    "  {dim}Roots{reset} {dim}·····{reset} {root_count} directories"
+                    "  {dim}Projects{reset} {dim}··{reset} {root_count} project roots"
                 );
                 for root in roots.iter() {
                     println!(

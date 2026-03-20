@@ -125,7 +125,7 @@ pub fn add_root(cwd: &Path, paths: &[String]) -> Vec<AddResult> {
         let normalized = normalize_root(&relative);
 
         if config.roots.contains(&normalized) {
-            eprintln!("  Root already exists: {normalized}");
+            eprintln!("  Project root already exists: {normalized}");
             results.push(AddResult::AlreadyExists(normalized));
             continue;
         }
@@ -138,7 +138,7 @@ pub fn add_root(cwd: &Path, paths: &[String]) -> Vec<AddResult> {
             results.push(AddResult::AddedMissing(normalized));
         } else {
             config.roots.push(normalized.clone());
-            eprintln!("  Added root: {normalized}");
+            eprintln!("  Added project root: {normalized}");
             results.push(AddResult::Added(normalized));
         }
     }
@@ -156,16 +156,16 @@ pub fn remove_root(cwd: &Path, path: &str) {
     config.roots.retain(|r| r != &normalized);
 
     if config.roots.len() == before {
-        eprintln!("  Root not found: {normalized}");
+        eprintln!("  Project root not found: {normalized}");
         return;
     }
 
     // Don't allow removing all roots
     if config.roots.is_empty() {
         config.roots.push(".".to_string());
-        eprintln!("  Removed {normalized}, reverted to \".\" (must have at least one root)");
+        eprintln!("  Removed {normalized}, reverted to \".\" (must have at least one project root)");
     } else {
-        eprintln!("  Removed root: {normalized}");
+        eprintln!("  Removed project root: {normalized}");
     }
 
     write_config(cwd, &config);
@@ -262,8 +262,9 @@ pub fn list_workspace(cwd: &Path) {
 
     if roots.len() > 1 {
         println!(
-            "  {dim}Roots{reset} {dim}····{reset} {} projects",
-            roots.len()
+            "  {dim}Projects{reset} {dim}··{reset} {} project root{}",
+            roots.len(),
+            if roots.len() == 1 { "" } else { "s" }
         );
     }
     println!();
