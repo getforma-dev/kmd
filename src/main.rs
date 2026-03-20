@@ -927,6 +927,19 @@ async fn run_server(
     // -----------------------------------------------------------------------
     // Cleanup on shutdown
     // -----------------------------------------------------------------------
+
+    // Kill all PTY terminal sessions so their reader threads don't block exit
+    {
+        let mgr = services::terminal::manager();
+        let session_ids = mgr.list_sessions();
+        for id in &session_ids {
+            let _ = mgr.kill_session(id);
+        }
+        if !session_ids.is_empty() {
+            tracing::info!("Killed {} terminal session(s)", session_ids.len());
+        }
+    }
+
     if is_workspace_mode {
         // Clean up the server lockfile
         delete_lockfile(&project_root);
