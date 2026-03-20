@@ -91,9 +91,19 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   // WS + initial fetch
   // -------------------------------------------------------------------------
 
+  // Fetch enriched port data (includes managed_by info from allocator)
+  function fetchPorts() {
+    fetch('/api/ports')
+      .then((r) => r.json())
+      .then((data: { ports: PortInfo[] }) => setPorts(data.ports))
+      .catch(() => {});
+  }
+
   function handleWsMessage(msg: WSMessage) {
-    if (msg.type === 'ports' && msg.data && Array.isArray(msg.data.ports)) {
-      setPorts(msg.data.ports);
+    if (msg.type === 'ports') {
+      // Use WS as a trigger to re-fetch enriched data (with managed_by)
+      // rather than using the raw WS payload which lacks enrichment
+      fetchPorts();
     }
   }
 
@@ -102,10 +112,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
     onCleanup(unsubscribe);
   }
 
-  fetch('/api/ports')
-    .then((r) => r.json())
-    .then((data: { ports: PortInfo[] }) => setPorts(data.ports))
-    .catch((err) => console.error('[kmd] Failed to fetch ports:', err));
+  fetchPorts();
 
   // Load hidden ports
   fetch('/api/ports/hidden')

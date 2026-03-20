@@ -135,6 +135,9 @@ function loadProcessTabs(): { processes: ActiveProcess[]; selected: string | nul
 // ScriptsPage
 // ---------------------------------------------------------------------------
 
+const MAX_OUTPUT_LINES = 5000;
+const MAX_HISTORY_LINES = 200;
+
 export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void) }) {
   // State signals
   const [rootScripts, setRootScripts] = createSignal<RootScripts[]>([]);
@@ -232,7 +235,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       if (!processOutputMap.has(pid)) {
         processOutputMap.set(pid, []);
       }
-      processOutputMap.get(pid)!.push({ type: 'stdout', text: data.line });
+      const buf = processOutputMap.get(pid)!;
+      buf.push({ type: 'stdout', text: data.line });
+      if (buf.length > MAX_OUTPUT_LINES) buf.splice(0, buf.length - MAX_OUTPUT_LINES);
       if (selectedProcessId() === pid && !viewingHistoryId()) {
         setOutputVersion((v) => v + 1);
       }
@@ -240,7 +245,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       if (!processOutputMap.has(pid)) {
         processOutputMap.set(pid, []);
       }
-      processOutputMap.get(pid)!.push({ type: 'stderr', text: data.line });
+      const buf = processOutputMap.get(pid)!;
+      buf.push({ type: 'stderr', text: data.line });
+      if (buf.length > MAX_OUTPUT_LINES) buf.splice(0, buf.length - MAX_OUTPUT_LINES);
       if (selectedProcessId() === pid && !viewingHistoryId()) {
         setOutputVersion((v) => v + 1);
       }
@@ -277,7 +284,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           packagePath: meta.packagePath,
           exitCode: code ?? null,
           timestamp: Date.now(),
-          lines: [...(processOutputMap.get(pid) || [])],
+          lines: (processOutputMap.get(pid) || []).slice(-MAX_HISTORY_LINES),
         };
 
         setHistory((prev) => {
@@ -289,7 +296,11 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       }
 
       // Remove from active processes (it's finished), but keep output/exit maps for the tab
-      setActiveProcesses((procs) => procs.filter((p) => p.id !== pid));
+      setActiveProcesses((procs) => {
+        const updated = procs.filter((p) => p.id !== pid);
+        saveProcessTabs(updated, processOutputMap, selectedProcessId());
+        return updated;
+      });
       setTabsVersion((v) => v + 1);
 
       if (selectedProcessId() === pid && !viewingHistoryId()) {
@@ -745,6 +756,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
             }
             setTabsVersion((v) => v + 1);
             setOutputVersion((v) => v + 1);
+            saveProcessTabs(activeProcesses(), processOutputMap, selectedProcessId());
           };
           tabEl.appendChild(closeBtn);
         }

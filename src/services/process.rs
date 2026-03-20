@@ -93,21 +93,25 @@ fn spawn_managed_process(
 
                 match status {
                     Some(code) => {
-                        {
+                        // Only broadcast if we're the first to clean up
+                        // (kill_process may have already removed + broadcast)
+                        let was_present = {
                             let mut procs = state.processes();
-                            procs.remove(&pid);
-                        }
-                        // Release allocated port back to the pool
-                        {
-                            let mut allocator = state.port_allocator();
-                            if let Some(alloc) = allocator.release(&pid) {
-                                tracing::info!("Released port {} for process {}", alloc.port, pid);
+                            procs.remove(&pid).is_some()
+                        };
+                        if was_present {
+                            // Release allocated port back to the pool
+                            {
+                                let mut allocator = state.port_allocator();
+                                if let Some(alloc) = allocator.release(&pid) {
+                                    tracing::info!("Released port {} for process {}", alloc.port, pid);
+                                }
                             }
+                            let _ = tx.send(ServerMessage::Exit {
+                                process_id: pid,
+                                code,
+                            });
                         }
-                        let _ = tx.send(ServerMessage::Exit {
-                            process_id: pid,
-                            code,
-                        });
                         break;
                     }
                     None => {
@@ -198,9 +202,7 @@ pub fn run_script(
     // Update allocation with framework name
     if let Some(ref fw) = framework_info {
         let mut allocator = state.port_allocator();
-        if let Some(alloc) = allocator.allocations_mut().get_mut(&process_id) {
-            alloc.framework = Some(fw.framework.clone());
-        }
+        allocator.set_framework(&process_id, &fw.framework);
     }
 
     // --- Build command ---

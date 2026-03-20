@@ -136,9 +136,11 @@ impl PortAllocator {
         self.allocations.values().cloned().collect()
     }
 
-    /// Mutable access to the allocation map (for updating framework info after detection).
-    pub fn allocations_mut(&mut self) -> &mut HashMap<String, PortAllocation> {
-        &mut self.allocations
+    /// Update the detected framework name for an existing allocation.
+    pub fn set_framework(&mut self, process_id: &str, framework: &str) {
+        if let Some(alloc) = self.allocations.get_mut(process_id) {
+            alloc.framework = Some(framework.to_string());
+        }
     }
 }
 
@@ -187,7 +189,7 @@ const FRAMEWORK_RULES: &[FrameworkRule] = &[
     },
     FrameworkRule {
         name: "Angular CLI",
-        command_patterns: &["ng serve", "ng s "],
+        command_patterns: &["ng serve", "ng s"],
         flags: &["--port", "{PORT}"],
     },
     FrameworkRule {
@@ -225,7 +227,7 @@ const FRAMEWORK_RULES: &[FrameworkRule] = &[
 /// A command like "vite --config custom.config.ts" matches "vite".
 pub fn detect_framework_flags(command: &str, port: u16) -> Option<FrameworkFlags> {
     // Skip if command already has a --port flag (user already configured it)
-    if command.contains("--port") || command.contains("-p ") {
+    if command.contains("--port") {
         return None;
     }
 
