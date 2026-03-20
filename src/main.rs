@@ -615,12 +615,25 @@ async fn run_server(
         eprintln!("  {dim}──────────────────────────────{reset}");
         eprintln!();
 
+        // Count total child directories (to detect non-project folders like FormaStack)
+        let total_child_dirs = std::fs::read_dir(&project_root)
+            .map(|entries| {
+                entries.flatten().filter(|e| {
+                    e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                        && e.file_name().to_str().map(|n| !n.starts_with('.')).unwrap_or(false)
+                        && e.file_name().to_str().map(|n| n != "node_modules" && n != "target").unwrap_or(true)
+                }).count()
+            })
+            .unwrap_or(0);
+        let other_folders = total_child_dirs.saturating_sub(project_count);
+
         eprintln!("  {yellow}⚠{reset} This doesn't look like a project directory.");
         if project_count > 0 && count > 0 {
-            eprintln!(
-                "  Found {bold}{count}{reset} docs across {bold}{project_count}{reset} project{}",
-                if project_count == 1 { "" } else { "s" }
-            );
+            let mut desc = format!("{bold}{project_count}{reset} project{}", if project_count == 1 { "" } else { "s" });
+            if other_folders > 0 {
+                desc.push_str(&format!(" and {other_folders} other folder{}", if other_folders == 1 { "" } else { "s" }));
+            }
+            eprintln!("  Found {bold}{count}{reset} docs across {desc}");
         } else if count > 0 {
             eprintln!(
                 "  Found {bold}{count}{reset} markdown files from {}",

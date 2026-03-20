@@ -356,7 +356,7 @@ pub fn list_workspace(cwd: &Path) {
     // Hint for sub-projects
     if let Some(example) = any_sub_project_name {
         println!(
-            "  {dim}Open a single project:{reset} cd {example} && kmd"
+            "  {dim}Open a single project:{reset} cd <project> && kmd"
         );
         println!();
     }
