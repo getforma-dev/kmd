@@ -264,13 +264,14 @@ pub fn list_workspace(cwd: &Path) {
 }
 
 /// Quick count of .md files and package.json files in a directory (no content reading).
+/// Caps at 10,000 entries to avoid hanging on huge directories like ~.
 fn quick_scan_counts(dir: &Path) -> (usize, usize) {
     use ignore::WalkBuilder;
     use super::EXCLUDED_DIRS;
 
     let walker = WalkBuilder::new(dir)
-        .hidden(false)
-        .max_depth(Some(10))
+        .hidden(true) // skip hidden dirs like .cache, .npm, .local
+        .max_depth(Some(5)) // reasonable depth for a project
         .filter_entry(|entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
@@ -285,8 +286,14 @@ fn quick_scan_counts(dir: &Path) -> (usize, usize) {
 
     let mut docs = 0;
     let mut pkgs = 0;
+    let mut scanned = 0;
+    const MAX_ENTRIES: usize = 10_000;
 
     for result in walker {
+        scanned += 1;
+        if scanned > MAX_ENTRIES {
+            break;
+        }
         if let Ok(entry) = result {
             if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                 continue;
