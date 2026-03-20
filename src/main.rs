@@ -20,9 +20,9 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Port to listen on
-    #[arg(long, default_value_t = 4444)]
-    port: u16,
+    /// Port to listen on (overrides workspace config and auto-detection)
+    #[arg(long)]
+    port: Option<u16>,
 
     /// Don't open the browser automatically
     #[arg(long)]
@@ -76,7 +76,49 @@ enum Commands {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Check if workspace server is running
+    Status,
 }
+
+// ---------------------------------------------------------------------------
+// Server mode
+// ---------------------------------------------------------------------------
+
+/// The two operating modes for the kmd server.
+enum ServerMode {
+    /// No .kmd/workspace.json — ephemeral session with temp DB, auto-port.
+    Ephemeral { cwd: PathBuf },
+    /// .kmd/workspace.json exists — persistent workspace with fixed port.
+    Workspace {
+        config: services::workspace::WorkspaceConfig,
+        kmd_dir: PathBuf,
+    },
+}
+
+/// Detect the server mode from the current directory.
+fn detect_mode(cwd: &Path) -> ServerMode {
+    if let Some(config) = services::workspace::load_workspace(cwd) {
+        ServerMode::Workspace {
+            config,
+            kmd_dir: cwd.join(".kmd"),
+        }
+    } else {
+        ServerMode::Ephemeral {
+            cwd: cwd.to_path_buf(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Port constants
+// ---------------------------------------------------------------------------
+
+/// Default port for workspace mode.
+const WORKSPACE_DEFAULT_PORT: u16 = 4444;
+/// Ephemeral port range start.
+const EPHEMERAL_PORT_START: u16 = 4445;
+/// Ephemeral port range end (inclusive).
+const EPHEMERAL_PORT_END: u16 = 4460;
 
 // ---------------------------------------------------------------------------
 // Project root detection
@@ -177,8 +219,15 @@ async fn main() {
     let project_root = env::current_dir().expect("Failed to determine current directory");
 
     match cli.command {
-        // Non-serve subcommands
+        // ---------------------------------------------------------------
+        // kmd add <paths> — workspace only
+        // ---------------------------------------------------------------
         Some(Commands::Add { paths }) => {
+            if !services::workspace::is_workspace(&project_root) {
+                eprintln!("  No workspace found. Run `kmd init` first.");
+                std::process::exit(1);
+            }
+
             // Resolve paths to absolute so the server can make them relative to its root
             let abs_paths: Vec<String> = paths
                 .iter()
@@ -205,7 +254,15 @@ async fn main() {
             }
             return;
         }
+        // ---------------------------------------------------------------
+        // kmd remove <path> — workspace only
+        // ---------------------------------------------------------------
         Some(Commands::Remove { path }) => {
+            if !services::workspace::is_workspace(&project_root) {
+                eprintln!("  No workspace found. Run `kmd init` first.");
+                std::process::exit(1);
+            }
+
             let port = get_workspace_port(&project_root);
             if try_api_remove(port, &path) {
                 eprintln!("  (server notified — hot-reloading roots)");
@@ -215,46 +272,64 @@ async fn main() {
             }
             return;
         }
+        // ---------------------------------------------------------------
+        // kmd list — works in both modes
+        // ---------------------------------------------------------------
         Some(Commands::List) => {
             services::workspace::list_workspace(&project_root);
             return;
         }
+        // ---------------------------------------------------------------
+        // kmd init — create workspace
+        // ---------------------------------------------------------------
         Some(Commands::Init { name }) => {
-            let mut config = services::workspace::load_or_create_workspace(&project_root);
-            if let Some(name) = name {
-                config.name = name;
+            if services::workspace::is_workspace(&project_root) {
+                let dim = "\x1b[2m";
+                let reset = "\x1b[0m";
+                eprintln!("  {dim}Workspace already initialized in {}{reset}", project_root.display());
+                return;
             }
-            // Rewrite to apply name override
-            let kmd_dir = project_root.join(".kmd");
-            std::fs::create_dir_all(&kmd_dir).expect("Failed to create .kmd directory");
-            let config_path = kmd_dir.join("workspace.json");
-            let json = serde_json::to_string_pretty(&config).expect("Failed to serialize config");
-            std::fs::write(&config_path, format!("{json}\n")).expect("Failed to write workspace.json");
+
+            let config = services::workspace::init_workspace(&project_root, name);
 
             let dim = "\x1b[2m";
             let reset = "\x1b[0m";
             eprintln!("  Initialized .kmd/ in {}", project_root.display());
             eprintln!("  {dim}Workspace: {}{reset}", config.name);
+            eprintln!("  {dim}Port: {} (fixed){reset}", config.port);
+            eprintln!("  {dim}Run `kmd` to start the server.{reset}");
             return;
         }
-        // Serve (explicit or default)
+        // ---------------------------------------------------------------
+        // kmd status — workspace only
+        // ---------------------------------------------------------------
+        Some(Commands::Status) => {
+            cmd_status(&project_root);
+            return;
+        }
+        // ---------------------------------------------------------------
+        // kmd serve — explicit start (same as bare kmd)
+        // ---------------------------------------------------------------
         Some(Commands::Serve {
             port,
             no_open,
             force,
             name,
         }) => {
+            let port_override = port.or(cli.port);
             run_server(
                 project_root,
-                port.unwrap_or(cli.port),
+                port_override,
                 no_open || cli.no_open,
                 force || cli.force,
                 name.or(cli.name),
             )
             .await;
         }
+        // ---------------------------------------------------------------
+        // bare kmd — start server (auto-detect mode)
+        // ---------------------------------------------------------------
         None => {
-            // Default: bare `kmd` = start server
             run_server(
                 project_root,
                 cli.port,
@@ -265,6 +340,56 @@ async fn main() {
             .await;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// kmd status command
+// ---------------------------------------------------------------------------
+
+fn cmd_status(project_root: &Path) {
+    let bold = "\x1b[1m";
+    let dim = "\x1b[2m";
+    let green = "\x1b[32m";
+    let yellow = "\x1b[33m";
+    let reset = "\x1b[0m";
+
+    let config = match services::workspace::load_workspace(project_root) {
+        Some(c) => c,
+        None => {
+            eprintln!("  No workspace found. Run `kmd init` first.");
+            std::process::exit(1);
+        }
+    };
+
+    let lock_path = lockfile_path(project_root);
+    if lock_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&lock_path) {
+            if let Ok(lock) = serde_json::from_str::<ServerLock>(&content) {
+                if is_pid_alive(lock.pid) {
+                    println!(
+                        "  {green}{bold}K.md{reset} workspace '{name}' running on port {port} (PID {pid})",
+                        name = config.name,
+                        port = lock.port,
+                        pid = lock.pid,
+                    );
+                    return;
+                } else {
+                    // Stale lockfile — clean it up
+                    let _ = std::fs::remove_file(&lock_path);
+                    println!(
+                        "  {yellow}K.md{reset} workspace '{name}' not running {dim}(stale lockfile cleaned up){reset}",
+                        name = config.name,
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
+    println!(
+        "  {dim}K.md{reset} workspace '{name}' not running",
+        name = config.name,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -283,8 +408,10 @@ fn get_workspace_port(project_root: &Path) -> u16 {
         return port;
     }
     // Fall back to workspace.json
-    let config = services::workspace::load_or_create_workspace(project_root);
-    config.port
+    if let Some(config) = services::workspace::load_workspace(project_root) {
+        return config.port;
+    }
+    WORKSPACE_DEFAULT_PORT
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +429,7 @@ fn lockfile_path(project_root: &Path) -> PathBuf {
     project_root.join(".kmd").join("server.lock")
 }
 
-/// Write the server lockfile after binding.
+/// Write the server lockfile after binding (workspace mode only).
 fn write_lockfile(project_root: &Path, port: u16) {
     let lock = ServerLock {
         pid: std::process::id(),
@@ -428,7 +555,7 @@ fn try_api_remove(port: u16, path: &str) -> bool {
 
 async fn run_server(
     project_root: std::path::PathBuf,
-    port: u16,
+    port_override: Option<u16>,
     no_open: bool,
     force: bool,
     name_override: Option<String>,
@@ -441,16 +568,44 @@ async fn run_server(
     let reset = "\x1b[0m";
 
     // -----------------------------------------------------------------------
-    // Load workspace config
+    // Detect mode
     // -----------------------------------------------------------------------
-    let mut ws_config = services::workspace::load_or_create_workspace(&project_root);
-    if let Some(name) = name_override {
-        ws_config.name = name;
-    }
+    let mode = detect_mode(&project_root);
 
-    // Use workspace config port as default, with CLI --port as override.
-    // CLI default is 4444; if user didn't pass --port explicitly, prefer workspace config.
-    let port = if port != 4444 { port } else { ws_config.port };
+    // -----------------------------------------------------------------------
+    // Build workspace config and determine port + db_dir based on mode
+    // -----------------------------------------------------------------------
+    let (ws_config, port, db_dir, is_workspace_mode, temp_dir_to_cleanup) = match mode {
+        ServerMode::Workspace { mut config, kmd_dir } => {
+            if let Some(name) = name_override {
+                config.name = name;
+            }
+            // Workspace mode: fixed port from config, or CLI override
+            let port = port_override.unwrap_or(config.port);
+            (config, port, kmd_dir, true, None)
+        }
+        ServerMode::Ephemeral { cwd } => {
+            // Ephemeral mode: temp dir for DB, auto-pick port from 4445-4460
+            let temp_dir = std::env::temp_dir().join(format!("kmd-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&temp_dir).expect("Failed to create temp directory");
+
+            let dir_name = cwd
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("ephemeral")
+                .to_string();
+
+            let config = services::workspace::WorkspaceConfig {
+                name: name_override.unwrap_or(dir_name),
+                roots: vec![".".to_string()],
+                port: EPHEMERAL_PORT_START,
+            };
+            // Ephemeral: use CLI override or auto-detect starting from 4445
+            let port = port_override.unwrap_or(EPHEMERAL_PORT_START);
+            let cleanup_path = temp_dir.clone();
+            (config, port, temp_dir, false, Some(cleanup_path))
+        }
+    };
 
     // -----------------------------------------------------------------------
     // Tier 1 & 2: Project root detection + guardrails per root
@@ -483,8 +638,8 @@ async fn run_server(
             // Wait for user input
             let stdin = io::stdin();
             let _ = stdin.lock().lines().next();
-        } else if !project_root.join(".kmd").exists() {
-            // Small non-project directory — single-line note
+        } else if !is_workspace_mode {
+            // Ephemeral, small non-project directory — single-line note
             eprintln!(
                 "  {dim}No project root detected, scanning from {}{reset}",
                 project_root.display()
@@ -493,9 +648,9 @@ async fn run_server(
     }
 
     // -----------------------------------------------------------------------
-    // Initialize state (creates .kmd/ dir, DB, config.json)
+    // Initialize state
     // -----------------------------------------------------------------------
-    let state = AppState::new(project_root.clone(), ws_config);
+    let state = AppState::new(project_root.clone(), ws_config, &db_dir, is_workspace_mode);
 
     // Channel to receive the file count from the indexing task
     let (file_count_tx, file_count_rx) = oneshot::channel::<usize>();
@@ -584,35 +739,82 @@ async fn run_server(
     let app = server::build_router(state.clone());
 
     // -----------------------------------------------------------------------
-    // Port auto-increment: try port, port+1, ..., port+10
+    // Port binding
     // -----------------------------------------------------------------------
-    let mut actual_port = port;
-    let mut listener = None;
-
-    for offset in 0..=10 {
-        let try_port = port.saturating_add(offset);
-        let addr = SocketAddr::from(([127, 0, 0, 1], try_port));
+    let (actual_port, listener) = if is_workspace_mode && port_override.is_none() {
+        // Workspace mode with no CLI override: fixed port, error if taken
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
         match TcpListener::bind(addr).await {
-            Ok(l) => {
-                actual_port = try_port;
-                listener = Some(l);
-                break;
-            }
-            Err(_) if offset < 10 => {
-                tracing::debug!("Port {try_port} in use, trying next...");
-                continue;
-            }
-            Err(e) => {
-                eprintln!("  Failed to bind to ports {port}-{try_port}: {e}");
+            Ok(l) => (port, l),
+            Err(_) => {
+                eprintln!(
+                    "  Port {port} is already in use. Is another kmd instance running? Check with `kmd status`."
+                );
                 std::process::exit(1);
             }
         }
-    }
+    } else if !is_workspace_mode && port_override.is_none() {
+        // Ephemeral mode with no CLI override: auto-increment 4445-4460
+        let mut actual_port = EPHEMERAL_PORT_START;
+        let mut listener = None;
 
-    let listener = listener.expect("Failed to bind to any port");
+        for try_port in EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END {
+            let addr = SocketAddr::from(([127, 0, 0, 1], try_port));
+            match TcpListener::bind(addr).await {
+                Ok(l) => {
+                    actual_port = try_port;
+                    listener = Some(l);
+                    break;
+                }
+                Err(_) => {
+                    tracing::debug!("Port {try_port} in use, trying next...");
+                    continue;
+                }
+            }
+        }
+
+        match listener {
+            Some(l) => (actual_port, l),
+            None => {
+                eprintln!(
+                    "  No available ports in range {EPHEMERAL_PORT_START}-{EPHEMERAL_PORT_END}. Close some kmd instances."
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        // Explicit --port flag: try that port, auto-increment up to +10
+        let mut actual_port = port;
+        let mut listener = None;
+
+        for offset in 0..=10 {
+            let try_port = port.saturating_add(offset);
+            let addr = SocketAddr::from(([127, 0, 0, 1], try_port));
+            match TcpListener::bind(addr).await {
+                Ok(l) => {
+                    actual_port = try_port;
+                    listener = Some(l);
+                    break;
+                }
+                Err(_) if offset < 10 => {
+                    tracing::debug!("Port {try_port} in use, trying next...");
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("  Failed to bind to ports {port}-{try_port}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        (actual_port, listener.expect("Failed to bind to any port"))
+    };
 
     // Write the server lockfile so CLI commands can find the actual port
-    write_lockfile(&project_root, actual_port);
+    // (only in workspace mode — ephemeral doesn't leave artifacts)
+    if is_workspace_mode {
+        write_lockfile(&project_root, actual_port);
+    }
 
     // Wait (briefly) for the file count from indexing to show in the banner.
     let file_count = tokio::time::timeout(
@@ -623,7 +825,9 @@ async fn run_server(
     .ok()
     .and_then(|r| r.ok());
 
+    // -----------------------------------------------------------------------
     // Print startup banner
+    // -----------------------------------------------------------------------
     let ws_name = state.workspace_name();
     {
         let roots = state.roots();
@@ -636,30 +840,65 @@ async fn run_server(
         );
         println!("  {yellow}kausing much damage{reset}");
         println!("  {dim}-------------------------------{reset}");
-        println!(
-            "  {dim}Name{reset} {dim}······{reset} {ws_name}"
-        );
-        if let Some(count) = file_count {
+
+        if is_workspace_mode {
+            // Workspace mode banner
             println!(
-                "  {dim}Docs{reset} {dim}······{reset} {count} file{} indexed",
-                if count == 1 { "" } else { "s" }
+                "  {dim}Name{reset} {dim}······{reset} {ws_name}"
             );
-        }
-        if root_count == 1 {
+            if let Some(count) = file_count {
+                println!(
+                    "  {dim}Docs{reset} {dim}······{reset} {count} file{} indexed",
+                    if count == 1 { "" } else { "s" }
+                );
+            }
+            if root_count == 1 {
+                println!(
+                    "  {dim}Root{reset} {dim}······{reset} {}",
+                    roots[0].absolute_path.display()
+                );
+            } else {
+                println!(
+                    "  {dim}Roots{reset} {dim}·····{reset} {root_count} directories"
+                );
+                for root in roots.iter() {
+                    println!(
+                        "  {dim}       ·{reset} {} {dim}({}){reset}",
+                        root.relative_path,
+                        root.absolute_path.display()
+                    );
+                }
+            }
             println!(
-                "  {dim}Root{reset} {dim}······{reset} {}",
-                roots[0].absolute_path.display()
+                "  {dim}Port{reset} {dim}······{reset} {actual_port} (fixed)"
             );
         } else {
+            // Ephemeral mode banner
             println!(
-                "  {dim}Roots{reset} {dim}·····{reset} {root_count} directories"
+                "  {dim}Mode{reset} {dim}······{reset} ephemeral"
             );
-            for root in roots.iter() {
+            if let Some(count) = file_count {
                 println!(
-                    "  {dim}       ·{reset} {} {dim}({}){reset}",
-                    root.relative_path,
-                    root.absolute_path.display()
+                    "  {dim}Docs{reset} {dim}······{reset} {count} file{} indexed",
+                    if count == 1 { "" } else { "s" }
                 );
+            }
+            if root_count == 1 {
+                println!(
+                    "  {dim}Root{reset} {dim}······{reset} {}",
+                    roots[0].absolute_path.display()
+                );
+            } else {
+                println!(
+                    "  {dim}Roots{reset} {dim}·····{reset} {root_count} directories"
+                );
+                for root in roots.iter() {
+                    println!(
+                        "  {dim}       ·{reset} {} {dim}({}){reset}",
+                        root.relative_path,
+                        root.absolute_path.display()
+                    );
+                }
             }
         }
     }
@@ -684,8 +923,22 @@ async fn run_server(
         .await
         .expect("Server error");
 
-    // Clean up the server lockfile
-    delete_lockfile(&project_root);
+    // -----------------------------------------------------------------------
+    // Cleanup on shutdown
+    // -----------------------------------------------------------------------
+    if is_workspace_mode {
+        // Clean up the server lockfile
+        delete_lockfile(&project_root);
+    }
+
+    // Ephemeral mode: clean up the temp directory
+    if let Some(temp_dir) = temp_dir_to_cleanup {
+        if let Err(err) = std::fs::remove_dir_all(&temp_dir) {
+            tracing::warn!("Failed to clean up temp directory {}: {err}", temp_dir.display());
+        } else {
+            tracing::info!("Cleaned up ephemeral temp directory: {}", temp_dir.display());
+        }
+    }
 
     println!("\n  {bold}K{reset}{bold}\x1b[33m.\x1b[0m{dim}md{reset} shut down cleanly.\n");
 }

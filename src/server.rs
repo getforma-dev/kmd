@@ -87,7 +87,7 @@ async fn static_handler(req: Request<Body>) -> impl IntoResponse {
 // Workspace API handler
 // ---------------------------------------------------------------------------
 
-/// `GET /api/workspace` — Return workspace name and roots info.
+/// `GET /api/workspace` — Return workspace name, roots info, and mode.
 async fn api_workspace_handler(State(state): State<AppState>) -> impl IntoResponse {
     let roots: Vec<serde_json::Value> = state
         .roots()
@@ -103,6 +103,7 @@ async fn api_workspace_handler(State(state): State<AppState>) -> impl IntoRespon
     Json(serde_json::json!({
         "name": state.workspace_name(),
         "roots": roots,
+        "mode": if state.is_workspace() { "workspace" } else { "ephemeral" },
     }))
 }
 

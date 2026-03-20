@@ -2,16 +2,18 @@ use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
 
-/// Initialize the SQLite database at `.kmd/dev.db`, creating the directory
+/// Initialize the SQLite database at `db_dir/dev.db`, creating the directory
 /// and all tables/triggers if they don't already exist.
 ///
-/// Also writes `.kmd/config.json` on first creation (does not overwrite).
+/// For workspace mode, `db_dir` is `.kmd/` inside the project root.
+/// For ephemeral mode, `db_dir` is a temp directory.
+///
+/// Optionally writes `config.json` in the db_dir on first creation (does not overwrite).
 ///
 /// If the existing DB schema is outdated (pre-multi-root, missing `root`
 /// column), the tables are dropped and recreated.
-pub fn init_db(project_root: &Path) -> rusqlite::Result<Connection> {
-    let db_dir = project_root.join(".kmd");
-    fs::create_dir_all(&db_dir).expect("Failed to create .kmd directory");
+pub fn init_db(db_dir: &Path) -> rusqlite::Result<Connection> {
+    fs::create_dir_all(db_dir).expect("Failed to create database directory");
 
     // Write default config.json if it doesn't exist
     let config_path = db_dir.join("config.json");

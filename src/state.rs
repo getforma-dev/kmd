@@ -57,12 +57,17 @@ pub struct AppStateInner {
     pub roots: Mutex<Vec<WorkspaceRoot>>,
     /// The project root directory (where .kmd/ lives).
     pub project_root: PathBuf,
+    /// Whether this is running in workspace mode (true) or ephemeral mode (false).
+    pub is_workspace: bool,
 }
 
 impl AppState {
-    /// Create a new AppState, initializing the SQLite DB under `project_root/.kmd/`.
-    pub fn new(project_root: PathBuf, ws_config: WorkspaceConfig) -> Self {
-        let conn = db::init_db(&project_root).expect("Failed to initialize database");
+    /// Create a new AppState, initializing the SQLite DB in the given `db_dir`.
+    ///
+    /// - For workspace mode: `db_dir` is `project_root/.kmd/`
+    /// - For ephemeral mode: `db_dir` is a temp directory
+    pub fn new(project_root: PathBuf, ws_config: WorkspaceConfig, db_dir: &Path, is_workspace: bool) -> Self {
+        let conn = db::init_db(db_dir).expect("Failed to initialize database");
 
         // Broadcast channel with a reasonable buffer; slow consumers drop old messages.
         let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(256);
@@ -78,6 +83,7 @@ impl AppState {
                 workspace_name: ws_config.name,
                 roots: Mutex::new(roots),
                 project_root,
+                is_workspace,
             }),
         }
     }
@@ -116,6 +122,11 @@ impl AppState {
     /// Get the project root directory (where .kmd/ lives).
     pub fn project_root(&self) -> &Path {
         &self.inner.project_root
+    }
+
+    /// Whether this is running in workspace mode (true) or ephemeral mode (false).
+    pub fn is_workspace(&self) -> bool {
+        self.inner.is_workspace
     }
 
     /// Resolve a workspace config's roots into WorkspaceRoot structs.

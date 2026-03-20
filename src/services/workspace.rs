@@ -28,32 +28,45 @@ impl Default for WorkspaceConfig {
     }
 }
 
+/// Check if a workspace exists in the given directory (i.e. `.kmd/workspace.json` exists).
+pub fn is_workspace(cwd: &Path) -> bool {
+    cwd.join(".kmd").join("workspace.json").exists()
+}
+
+/// Load workspace config from `.kmd/workspace.json`, returning `None` if it doesn't exist.
+pub fn load_workspace(cwd: &Path) -> Option<WorkspaceConfig> {
+    let config_path = cwd.join(".kmd").join("workspace.json");
+
+    if !config_path.exists() {
+        return None;
+    }
+
+    match fs::read_to_string(&config_path) {
+        Ok(content) => match serde_json::from_str::<WorkspaceConfig>(&content) {
+            Ok(mut config) => {
+                validate_roots(cwd, &mut config);
+                Some(config)
+            }
+            Err(err) => {
+                tracing::warn!("Failed to parse workspace.json, ignoring: {err}");
+                None
+            }
+        },
+        Err(err) => {
+            tracing::warn!("Failed to read workspace.json, ignoring: {err}");
+            None
+        }
+    }
+}
+
 /// Load workspace config from `.kmd/workspace.json`, or create it with defaults.
 ///
 /// The `cwd` is the directory that contains (or will contain) the `.kmd/` directory.
+/// NOTE: This creates the .kmd/ directory and workspace.json if they don't exist.
+/// For mode detection, use `load_workspace()` instead.
 pub fn load_or_create_workspace(cwd: &Path) -> WorkspaceConfig {
-    let kmd_dir = cwd.join(".kmd");
-    let config_path = kmd_dir.join("workspace.json");
-
-    if config_path.exists() {
-        match fs::read_to_string(&config_path) {
-            Ok(content) => match serde_json::from_str::<WorkspaceConfig>(&content) {
-                Ok(mut config) => {
-                    validate_roots(cwd, &mut config);
-                    return config;
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "Failed to parse workspace.json, using defaults: {err}"
-                    );
-                }
-            },
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to read workspace.json, using defaults: {err}"
-                );
-            }
-        }
+    if let Some(config) = load_workspace(cwd) {
+        return config;
     }
 
     // Create .kmd/ and write default workspace.json
@@ -62,6 +75,24 @@ pub fn load_or_create_workspace(cwd: &Path) -> WorkspaceConfig {
         ..Default::default()
     };
     write_config(cwd, &config);
+    config
+}
+
+/// Create a new workspace config and write it to `.kmd/workspace.json`.
+/// Used by `kmd init`. Returns the created config.
+pub fn init_workspace(cwd: &Path, name_override: Option<String>) -> WorkspaceConfig {
+    let kmd_dir = cwd.join(".kmd");
+    fs::create_dir_all(&kmd_dir).expect("Failed to create .kmd directory");
+
+    let config = WorkspaceConfig {
+        name: name_override.unwrap_or_else(|| infer_workspace_name(cwd)),
+        ..Default::default()
+    };
+
+    let config_path = kmd_dir.join("workspace.json");
+    let json = serde_json::to_string_pretty(&config).expect("Failed to serialize config");
+    fs::write(&config_path, format!("{json}\n")).expect("Failed to write workspace.json");
+
     config
 }
 
@@ -140,39 +171,51 @@ pub fn remove_root(cwd: &Path, path: &str) {
     write_config(cwd, &config);
 }
 
-/// Print workspace info to stdout.
+/// Print workspace info to stdout. Works in both modes.
 pub fn list_workspace(cwd: &Path) {
-    let config = load_or_create_workspace(cwd);
-
     let bold = "\x1b[1m";
     let dim = "\x1b[2m";
     let yellow = "\x1b[33m";
     let reset = "\x1b[0m";
 
-    println!();
-    println!(
-        "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} workspace"
-    );
-    println!("  {dim}──────────────────────────────{reset}");
-    println!("  {dim}Name{reset}  {dim}·····{reset} {}", config.name);
-    println!("  {dim}Port{reset}  {dim}·····{reset} {}", config.port);
-    println!(
-        "  {dim}Roots{reset} {dim}····{reset} {} root{}",
-        config.roots.len(),
-        if config.roots.len() == 1 { "" } else { "s" }
-    );
-
-    for (i, root) in config.roots.iter().enumerate() {
-        let abs = resolve_root(cwd, root);
-        let exists = abs.exists();
-        let marker = if exists { " " } else { "!" };
-        let status = if exists { "" } else { " (missing)" };
+    if let Some(config) = load_workspace(cwd) {
+        // Workspace mode
+        println!();
         println!(
-            "  {dim}{:>3}.{reset} {marker} {root}{dim}{status}{reset}",
-            i + 1
+            "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} workspace"
         );
+        println!("  {dim}──────────────────────────────{reset}");
+        println!("  {dim}Name{reset}  {dim}·····{reset} {}", config.name);
+        println!("  {dim}Port{reset}  {dim}·····{reset} {} (fixed)", config.port);
+        println!(
+            "  {dim}Roots{reset} {dim}····{reset} {} root{}",
+            config.roots.len(),
+            if config.roots.len() == 1 { "" } else { "s" }
+        );
+
+        for (i, root) in config.roots.iter().enumerate() {
+            let abs = resolve_root(cwd, root);
+            let exists = abs.exists();
+            let marker = if exists { " " } else { "!" };
+            let status = if exists { "" } else { " (missing)" };
+            println!(
+                "  {dim}{:>3}.{reset} {marker} {root}{dim}{status}{reset}",
+                i + 1
+            );
+        }
+        println!();
+    } else {
+        // Ephemeral mode
+        println!();
+        println!(
+            "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} {dim}(ephemeral){reset}"
+        );
+        println!("  {dim}──────────────────────────────{reset}");
+        println!("  {dim}Mode{reset}  {dim}·····{reset} ephemeral");
+        println!("  {dim}Root{reset}  {dim}·····{reset} {}", cwd.display());
+        println!("  {dim}Port{reset}  {dim}·····{reset} auto (4445-4460)");
+        println!();
     }
-    println!();
 }
 
 // ---------------------------------------------------------------------------
