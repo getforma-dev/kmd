@@ -524,16 +524,20 @@ code, pre, kbd {
 /* --- Terminal / Output Panel --- */
 /* Script output terminal (not xterm.js — scoped to avoid conflict) */
 .terminal:not(.xterm) {
-  background: var(--terminal-bg);
-  border: 1px solid var(--gruvbox-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-md);
+  background: #1d2021;
+  border: none;
+  border-radius: 0;
+  padding: 4px 8px;
   font-family: var(--font-code);
   font-size: 12px;
   line-height: 1.5;
   overflow: auto;
   max-height: 400px;
   color: var(--gruvbox-fg);
+}
+
+[data-theme="light"] .terminal:not(.xterm) {
+  background: #f9f5d7;
 }
 
 .terminal-line {

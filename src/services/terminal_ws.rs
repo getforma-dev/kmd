@@ -80,6 +80,8 @@ async fn handle_terminal_ws(socket: WebSocket, cols: u16, rows: u16) {
     let pty_to_ws = task::spawn(async move {
         // The PTY reader is blocking, so we wrap it in spawn_blocking.
         // We use a channel to bridge blocking reads to the async WebSocket sender.
+        // Bounded channel provides backpressure: if the WebSocket can't keep up,
+        // blocking_send will block the PTY reader thread, slowing down PTY output.
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
         // Blocking reader thread

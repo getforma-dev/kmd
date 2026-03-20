@@ -6,6 +6,8 @@ import { FitAddon } from '@xterm/addon-fit';
 // Types
 // ---------------------------------------------------------------------------
 
+type SessionState = 'active' | 'ended';
+
 interface SessionEntry {
   id: string;
   term: Terminal;
@@ -14,6 +16,7 @@ interface SessionEntry {
   container: HTMLDivElement;
   resizeHandler: () => void;
   containerObserver: ResizeObserver;
+  state: SessionState;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +53,8 @@ export function TerminalPage() {
     for (const id of ids) {
       const idx = ids.indexOf(id) + 1;
       const isActive = id === active;
+      const entry = sessionMap.get(id);
+      const isEnded = entry?.state === 'ended';
 
       const tab = document.createElement('div');
       tab.style.cssText = `display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0;`;
@@ -57,29 +62,52 @@ export function TerminalPage() {
       const tabBtn = document.createElement('button');
       tabBtn.className = 'btn btn-ghost';
       tabBtn.style.cssText = `padding: 2px 8px; font-size: 11px; font-family: var(--font-mono); ${
-        isActive ? 'border-color: var(--accent); color: var(--accent);' : ''
+        isEnded
+          ? 'color: var(--gruvbox-gray); opacity: 0.5;'
+          : isActive
+            ? 'border-color: var(--accent); color: var(--accent);'
+            : ''
       }`;
       tabBtn.textContent = `${idx}`;
       tabBtn.addEventListener('click', () => switchToSession(id));
       tab.appendChild(tabBtn);
 
-      // Trash icon button — like VS Code terminal close
-      const closeBtn = document.createElement('button');
-      closeBtn.style.cssText = 'background: none; border: none; cursor: pointer; padding: 2px; border-radius: 2px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.1s;';
-      closeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
-      closeBtn.style.color = 'var(--gruvbox-gray)';
-      closeBtn.title = 'Kill terminal';
-      closeBtn.onmouseenter = () => { closeBtn.style.color = 'var(--gruvbox-red)'; closeBtn.style.background = 'rgba(251,73,52,0.1)'; };
-      closeBtn.onmouseleave = () => { closeBtn.style.color = 'var(--gruvbox-gray)'; closeBtn.style.background = 'none'; };
-      closeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        killSession(id);
-      });
-      tab.appendChild(closeBtn);
+      if (isEnded) {
+        // Restart button replaces the close button for ended sessions
+        const restartBtn = document.createElement('button');
+        restartBtn.style.cssText = 'background: none; border: none; cursor: pointer; padding: 2px; border-radius: 2px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.1s;';
+        restartBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+        restartBtn.style.color = 'var(--gruvbox-gray)';
+        restartBtn.title = 'Restart terminal';
+        restartBtn.onmouseenter = () => { restartBtn.style.color = 'var(--gruvbox-green)'; restartBtn.style.background = 'rgba(184,187,38,0.1)'; };
+        restartBtn.onmouseleave = () => { restartBtn.style.color = 'var(--gruvbox-gray)'; restartBtn.style.background = 'none'; };
+        restartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          restartSession(id);
+        });
+        tab.appendChild(restartBtn);
 
-      // Show close button on tab hover
-      tab.onmouseenter = () => { closeBtn.style.opacity = '1'; };
-      tab.onmouseleave = () => { closeBtn.style.opacity = '0'; };
+        tab.onmouseenter = () => { restartBtn.style.opacity = '1'; };
+        tab.onmouseleave = () => { restartBtn.style.opacity = '0'; };
+      } else {
+        // Trash icon button — like VS Code terminal close
+        const closeBtn = document.createElement('button');
+        closeBtn.style.cssText = 'background: none; border: none; cursor: pointer; padding: 2px; border-radius: 2px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.1s;';
+        closeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+        closeBtn.style.color = 'var(--gruvbox-gray)';
+        closeBtn.title = 'Kill terminal';
+        closeBtn.onmouseenter = () => { closeBtn.style.color = 'var(--gruvbox-red)'; closeBtn.style.background = 'rgba(251,73,52,0.1)'; };
+        closeBtn.onmouseleave = () => { closeBtn.style.color = 'var(--gruvbox-gray)'; closeBtn.style.background = 'none'; };
+        closeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          killSession(id);
+        });
+        tab.appendChild(closeBtn);
+
+        // Show close button on tab hover
+        tab.onmouseenter = () => { closeBtn.style.opacity = '1'; };
+        tab.onmouseleave = () => { closeBtn.style.opacity = '0'; };
+      }
 
       tabBar.appendChild(tab);
     }
@@ -115,6 +143,26 @@ export function TerminalPage() {
           }
           entry.term.focus();
         });
+      });
+    }
+  }
+
+  function restartSession(id: string) {
+    const ids = sessions();
+    const idx = ids.indexOf(id);
+
+    // Kill the old session (cleans up PTY, WS, DOM)
+    killSession(id);
+
+    // Create a fresh session — it will auto-activate
+    const newId = createSession();
+
+    // Move the new session to the same tab position
+    if (newId && idx >= 0) {
+      setSessions((prev) => {
+        const without = prev.filter((s) => s !== newId);
+        without.splice(idx, 0, newId);
+        return without;
       });
     }
   }
@@ -261,6 +309,12 @@ export function TerminalPage() {
 
     ws.onclose = () => {
       term.write('\r\n\x1b[90m[Session ended]\x1b[0m\r\n');
+      const entry = sessionMap.get(localId);
+      if (entry) {
+        entry.state = 'ended';
+      }
+      // Trigger tab bar re-render to show ended state + restart button
+      setSessions((prev) => [...prev]);
     };
 
     ws.onerror = () => {
@@ -287,6 +341,7 @@ export function TerminalPage() {
       container,
       resizeHandler,
       containerObserver: containerResizeObserver,
+      state: 'active',
     });
 
     return localId;
