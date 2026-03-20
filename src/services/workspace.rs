@@ -317,24 +317,17 @@ pub fn list_workspace(cwd: &Path) {
             if any_sub_project_name.is_none() {
                 any_sub_project_name = child_projects.first().map(|(n, _)| n.clone());
             }
-            // Count total visible folders to detect non-project dirs with content
-            let total_visible_dirs = fs::read_dir(&abs)
-                .map(|entries| {
-                    entries.flatten().filter(|e| {
-                        e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
-                            && e.file_name().to_str().map(|n| !n.starts_with('.') && n != "node_modules" && n != "target" && n != "dist").unwrap_or(false)
-                    }).count()
-                })
-                .unwrap_or(0);
-            let other_folders = total_visible_dirs.saturating_sub(sub_count);
 
-            if other_folders > 0 {
+            // Count folders that actually contain .md files (what the sidebar shows)
+            let folders_with_docs = count_child_dirs_with_docs(&abs);
+
+            if folders_with_docs > 0 {
                 println!(
-                    "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str} · {sub_count} sub-projects + {other_folders} other folders{reset}"
+                    "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str} · {folders_with_docs} folders{reset}"
                 );
             } else {
                 println!(
-                    "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str} · {sub_count} sub-projects{reset}"
+                    "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str}{reset}"
                 );
             }
             // Show sub-project names in columns
@@ -423,6 +416,35 @@ fn find_child_projects(parent: &Path) -> Vec<(String, Vec<String>)> {
 
     projects.sort_by(|a, b| a.0.cmp(&b.0));
     projects
+}
+
+/// Count immediate child directories that contain at least one .md file.
+/// This matches what the file tree sidebar will actually show.
+fn count_child_dirs_with_docs(parent: &Path) -> usize {
+    let entries = match fs::read_dir(parent) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+
+    let mut count = 0;
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = match entry.file_name().to_str() {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
+            continue;
+        }
+        // Check if this directory (or its children) has any .md files
+        let (docs, _, _) = quick_scan_counts(&entry.path());
+        if docs > 0 {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Quick count of .md files and runnable scripts in a directory.
