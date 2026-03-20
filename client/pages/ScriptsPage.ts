@@ -385,7 +385,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           // Initialize the output buffer
           processOutputMap.set(pid, [
             { type: 'system', text: `$ npm run ${scriptName}` },
-            { type: 'system', text: `  in ${packagePath === '.' ? 'project root' : packagePath}` },
+            { type: 'system', text: `  in ${packagePath === '.' ? 'root' : packagePath}` },
             { type: 'system', text: '' },
           ]);
 

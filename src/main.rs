@@ -28,7 +28,7 @@ struct Cli {
     #[arg(long)]
     no_open: bool,
 
-    /// Skip the project root detection warning
+    /// Skip warnings for large directories
     #[arg(long)]
     force: bool,
 }

@@ -53,7 +53,7 @@ export function CommandPalette(props: CommandPaletteProps) {
     { id: 'action-scan', label: 'Scan ports', secondary: 'Trigger a port scan', category: 'action', action: () => props.onAction('scan-ports') },
     { id: 'action-refresh', label: 'Refresh docs', secondary: 'Re-fetch documentation tree', category: 'action', action: () => props.onAction('refresh-docs') },
     { id: 'action-help', label: 'Help', secondary: 'CLI commands, shortcuts, tips', category: 'action', action: () => props.onAction('help') },
-    { id: 'action-workspace', label: 'Workspace settings', secondary: 'Add/remove project roots', category: 'action', action: () => props.onAction('workspace-settings') },
+    { id: 'action-workspace', label: 'Workspace settings', secondary: 'Add/remove folders', category: 'action', action: () => props.onAction('workspace-settings') },
   ];
 
   // -------------------------------------------------------------------------

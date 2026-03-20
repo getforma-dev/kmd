@@ -135,7 +135,7 @@ export function HelpPanel(props: { onClose: () => void }) {
         CmdRow('kmd delete <name>', 'Delete a workspace'),
         CmdRow('kmd --port 8080', 'Use a custom port'),
         CmdRow('kmd --no-open', 'Start without opening browser'),
-        CmdRow('kmd --force', 'Skip project root warnings'),
+        CmdRow('kmd --force', 'Skip warnings for large directories'),
       ),
 
       // Tips
