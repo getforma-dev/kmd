@@ -373,7 +373,7 @@ function App() {
   const terminalPageEl = TerminalPage();
   const terminalWrapper = h('div', {
     style: () => route() === 'terminal'
-      ? 'flex: 1; display: flex; flex-direction: column; overflow: hidden;'
+      ? 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;'
       : 'display: none;',
   }, terminalPageEl) as HTMLElement;
 

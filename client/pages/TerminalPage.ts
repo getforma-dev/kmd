@@ -25,7 +25,7 @@ export function TerminalPage() {
 
   // Parent that holds all terminal containers (each session gets its own div)
   const terminalsParent = document.createElement('div');
-  terminalsParent.style.cssText = 'flex: 1; position: relative; overflow: hidden;';
+  terminalsParent.style.cssText = 'flex: 1; min-height: 0; position: relative; overflow: hidden;';
 
   const sessionMap = new Map<string, SessionEntry>();
 
@@ -62,18 +62,23 @@ export function TerminalPage() {
       tabBtn.addEventListener('click', () => switchToSession(id));
       tab.appendChild(tabBtn);
 
-      // Close button (X) on each tab
+      // Close button — small SVG X icon, only visible on hover
       const closeBtn = document.createElement('button');
-      closeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 10px; padding: 0 2px; opacity: 0.5; line-height: 1;';
-      closeBtn.textContent = '×';
+      closeBtn.style.cssText = 'background: none; border: none; cursor: pointer; padding: 2px; border-radius: 2px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.1s;';
+      closeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg>';
+      closeBtn.style.color = 'var(--gruvbox-gray)';
       closeBtn.title = 'Close terminal';
-      closeBtn.onmouseenter = () => { closeBtn.style.opacity = '1'; closeBtn.style.color = 'var(--gruvbox-red)'; };
-      closeBtn.onmouseleave = () => { closeBtn.style.opacity = '0.5'; closeBtn.style.color = 'var(--gruvbox-gray)'; };
+      closeBtn.onmouseenter = () => { closeBtn.style.color = 'var(--gruvbox-red)'; closeBtn.style.background = 'rgba(251,73,52,0.1)'; };
+      closeBtn.onmouseleave = () => { closeBtn.style.color = 'var(--gruvbox-gray)'; closeBtn.style.background = 'none'; };
       closeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         killSession(id);
       });
       tab.appendChild(closeBtn);
+
+      // Show close button on tab hover
+      tab.onmouseenter = () => { closeBtn.style.opacity = '1'; };
+      tab.onmouseleave = () => { closeBtn.style.opacity = '0'; };
 
       tabBar.appendChild(tab);
     }
@@ -308,7 +313,7 @@ export function TerminalPage() {
   return h(
     'div',
     {
-      style: 'display: flex; flex-direction: column; height: 100%; overflow: hidden;',
+      style: 'display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;',
     },
     tabBar,
     terminalsParent,
