@@ -615,23 +615,18 @@ async fn run_server(
         eprintln!("  {dim}──────────────────────────────{reset}");
         eprintln!();
 
+        eprintln!("  {yellow}⚠{reset} This doesn't look like a project directory.");
         if project_count > 0 && count > 0 {
             eprintln!(
-                "  {yellow}!{reset} Found {bold}{count}{reset} docs across {bold}{project_count}{reset} project{}",
+                "  Found {bold}{count}{reset} docs across {bold}{project_count}{reset} project{}",
                 if project_count == 1 { "" } else { "s" }
             );
         } else if count > 0 {
             eprintln!(
-                "  {yellow}!{reset} Found {bold}{count}{reset} markdown files from {}",
-                project_root.display()
-            );
-        } else {
-            eprintln!(
-                "  {yellow}!{reset} No markdown files found in {}",
+                "  Found {bold}{count}{reset} markdown files from {}",
                 project_root.display()
             );
         }
-        eprintln!("  This doesn't look like a project directory.");
         eprintln!(
             "  {dim}No project markers found (.git, package.json, Cargo.toml, etc.){reset}"
         );
