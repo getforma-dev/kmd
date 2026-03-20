@@ -598,33 +598,54 @@ async fn run_server(
     if !force && !is_workspace_mode && !has_project_markers(&project_root) {
         let count = quick_count_md_files(&project_root);
 
-        if count > 500 {
-            eprintln!();
-            eprintln!(
-                "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
-                env!("CARGO_PKG_VERSION")
-            );
-            eprintln!("  {yellow}kausing much damage{reset}");
-            eprintln!("  {dim}-------------------------------{reset}");
-            eprintln!();
+        // No project markers — show guidance and exit (any file count)
+        eprintln!();
+        eprintln!(
+            "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
+            env!("CARGO_PKG_VERSION")
+        );
+        eprintln!("  {yellow}kausing much damage{reset}");
+        eprintln!("  {dim}-------------------------------{reset}");
+        eprintln!();
+        if count > 0 {
             eprintln!(
                 "  {yellow}!{reset} Found {bold}{count}{reset} markdown files from {}",
                 project_root.display()
             );
-            eprintln!("  This doesn't look like a project directory.");
-            eprintln!();
-            eprintln!("  {dim}What you probably want:{reset}");
-            eprintln!("    cd ~/my-project && kmd  {dim}Quick session in a project{reset}");
-            eprintln!("    kmd init                {dim}Create a workspace here{reset}");
-            eprintln!("    kmd --force             {dim}Start the server anyway ({count} files){reset}");
-            eprintln!();
-            std::process::exit(0);
-        } else if count > 0 {
+        } else {
             eprintln!(
-                "  {dim}No project root detected, scanning from {}{reset}",
+                "  {yellow}!{reset} No markdown files found in {}",
                 project_root.display()
             );
         }
+        eprintln!("  This doesn't look like a project directory.");
+
+        // Check for child projects to suggest
+        let child_projects = services::workspace::find_child_projects_public(&project_root);
+        if !child_projects.is_empty() {
+            eprintln!();
+            eprintln!(
+                "  {dim}Found {} project{} nearby:{reset}",
+                child_projects.len(),
+                if child_projects.len() == 1 { "" } else { "s" }
+            );
+            for (name, markers) in &child_projects {
+                let markers_str = markers.join(", ");
+                eprintln!("    {name}/  {dim}({markers_str}){reset}");
+            }
+        }
+
+        eprintln!();
+        eprintln!("  {dim}What you probably want:{reset}");
+        if let Some((first, _)) = child_projects.first() {
+            eprintln!("    cd {first} && kmd           {dim}Quick session in a project{reset}");
+        } else {
+            eprintln!("    cd ~/my-project && kmd  {dim}Quick session in a project{reset}");
+        }
+        eprintln!("    kmd init                {dim}Create a workspace here{reset}");
+        eprintln!("    kmd --force             {dim}Start the server anyway ({count} files){reset}");
+        eprintln!();
+        std::process::exit(0);
     }
 
     // -----------------------------------------------------------------------

@@ -318,6 +318,12 @@ pub fn list_workspace(cwd: &Path) {
 
 /// Find child directories that look like projects (have project markers).
 /// Returns Vec<(dir_name, Vec<marker_names>)>.
+/// Find child directories that look like projects (have project markers).
+/// Returns Vec<(dir_name, Vec<marker_names>)>.
+pub fn find_child_projects_public(parent: &Path) -> Vec<(String, Vec<String>)> {
+    find_child_projects(parent)
+}
+
 fn find_child_projects(parent: &Path) -> Vec<(String, Vec<String>)> {
     const PROJECT_MARKERS: &[&str] = &[".git", "package.json", "Cargo.toml", "pyproject.toml", "go.mod", "Makefile"];
     let mut projects = Vec::new();
