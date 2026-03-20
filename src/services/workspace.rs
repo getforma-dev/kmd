@@ -262,7 +262,7 @@ pub fn list_workspace(cwd: &Path) {
 
     // Per-root scan
     let mut total_docs = 0usize;
-    let mut total_pkgs = 0usize;
+    let mut total_scripts = 0usize;
 
     for root in &roots {
         let abs = resolve_root(cwd, root);
@@ -279,10 +279,10 @@ pub fn list_workspace(cwd: &Path) {
         }
 
         eprint!("  {dim}Scanning {display_name}...{reset}");
-        let (doc_count, pkg_count, capped) = quick_scan_counts(&abs);
-        eprint!("\x1b[2K\r"); // ANSI: clear entire line, return to start
+        let (doc_count, script_count, capped) = quick_scan_counts(&abs);
+        eprint!("\x1b[2K\r");
         total_docs += doc_count;
-        total_pkgs += pkg_count;
+        total_scripts += script_count;
 
         // Root header
         if roots.len() > 1 {
@@ -297,10 +297,10 @@ pub fn list_workspace(cwd: &Path) {
 
         // Counts
         let doc_str = if doc_count == 1 { "doc" } else { "docs" };
-        let pkg_str = if pkg_count == 1 { "package" } else { "packages" };
+        let script_str = if script_count == 1 { "script" } else { "scripts" };
         let cap_marker = if capped { "+" } else { "" };
         println!(
-            "    {dim}{doc_count}{cap_marker} {doc_str} · {pkg_count}{cap_marker} {pkg_str}{reset}"
+            "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str}{reset}"
         );
         println!();
     }
@@ -308,9 +308,9 @@ pub fn list_workspace(cwd: &Path) {
     // Total line
     if roots.len() > 1 {
         let doc_str = if total_docs == 1 { "doc" } else { "docs" };
-        let pkg_str = if total_pkgs == 1 { "package" } else { "packages" };
+        let script_str = if total_scripts == 1 { "script" } else { "scripts" };
         println!(
-            "  {dim}Total: {total_docs} {doc_str} · {total_pkgs} {pkg_str}{reset}"
+            "  {dim}Total: {total_docs} {doc_str} · {total_scripts} {script_str}{reset}"
         );
         println!();
     }
@@ -355,16 +355,16 @@ fn find_child_projects(parent: &Path) -> Vec<(String, Vec<String>)> {
     projects
 }
 
-/// Quick count of .md files and package.json files in a directory (no content reading).
-/// Caps at 10,000 entries to avoid hanging on huge directories like ~.
-/// Returns (docs, packages, was_capped).
+/// Quick count of .md files and runnable scripts in a directory.
+/// Caps at 10,000 entries to avoid hanging on huge directories.
+/// Returns (docs, scripts, was_capped).
 fn quick_scan_counts(dir: &Path) -> (usize, usize, bool) {
     use ignore::WalkBuilder;
     use super::EXCLUDED_DIRS;
 
     let walker = WalkBuilder::new(dir)
-        .hidden(true) // skip hidden dirs like .cache, .npm, .local
-        .max_depth(Some(5)) // reasonable depth for a project
+        .hidden(true)
+        .max_depth(Some(5))
         .filter_entry(|entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
@@ -378,7 +378,7 @@ fn quick_scan_counts(dir: &Path) -> (usize, usize, bool) {
         .build();
 
     let mut docs = 0;
-    let mut pkgs = 0;
+    let mut scripts = 0;
     let mut scanned = 0;
     let mut capped = false;
     const MAX_ENTRIES: usize = 10_000;
@@ -398,12 +398,29 @@ fn quick_scan_counts(dir: &Path) -> (usize, usize, bool) {
                 docs += 1;
             }
             if path.file_name().and_then(|n| n.to_str()) == Some("package.json") {
-                pkgs += 1;
+                // Count actual scripts, not just the file
+                scripts += count_scripts_in_package_json(path);
             }
         }
     }
 
-    (docs, pkgs, capped)
+    (docs, scripts, capped)
+}
+
+/// Count the number of scripts in a package.json file.
+fn count_scripts_in_package_json(path: &Path) -> usize {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    parsed.get("scripts")
+        .and_then(|s| s.as_object())
+        .map(|obj| obj.len())
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
