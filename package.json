@@ -7,7 +7,9 @@
     "build:server": "cargo build --release",
     "start": "./target/release/kmd",
     "test": "npx playwright test",
-    "test:headed": "npx playwright test --headed"
+    "test:headed": "npx playwright test --headed",
+    "link": "ln -sf $(pwd)/target/release/kmd /usr/local/bin/kmd && echo 'Linked: kmd → /usr/local/bin/kmd'",
+    "unlink": "rm -f /usr/local/bin/kmd && echo 'Unlinked: /usr/local/bin/kmd removed'"
   },
   "dependencies": {
     "@getforma/core": "^1.0.7",
