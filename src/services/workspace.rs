@@ -397,10 +397,10 @@ pub fn list_cwd_contents(cwd: &Path, show_all: bool, sort_by_scripts: bool) {
     if !has_markers {
         println!();
         println!(
-            "  {yellow}!{reset} This doesn't look like a project directory."
+            "  {yellow}!{reset} This doesn't look like a project folder."
         );
         println!(
-            "  {dim}No project markers found (.git, package.json, Cargo.toml, etc.){reset}"
+            "  {dim}No markers found (.git, package.json, Cargo.toml, etc.){reset}"
         );
 
         let child_projects = find_child_projects(cwd);

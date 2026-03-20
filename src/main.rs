@@ -690,7 +690,7 @@ async fn run_ephemeral_server(
             eprintln!("  {dim}-------------------------------{reset}");
             eprintln!();
 
-            eprintln!("  {yellow}!{reset} This doesn't look like a project directory.");
+            eprintln!("  {yellow}!{reset} This doesn't look like a project folder.");
             if count > 0 {
                 let folder_count = std::fs::read_dir(&cwd)
                     .map(|entries| {
@@ -714,7 +714,7 @@ async fn run_ephemeral_server(
                 }
             }
             eprintln!(
-                "  {dim}No project markers found (.git, package.json, Cargo.toml, etc.){reset}"
+                "  {dim}No markers found (.git, package.json, Cargo.toml, etc.){reset}"
             );
 
             eprintln!();
