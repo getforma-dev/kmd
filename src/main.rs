@@ -602,13 +602,17 @@ async fn run_server(
         let child_projects = services::workspace::find_child_projects_public(&project_root);
         let project_count = child_projects.len();
 
+        let dir_name = project_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(".");
+
         eprintln!();
         eprintln!(
-            "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset}  v{}",
-            env!("CARGO_PKG_VERSION")
+            "  {bold}K{reset}{bold}{yellow}.{reset}{dim}md{reset} {dim}—{reset} {dir_name}"
         );
-        eprintln!("  {yellow}kausing much damage{reset}");
-        eprintln!("  {dim}-------------------------------{reset}");
+        eprintln!("  {dim}──────────────────────────────{reset}");
+        eprintln!("  {dim}Mode{reset} {dim}·····{reset} ephemeral (port auto)");
         eprintln!();
 
         if project_count > 0 && count > 0 {
@@ -628,24 +632,17 @@ async fn run_server(
             );
         }
         eprintln!("  This doesn't look like a project directory.");
+        eprintln!(
+            "  {dim}No project markers found (.git, package.json, Cargo.toml, etc.){reset}"
+        );
 
         eprintln!();
-        eprintln!("  {dim}What you probably want:{reset}");
-        if let Some((first, _)) = child_projects.first() {
-            eprintln!("    cd {first} && kmd   {dim}Quick session in a project{reset}");
-        } else {
-            eprintln!("    cd ~/my-project && kmd  {dim}Quick session in a project{reset}");
-        }
-        if let Some((first, _)) = child_projects.first() {
-            eprintln!("    kmd init               {dim}Create a workspace here{reset}");
-            eprintln!("    kmd add {first}    {dim}Then add projects one by one{reset}");
-        } else {
-            eprintln!("    kmd init               {dim}Create a workspace here{reset}");
-        }
+        eprintln!("  {dim}Quick session:{reset}              cd <project> && kmd");
+        eprintln!("  {dim}Multi-project workspace:{reset}    kmd init {dim}then{reset} kmd add <project>");
         if project_count > 0 {
-            eprintln!("    kmd --force             {dim}Start anyway ({count} docs, {project_count} projects){reset}");
+            eprintln!("  {dim}Start anyway:{reset}               kmd --force {dim}({count} docs, {project_count} projects){reset}");
         } else {
-            eprintln!("    kmd --force             {dim}Start anyway ({count} files){reset}");
+            eprintln!("  {dim}Start anyway:{reset}               kmd --force {dim}({count} files){reset}");
         }
         eprintln!();
         std::process::exit(0);
