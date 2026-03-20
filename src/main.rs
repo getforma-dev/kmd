@@ -137,7 +137,8 @@ fn quick_count_md_files(dir: &Path) -> usize {
     use ignore::WalkBuilder;
 
     let walker = WalkBuilder::new(dir)
-        .hidden(false)
+        .hidden(true) // skip .cache, .npm, .local, etc.
+        .max_depth(Some(5))
         .filter_entry(|entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
@@ -151,6 +152,7 @@ fn quick_count_md_files(dir: &Path) -> usize {
             true
         })
         .build();
+    const MAX_ENTRIES: u64 = 50_000;
 
     let dim = "\x1b[2m";
     let reset = "\x1b[0m";
@@ -162,7 +164,9 @@ fn quick_count_md_files(dir: &Path) -> usize {
 
     for result in walker {
         scanned += 1;
-        // Update spinner every 500 entries
+        if scanned > MAX_ENTRIES {
+            break;
+        }
         if scanned % 500 == 0 {
             spin_idx = (spin_idx + 1) % spinner.len();
             eprint!(
@@ -647,9 +651,7 @@ async fn run_server(
         eprintln!("  {dim}Quick session:{reset}              cd <project> && kmd");
         eprintln!("  {dim}Multi-project workspace:{reset}    kmd init {dim}then{reset} kmd add <project>");
         eprintln!("  {dim}Start server anyway:{reset}         kmd --force {dim}({count} docs){reset}");
-        if project_count > 0 {
-            eprintln!("  {dim}See project details:{reset}         kmd list");
-        }
+        eprintln!("  {dim}See project details:{reset}         kmd list");
         eprintln!();
         std::process::exit(0);
     }
