@@ -165,7 +165,7 @@ fn quick_count_md_files(dir: &Path) -> usize {
         if scanned % 500 == 0 {
             spin_idx = (spin_idx + 1) % spinner.len();
             eprint!(
-                "\r  {dim}{} Scanning... {count} docs found ({scanned} files scanned){reset}",
+                "\r  {dim}{} Scanning... {count} .md files found ({scanned} files scanned){reset}",
                 spinner[spin_idx]
             );
         }
@@ -633,11 +633,11 @@ async fn run_server(
 
             if folder_count > 0 {
                 eprintln!(
-                    "  Found {bold}{count}{reset} docs across {bold}{folder_count}{reset} folder{}",
+                    "  Found {bold}{count}{reset} .md files across {bold}{folder_count}{reset} folder{}",
                     if folder_count == 1 { "" } else { "s" }
                 );
             } else {
-                eprintln!("  Found {bold}{count}{reset} docs");
+                eprintln!("  Found {bold}{count}{reset} .md files");
             }
         }
         eprintln!(
@@ -647,7 +647,7 @@ async fn run_server(
         eprintln!();
         eprintln!("  {dim}Quick session:{reset}              cd <project> && kmd");
         eprintln!("  {dim}Multi-project workspace:{reset}    kmd init {dim}then{reset} kmd add <project>");
-        eprintln!("  {dim}Start server anyway:{reset}         kmd --force {dim}({count} docs){reset}");
+        eprintln!("  {dim}Start server anyway:{reset}         kmd --force {dim}({count} .md files){reset}");
         eprintln!("  {dim}See project details:{reset}         kmd list");
         eprintln!();
         std::process::exit(0);
@@ -657,7 +657,7 @@ async fn run_server(
         if has_markers && count > 500 {
             eprintln!();
             eprintln!(
-                "  {yellow}⚠{reset} This project has {bold}{count}{reset} docs — that's a lot."
+                "  {yellow}⚠{reset} This project has {bold}{count}{reset} .md files — that's a lot."
             );
             eprintln!(
                 "  {dim}Press Enter to continue, Ctrl+C to cancel. Use --force to skip this.{reset}"

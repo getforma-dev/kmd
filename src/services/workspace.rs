@@ -233,7 +233,7 @@ pub fn list_workspace(cwd: &Path) {
                     eprint!("  {dim}Scanning {child_name}...{reset}");
                     let (docs, scripts, _) = quick_scan_counts(&child_path);
                     eprint!("\x1b[2K\r");
-                    let doc_str = if docs == 1 { "doc" } else { "docs" };
+                    let doc_str = ".md";
                     let script_str = if scripts == 1 { "script" } else { "scripts" };
                     println!(
                         "  {white}{child_name}/{reset}  {dim}({markers_str}){reset}"
@@ -309,7 +309,7 @@ pub fn list_workspace(cwd: &Path) {
         let child_projects = find_child_projects(&abs);
         let sub_count = child_projects.len();
 
-        let doc_str = if doc_count == 1 { "doc" } else { "docs" };
+        let doc_str = ".md";
         let script_str = if script_count == 1 { "script" } else { "scripts" };
         let cap_marker = if capped { "+" } else { "" };
 
@@ -351,10 +351,6 @@ pub fn list_workspace(cwd: &Path) {
             if !folders_info.is_empty() {
                 println!();
             }
-            // Legend
-            if folders_info.iter().any(|(_, s)| *s) && folders_info.iter().any(|(_, s)| !*s) {
-                println!("    {dim}gold = scripts + docs · gray = docs only{reset}");
-            }
         } else {
             println!(
                 "    {dim}{doc_count}{cap_marker} {doc_str} · {script_count}{cap_marker} {script_str}{reset}"
@@ -365,7 +361,7 @@ pub fn list_workspace(cwd: &Path) {
 
     // Total line
     if roots.len() > 1 {
-        let doc_str = if total_docs == 1 { "doc" } else { "docs" };
+        let doc_str = ".md";
         let script_str = if total_scripts == 1 { "script" } else { "scripts" };
         println!(
             "  {dim}Total: {total_docs} {doc_str} · {total_scripts} {script_str}{reset}"
@@ -377,6 +373,9 @@ pub fn list_workspace(cwd: &Path) {
     if let Some(example) = any_sub_project_name {
         println!(
             "  {dim}Open a single project:{reset} cd <project> && kmd"
+        );
+        println!(
+            "  {dim}Make this a workspace:{reset}  kmd init"
         );
         println!();
     }
