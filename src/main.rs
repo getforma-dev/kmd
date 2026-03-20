@@ -616,7 +616,7 @@ async fn run_server(
             eprintln!("  {dim}What you probably want:{reset}");
             eprintln!("    cd ~/my-project && kmd     {dim}Quick session in a project{reset}");
             eprintln!("    kmd init                    {dim}Create a workspace here{reset}");
-            eprintln!("    kmd --force                 {dim}Start the server anyway{reset}");
+            eprintln!("    kmd --force                 {dim}Start the server anyway ({count} files){reset}");
             eprintln!();
             std::process::exit(0);
         } else if count > 0 {
