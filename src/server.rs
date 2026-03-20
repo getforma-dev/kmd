@@ -46,7 +46,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/ports", get(api_ports_handler))
         .route("/api/ports/scan", post(api_ports_scan_handler))
         .route("/api/ports/hidden", get(api_ports_hidden_get).post(api_ports_hidden_set))
-        .route("/api/ports/{port}/kill", post(api_port_kill_handler));
+        .route("/api/ports/{port}/kill", post(api_port_kill_handler))
+        // Port allocations
+        .route("/api/ports/allocations", get(api_port_allocations_handler));
 
     Router::new()
         .route("/ws", get(ws::ws_handler))
@@ -488,14 +490,18 @@ struct RunScriptBody {
     script_name: String,
 }
 
-/// `POST /api/scripts/run` — Run an npm script, returns the process ID.
+/// `POST /api/scripts/run` — Run an npm script with automatic port assignment.
 async fn api_scripts_run_handler(
     State(state): State<AppState>,
     Json(body): Json<RunScriptBody>,
 ) -> impl IntoResponse {
     let root = body.root.as_deref().unwrap_or(".");
     match process::run_script(&state, root, &body.package_path, &body.script_name) {
-        Ok(process_id) => Json(serde_json::json!({ "process_id": process_id })).into_response(),
+        Ok(result) => Json(serde_json::json!({
+            "process_id": result.process_id,
+            "assigned_port": result.assigned_port,
+            "framework": result.framework,
+        })).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": err })),
@@ -504,7 +510,7 @@ async fn api_scripts_run_handler(
     }
 }
 
-/// `GET /api/processes` — List running processes.
+/// `GET /api/processes` — List running processes with port allocations.
 async fn api_processes_handler(State(state): State<AppState>) -> impl IntoResponse {
     let processes = process::list_processes(&state);
     Json(serde_json::json!({ "processes": processes }))
@@ -556,10 +562,42 @@ async fn api_shell_exec_handler(
 // Port API handlers
 // ---------------------------------------------------------------------------
 
-/// `GET /api/ports` — Scan common dev ports and return their status.
-async fn api_ports_handler() -> impl IntoResponse {
+/// `GET /api/ports` — Scan ports and enrich with managed process info.
+async fn api_ports_handler(State(state): State<AppState>) -> impl IntoResponse {
     let port_list = ports::scan_ports().await;
-    Json(serde_json::json!({ "ports": port_list }))
+    let allocator = state.port_allocator();
+    let allocations = allocator.list_allocations();
+    drop(allocator);
+
+    // Enrich port info with allocation data
+    let enriched: Vec<serde_json::Value> = port_list
+        .iter()
+        .map(|p| {
+            let mut val = serde_json::to_value(p).unwrap_or_default();
+            if let Some(alloc) = allocations.iter().find(|a| a.port == p.port) {
+                val.as_object_mut().map(|obj| {
+                    obj.insert("managed".to_string(), serde_json::json!(true));
+                    obj.insert("managed_by".to_string(), serde_json::json!({
+                        "process_id": alloc.process_id,
+                        "package_path": alloc.package_path,
+                        "script_name": alloc.script_name,
+                        "root_name": alloc.root_name,
+                        "framework": alloc.framework,
+                    }));
+                });
+            }
+            val
+        })
+        .collect();
+
+    Json(serde_json::json!({ "ports": enriched }))
+}
+
+/// `GET /api/ports/allocations` — List all active port allocations.
+async fn api_port_allocations_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let allocator = state.port_allocator();
+    let allocations = allocator.list_allocations();
+    Json(serde_json::json!({ "allocations": allocations }))
 }
 
 /// `POST /api/ports/scan` — Trigger an immediate port scan and broadcast results.

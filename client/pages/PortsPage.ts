@@ -4,6 +4,14 @@ import { h, createSignal, createEffect, onCleanup } from '@getforma/core';
 // Types
 // ---------------------------------------------------------------------------
 
+interface ManagedBy {
+  process_id: string;
+  package_path: string;
+  script_name: string;
+  root_name: string;
+  framework: string | null;
+}
+
 interface PortInfo {
   port: number;
   active: boolean;
@@ -12,6 +20,8 @@ interface PortInfo {
   command: string | null;
   uptime_secs: number | null;
   category: string | null;
+  managed?: boolean;
+  managed_by?: ManagedBy;
 }
 
 interface ManagedProcess {
@@ -332,34 +342,64 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
         const info = document.createElement('div');
         info.style.cssText = 'flex: 1; min-width: 0;';
 
-        if (p.process_name) {
-          const name = document.createElement('div');
-          name.style.cssText = 'font-size: 13px; color: var(--gruvbox-fg);';
-          name.textContent = p.process_name;
-          info.appendChild(name);
-        }
-        if (p.command) {
-          const cmd = document.createElement('div');
-          cmd.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;';
-          cmd.textContent = p.command;
-          cmd.title = p.command;
-          info.appendChild(cmd);
-        }
+        if (p.managed && p.managed_by) {
+          // Managed process — show project/script name prominently
+          const nameRow = document.createElement('div');
+          nameRow.style.cssText = 'display: flex; align-items: center; gap: 6px;';
 
-        // Feature 9: Show managed process link if PID matches
-        const matchedProc = findManagedProcess(p.pid);
-        if (matchedProc) {
-          const managedLink = document.createElement('button');
-          managedLink.className = 'btn btn-ghost';
-          managedLink.style.cssText = 'padding: 1px 6px; font-size: 10px; margin-top: 3px; color: var(--gruvbox-aqua);';
-          managedLink.textContent = `Started by: ${matchedProc.script_name}`;
-          managedLink.title = `Switch to Scripts tab and view ${matchedProc.script_name}`;
-          managedLink.onclick = (e) => {
-            e.stopPropagation();
-            // Switch to scripts tab
-            location.hash = '#scripts';
-          };
-          info.appendChild(managedLink);
+          const name = document.createElement('span');
+          name.style.cssText = 'font-size: 13px; color: var(--gruvbox-fg); font-weight: 600;';
+          name.textContent = `${p.managed_by.script_name}`;
+          nameRow.appendChild(name);
+
+          const badge = document.createElement('span');
+          badge.style.cssText = 'font-size: 9px; padding: 1px 5px; border-radius: 2px; background: rgba(215, 153, 33, 0.15); color: var(--accent, var(--gruvbox-yellow)); font-family: var(--font-code); text-transform: uppercase; letter-spacing: 0.05em;';
+          badge.textContent = 'managed';
+          nameRow.appendChild(badge);
+
+          if (p.managed_by.framework) {
+            const fwBadge = document.createElement('span');
+            fwBadge.style.cssText = 'font-size: 9px; padding: 1px 5px; border-radius: 2px; background: rgba(131, 165, 152, 0.15); color: var(--gruvbox-blue, #83a598); font-family: var(--font-code);';
+            fwBadge.textContent = p.managed_by.framework;
+            nameRow.appendChild(fwBadge);
+          }
+
+          info.appendChild(nameRow);
+
+          const path = document.createElement('div');
+          path.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); margin-top: 1px; font-family: var(--font-code);';
+          path.textContent = p.managed_by.package_path === '.' ? p.managed_by.root_name : `${p.managed_by.root_name}/${p.managed_by.package_path}`;
+          info.appendChild(path);
+        } else {
+          // External/detected process — show raw process info
+          if (p.process_name) {
+            const name = document.createElement('div');
+            name.style.cssText = 'font-size: 13px; color: var(--gruvbox-fg);';
+            name.textContent = p.process_name;
+            info.appendChild(name);
+          }
+          if (p.command) {
+            const cmd = document.createElement('div');
+            cmd.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;';
+            cmd.textContent = p.command;
+            cmd.title = p.command;
+            info.appendChild(cmd);
+          }
+
+          // Fallback PID matching for processes started before this session
+          const matchedProc = findManagedProcess(p.pid);
+          if (matchedProc) {
+            const managedLink = document.createElement('button');
+            managedLink.className = 'btn btn-ghost';
+            managedLink.style.cssText = 'padding: 1px 6px; font-size: 10px; margin-top: 3px; color: var(--gruvbox-aqua);';
+            managedLink.textContent = `Started by: ${matchedProc.script_name}`;
+            managedLink.title = `Switch to Scripts tab and view ${matchedProc.script_name}`;
+            managedLink.onclick = (e) => {
+              e.stopPropagation();
+              location.hash = '#scripts';
+            };
+            info.appendChild(managedLink);
+          }
         }
 
         // Error message for failed kill

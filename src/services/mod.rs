@@ -1,5 +1,6 @@
 pub mod markdown;
 pub mod parser;
+pub mod port_allocator;
 pub mod ports;
 pub mod process;
 pub mod scripts;

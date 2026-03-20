@@ -1,4 +1,5 @@
 use crate::db;
+use crate::services::port_allocator::PortAllocator;
 use crate::services::workspace::WorkspaceConfig;
 use crate::ws::ServerMessage;
 use rusqlite::Connection;
@@ -19,6 +20,10 @@ pub struct ProcessInfo {
     pub started_at_secs: u64,
     /// OS-level process ID (for port-process matching).
     pub pid: Option<u32>,
+    /// Port assigned by the port allocator (if any).
+    pub assigned_port: Option<u16>,
+    /// Detected framework name (e.g. "Vite", "Next.js").
+    pub framework: Option<String>,
 }
 
 /// A running child process with its metadata.
@@ -51,6 +56,8 @@ pub struct AppStateInner {
     pub broadcast_tx: broadcast::Sender<ServerMessage>,
     /// Map of running child processes keyed by a unique ID.
     pub processes: Mutex<HashMap<String, RunningProcess>>,
+    /// Port allocator for managed script port assignment.
+    pub port_allocator: Mutex<PortAllocator>,
     /// Workspace name.
     pub workspace_name: String,
     /// Resolved workspace roots (mutable so the API can add/remove roots at runtime).
@@ -73,6 +80,7 @@ impl AppState {
                 db: Mutex::new(conn),
                 broadcast_tx,
                 processes: Mutex::new(HashMap::new()),
+                port_allocator: Mutex::new(PortAllocator::new()),
                 workspace_name: ws_config.name,
                 roots: Mutex::new(roots),
                 is_workspace: true,
@@ -98,6 +106,7 @@ impl AppState {
                 db: Mutex::new(conn),
                 broadcast_tx,
                 processes: Mutex::new(HashMap::new()),
+                port_allocator: Mutex::new(PortAllocator::new()),
                 workspace_name: name,
                 roots: Mutex::new(vec![root]),
                 is_workspace: false,
@@ -118,6 +127,11 @@ impl AppState {
     /// Access the process map (locks the mutex).
     pub fn processes(&self) -> std::sync::MutexGuard<'_, HashMap<String, RunningProcess>> {
         self.inner.processes.lock().expect("Process mutex poisoned")
+    }
+
+    /// Access the port allocator (locks the mutex).
+    pub fn port_allocator(&self) -> std::sync::MutexGuard<'_, PortAllocator> {
+        self.inner.port_allocator.lock().expect("Port allocator mutex poisoned")
     }
 
     /// Get the workspace name.

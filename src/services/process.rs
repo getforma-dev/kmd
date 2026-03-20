@@ -4,6 +4,7 @@
 //! and broadcasts output to all connected WebSocket clients via the broadcast channel.
 //! Kills entire process groups to ensure child processes are cleaned up.
 
+use crate::services::port_allocator;
 use crate::state::{AppState, ProcessInfo, RunningProcess};
 use crate::ws::ServerMessage;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -96,6 +97,13 @@ fn spawn_managed_process(
                             let mut procs = state.processes();
                             procs.remove(&pid);
                         }
+                        // Release allocated port back to the pool
+                        {
+                            let mut allocator = state.port_allocator();
+                            if let Some(alloc) = allocator.release(&pid) {
+                                tracing::info!("Released port {} for process {}", alloc.port, pid);
+                            }
+                        }
                         let _ = tx.send(ServerMessage::Exit {
                             process_id: pid,
                             code,
@@ -113,20 +121,26 @@ fn spawn_managed_process(
     Ok(process_id)
 }
 
-/// Spawn `npm run <script_name>` in the given package directory.
+/// Result from running a script — includes port allocation info.
+pub struct RunScriptResult {
+    pub process_id: String,
+    pub assigned_port: Option<u16>,
+    pub framework: Option<String>,
+}
+
+/// Spawn `npm run <script_name>` in the given package directory with intelligent port assignment.
 ///
-/// The `root` parameter is the workspace root key (e.g. "." or "packages/foo")
-/// and `package_path` is the relative path within that root to the package directory.
+/// The allocator assigns the next available port from the 4500-4599 range,
+/// injects `PORT=<assigned>` into the environment, and appends framework-specific
+/// CLI flags (e.g. `--port` for Vite) if detected from the command string.
 ///
-/// Returns the process UUID on success. The process stdout/stderr are streamed
-/// to all WebSocket clients via `ServerMessage::Stdout` / `ServerMessage::Stderr`,
-/// and a `ServerMessage::Exit` is broadcast when the process terminates.
+/// Returns the process UUID and port allocation info on success.
 pub fn run_script(
     state: &AppState,
     root: &str,
     package_path: &str,
     script_name: &str,
-) -> Result<String, String> {
+) -> Result<RunScriptResult, String> {
     let workspace_root = state
         .roots()
         .iter()
@@ -146,7 +160,7 @@ pub fn run_script(
         return Err(format!("Directory not found: {}", cwd.display()));
     }
 
-    // Prevent path traversal: ensure CWD stays within the workspace root
+    // Prevent path traversal
     let canonical_cwd = cwd
         .canonicalize()
         .map_err(|e| format!("Failed to resolve path: {e}"))?;
@@ -159,16 +173,61 @@ pub fn run_script(
 
     let process_id = Uuid::new_v4().to_string();
 
-    // Spawn in a new process group so we can kill the entire tree.
-    // On Unix, process_group(0) makes the child the leader of a new group.
+    // --- Port allocation ---
+    // Read the script command from package.json to detect framework
+    let pkg_json_path = cwd.join("package.json");
+    let script_command = port_allocator::read_script_command(&pkg_json_path, script_name)
+        .unwrap_or_default();
+
+    // Allocate a port
+    let mut allocator = state.port_allocator();
+    let assigned_port = allocator.allocate(
+        &process_id,
+        package_path,
+        script_name,
+        &workspace_root.name,
+        None, // framework filled below
+    );
+    drop(allocator);
+
+    // Detect framework and determine CLI flags
+    let framework_info = assigned_port.and_then(|port| {
+        port_allocator::detect_framework_flags(&script_command, port)
+    });
+
+    // Update allocation with framework name
+    if let Some(ref fw) = framework_info {
+        let mut allocator = state.port_allocator();
+        if let Some(alloc) = allocator.allocations_mut().get_mut(&process_id) {
+            alloc.framework = Some(fw.framework.clone());
+        }
+    }
+
+    // --- Build command ---
     let mut cmd = Command::new("npm");
     cmd.args(["run", script_name])
         .current_dir(&cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    // On Unix, put the child in its own process group so we can kill the entire
-    // tree (npm + node + vite, etc.) with a single killpg() call.
+    // Inject PORT env var if we allocated one
+    if let Some(port) = assigned_port {
+        cmd.env("PORT", port.to_string());
+        tracing::info!(
+            "Assigned port {port} to {script_name} in {package_path}{}",
+            framework_info.as_ref().map(|fw| format!(" ({})", fw.framework)).unwrap_or_default()
+        );
+    }
+
+    // Append framework-specific CLI flags (e.g. --port 4500 for Vite)
+    if let Some(ref fw) = framework_info {
+        if !fw.flags.is_empty() {
+            // npm run <script> -- <extra flags>
+            cmd.arg("--");
+            cmd.args(&fw.flags);
+        }
+    }
+
     #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
@@ -177,7 +236,14 @@ pub fn run_script(
         });
     }
 
-    let child = cmd.spawn().map_err(|e| format!("Failed to spawn process: {e}"))?;
+    let child = cmd.spawn().map_err(|e| {
+        // Release port if spawn fails
+        if assigned_port.is_some() {
+            let mut allocator = state.port_allocator();
+            allocator.release(&process_id);
+        }
+        format!("Failed to spawn process: {e}")
+    })?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -190,9 +256,17 @@ pub fn run_script(
         script_name: script_name.to_string(),
         started_at_secs: now,
         pid: None,
+        assigned_port,
+        framework: framework_info.as_ref().map(|fw| fw.framework.clone()),
     };
 
-    spawn_managed_process(state, child, meta)
+    let pid = spawn_managed_process(state, child, meta)?;
+
+    Ok(RunScriptResult {
+        process_id: pid,
+        assigned_port,
+        framework: framework_info.map(|fw| fw.framework),
+    })
 }
 
 /// Kill a running process and its entire process group.
@@ -222,6 +296,14 @@ pub fn kill_process(state: &AppState, process_id: &str) -> Result<(), String> {
         {
             let mut child = running.child;
             let _ = child.start_kill();
+        }
+
+        // Release allocated port
+        {
+            let mut allocator = state.port_allocator();
+            if let Some(alloc) = allocator.release(process_id) {
+                tracing::info!("Released port {} (killed process {})", alloc.port, process_id);
+            }
         }
 
         // Broadcast exit
@@ -294,6 +376,8 @@ pub fn run_shell_command(
         script_name: command.to_string(),
         started_at_secs: now,
         pid: None,
+        assigned_port: None,
+        framework: None,
     };
 
     spawn_managed_process(state, child, meta)

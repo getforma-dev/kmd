@@ -143,6 +143,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   const [loading, setLoading] = createSignal(true);
   const [recentsVersion, setRecentsVersion] = createSignal(0);
 
+  // Output panel open/closed (like VS Code terminal drawer)
+  const [outputOpen, setOutputOpen] = createSignal(false);
+
   // Feature 8: History state — persisted in sessionStorage
   const [history, setHistory] = createSignal<HistoryEntry[]>(loadHistory());
   const [viewingHistoryId, setViewingHistoryId] = createSignal<string | null>(null);
@@ -285,38 +288,13 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         processMetaMap.delete(pid);
       }
 
-      // Remove from active processes
-      setActiveProcesses((procs) => {
-        const updated = procs.filter((p) => p.id !== pid);
-        saveProcessTabs(updated, processOutputMap, selectedProcessId());
-        return updated;
-      });
+      // Remove from active processes (it's finished), but keep output/exit maps for the tab
+      setActiveProcesses((procs) => procs.filter((p) => p.id !== pid));
       setTabsVersion((v) => v + 1);
 
       if (selectedProcessId() === pid && !viewingHistoryId()) {
         setOutputVersion((v) => v + 1);
       }
-
-      // Auto-remove delay: longer for failures so you notice them
-      const autoCloseDelay = code === 0 ? 3000 : code != null ? 5000 : 2000;
-
-      setTimeout(() => {
-        // Only clean up if this process is no longer active
-        if (!activeProcesses().some((p) => p.id === pid)) {
-          processOutputMap.delete(pid);
-          processLabelMap.delete(pid);
-          // If this was the selected tab, deselect
-          if (selectedProcessId() === pid && !viewingHistoryId()) {
-            // Select the next available active process, or null
-            const remaining = activeProcesses();
-            setSelectedProcessId(remaining.length > 0 ? remaining[0].id : null);
-          }
-          processExitMap.delete(pid);
-          setTabsVersion((v) => v + 1);
-          setOutputVersion((v) => v + 1);
-          saveProcessTabs(activeProcesses(), processOutputMap, selectedProcessId());
-        }
-      }, autoCloseDelay);
     }
   }
 
@@ -375,23 +353,30 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       body: JSON.stringify({ root, package_path: packagePath, script_name: scriptName }),
     })
       .then((r) => r.json())
-      .then((data: { process_id?: string; error?: string }) => {
+      .then((data: { process_id?: string; assigned_port?: number; framework?: string; error?: string }) => {
         if (data.error) {
           console.error('[kmd] Failed to run script:', data.error);
           return;
         }
         if (data.process_id) {
           const pid = data.process_id;
-          // Initialize the output buffer
-          processOutputMap.set(pid, [
+          const port = data.assigned_port;
+          const fw = data.framework;
+
+          // Initialize the output buffer with port info
+          const lines: TerminalLine[] = [
             { type: 'system', text: `$ npm run ${scriptName}` },
             { type: 'system', text: `  in ${packagePath === '.' ? 'root' : packagePath}` },
-            { type: 'system', text: '' },
-          ]);
+          ];
+          if (port) {
+            lines.push({ type: 'system', text: `  PORT=${port}${fw ? ` (${fw})` : ''}` });
+          }
+          lines.push({ type: 'system', text: '' });
+          processOutputMap.set(pid, lines);
 
           // Track metadata for history + label for tab display
           processMetaMap.set(pid, { scriptName, packagePath, startTime: Date.now() });
-          processLabelMap.set(pid, scriptName);
+          processLabelMap.set(pid, port ? `${scriptName} :${port}` : scriptName);
 
           // Add to active processes
           setActiveProcesses((procs) => [
@@ -399,8 +384,9 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
             { id: pid, packagePath, scriptName },
           ]);
 
-          // Auto-select this process
+          // Auto-select this process and open output panel
           setSelectedProcessId(pid);
+          setOutputOpen(true);
           setOutputVersion((v) => v + 1);
           setTabsVersion((v) => v + 1);
 
@@ -456,22 +442,25 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
 
       for (const rec of recents) {
         const pill = document.createElement('button');
-        pill.className = 'recent-pill';
         pill.title = `Run ${rec.script} in ${rec.pkg} (${rec.count} runs)`;
-
-        const pkgSpan = document.createElement('span');
-        pkgSpan.style.cssText = 'color: var(--gruvbox-gray); font-size: 10px;';
-        pkgSpan.textContent = rec.pkg === '.' ? 'root' : rec.pkg.split('/').pop() || rec.pkg;
-        pill.appendChild(pkgSpan);
+        pill.style.cssText = `
+          font-family: var(--font-code); font-size: 12px; padding: 4px 10px;
+          background: var(--gruvbox-bg-hard); border: 1px solid var(--gruvbox-border);
+          border-radius: 3px; color: var(--gruvbox-fg); cursor: pointer;
+          display: inline-flex; align-items: center; gap: 6px;
+          transition: border-color 0.15s, color 0.15s;
+        `;
+        pill.onmouseenter = () => { pill.style.borderColor = 'var(--accent, var(--gruvbox-yellow))'; pill.style.color = 'var(--accent, var(--gruvbox-yellow))'; };
+        pill.onmouseleave = () => { pill.style.borderColor = 'var(--gruvbox-border)'; pill.style.color = 'var(--gruvbox-fg)'; };
 
         const nameSpan = document.createElement('span');
         nameSpan.textContent = rec.script;
         pill.appendChild(nameSpan);
 
-        const countSpan = document.createElement('span');
-        countSpan.style.cssText = 'font-size: 9px; color: var(--gruvbox-gray); opacity: 0.7;';
-        countSpan.textContent = `${rec.count}`;
-        pill.appendChild(countSpan);
+        const pkgSpan = document.createElement('span');
+        pkgSpan.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray);';
+        pkgSpan.textContent = rec.pkg === '.' ? 'root' : rec.pkg.split('/').pop() || rec.pkg;
+        pill.appendChild(pkgSpan);
 
         pill.onclick = () => runScriptDebounced(rec.root, rec.pkg, rec.script);
         pillRow.appendChild(pill);
@@ -490,6 +479,8 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
 
   // Track which packages are expanded (by key "root:path")
   const expandedPackages = new Set<string>();
+  // Track which folder groups are collapsed (by key "root:folder")
+  const collapsedFolders = new Set<string>();
   const [expandVersion, setExpandVersion] = createSignal(0);
 
   // Track running scripts to show state on buttons: "root:path:script" -> true
@@ -505,6 +496,15 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       expandedPackages.delete(key);
     } else {
       expandedPackages.add(key);
+    }
+    setExpandVersion((v) => v + 1);
+  }
+
+  function toggleFolder(key: string) {
+    if (collapsedFolders.has(key)) {
+      collapsedFolders.delete(key);
+    } else {
+      collapsedFolders.add(key);
     }
     setExpandVersion((v) => v + 1);
   }
@@ -534,80 +534,91 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   function PackageCard(pkg: PackageScripts, rootPath: string) {
     const pkgKey = `${rootPath}:${pkg.path}`;
 
+    const card = document.createElement('div');
+    card.style.cssText = `
+      background: var(--gruvbox-bg-soft);
+      border: 1px solid var(--gruvbox-border);
+      border-left: 3px solid var(--accent, var(--gruvbox-yellow));
+      border-radius: 4px;
+      overflow: hidden;
+    `;
+
+    // Header row — always visible
     const headerEl = document.createElement('div');
     headerEl.style.cssText = `
-      display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-      cursor: pointer; user-select: none; border-radius: 4px;
-      background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border);
+      display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+      cursor: pointer; user-select: none;
     `;
-    headerEl.onmouseenter = () => { headerEl.style.background = 'var(--gruvbox-bg-hard)'; };
-    headerEl.onmouseleave = () => { headerEl.style.background = 'var(--gruvbox-bg-soft)'; };
+    headerEl.onmouseenter = () => { headerEl.style.background = 'rgba(255,255,255,0.015)'; };
+    headerEl.onmouseleave = () => { headerEl.style.background = 'transparent'; };
 
     // Chevron
     const chevron = document.createElement('span');
-    chevron.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); transition: transform 0.15s ease; width: 12px; text-align: center;';
+    chevron.style.cssText = 'font-size: 9px; color: var(--gruvbox-gray); width: 10px; text-align: center; flex-shrink: 0;';
 
-    // Package name
-    const nameEl = document.createElement('span');
-    nameEl.style.cssText = 'font-weight: 600; font-size: 13px; color: var(--gruvbox-fg); flex: 1;';
+    // Package info (name + path)
+    const infoEl = document.createElement('div');
+    infoEl.style.cssText = 'flex: 1; min-width: 0;';
+
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'font-weight: 600; font-size: 13px; color: var(--gruvbox-fg);';
     nameEl.textContent = pkg.name;
+    infoEl.appendChild(nameEl);
 
-    // Path
-    const pathEl = document.createElement('span');
-    pathEl.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); font-family: var(--font-code);';
-    pathEl.textContent = pkg.path === '.' ? '' : pkg.path;
+    const pathEl = document.createElement('div');
+    pathEl.style.cssText = 'font-size: 11px; color: var(--gruvbox-gray); font-family: var(--font-code); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+    const jsonPath = pkg.path === '.' ? 'package.json' : `${pkg.path}/package.json`;
+    pathEl.textContent = jsonPath;
+    infoEl.appendChild(pathEl);
 
     // Script count badge
     const badge = document.createElement('span');
-    badge.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); font-family: var(--font-code); background: var(--gruvbox-bg-hard); padding: 1px 6px; border-radius: 2px;';
-    badge.textContent = `${pkg.scripts.length}`;
+    badge.style.cssText = 'font-family: var(--font-mono, var(--font-code)); font-size: 10px; color: var(--gruvbox-gray); background: var(--gruvbox-bg-hard); padding: 1px 6px; border-radius: 2px; flex-shrink: 0;';
+    badge.textContent = `${pkg.scripts.length} script${pkg.scripts.length === 1 ? '' : 's'}`;
 
     headerEl.appendChild(chevron);
-    headerEl.appendChild(nameEl);
-    if (pathEl.textContent) headerEl.appendChild(pathEl);
+    headerEl.appendChild(infoEl);
     headerEl.appendChild(badge);
 
-    // Scripts container (expandable)
+    // Scripts list (expandable)
     const scriptsEl = document.createElement('div');
-    scriptsEl.style.cssText = 'display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 8px 32px;';
+    scriptsEl.style.cssText = 'padding: 0 14px 10px 35px; display: flex; flex-wrap: wrap; gap: 6px;';
 
     for (const script of pkg.scripts) {
-      const scriptKey = `${rootPath}:${pkg.path}:${script.name}`;
       const btn = document.createElement('button');
-      btn.className = 'btn btn-ghost';
       btn.title = script.command;
-      btn.style.cssText = 'font-family: var(--font-code); font-size: 12px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 4px;';
-
-      const icon = document.createElement('span');
-      icon.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" style="width:12px;height:12px;opacity:0.6"><path d="M8 5v14l11-7L8 5z"/></svg>';
-      btn.appendChild(icon.firstChild!);
-      btn.appendChild(document.createTextNode(script.name));
-
-      btn.onclick = () => runScriptDebounced(rootPath, pkg.path, script.name);
+      btn.style.cssText = `
+        font-family: var(--font-code); font-size: 12px; padding: 4px 10px;
+        background: var(--gruvbox-bg-hard); border: 1px solid var(--gruvbox-border);
+        border-radius: 3px; color: var(--gruvbox-fg); cursor: pointer;
+        transition: border-color 0.15s, color 0.15s;
+      `;
+      btn.textContent = script.name;
+      btn.onmouseenter = () => { btn.style.borderColor = 'var(--accent, var(--gruvbox-yellow))'; btn.style.color = 'var(--accent, var(--gruvbox-yellow))'; };
+      btn.onmouseleave = () => { btn.style.borderColor = 'var(--gruvbox-border)'; btn.style.color = 'var(--gruvbox-fg)'; };
+      btn.onclick = (e) => { e.stopPropagation(); runScriptDebounced(rootPath, pkg.path, script.name); };
       scriptsEl.appendChild(btn);
     }
 
-    // Container
-    const card = document.createElement('div');
-
     // Reactively update expand state + running buttons
     createEffect(() => {
-      expandVersion(); // subscribe
-      runningVersion(); // subscribe
+      expandVersion();
+      runningVersion();
       const isExpanded = expandedPackages.has(pkgKey);
       chevron.textContent = isExpanded ? '▾' : '▸';
       scriptsEl.style.display = isExpanded ? 'flex' : 'none';
 
-      // Update button states
       for (const btn of scriptsEl.querySelectorAll('button') as NodeListOf<HTMLButtonElement>) {
         const scriptName = btn.textContent?.trim() || '';
         const key = `${rootPath}:${pkg.path}:${scriptName}`;
         if (runningScripts.has(key)) {
           btn.disabled = true;
-          btn.style.opacity = '0.5';
+          btn.style.opacity = '0.4';
+          btn.style.cursor = 'default';
         } else {
           btn.disabled = false;
           btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
         }
       }
     });
@@ -642,30 +653,30 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       // Clear existing tabs
       tabsContainer.innerHTML = '';
 
-      // Build tabs only for active processes (dead processes go to history)
-      // Also show any process that still has output and is selected
-      const visiblePids = new Set<string>();
+      // Show all processes that have output (active or finished)
+      const visiblePids: string[] = [];
       for (const proc of active) {
-        visiblePids.add(proc.id);
+        visiblePids.push(proc.id);
       }
-      // Keep the selected tab visible even if the process just died
-      // (so the user can see the exit message before it moves to history)
-      if (selected && processOutputMap.has(selected)) {
-        visiblePids.add(selected);
+      // Also show finished processes that still have output
+      for (const pid of processOutputMap.keys()) {
+        if (!visiblePids.includes(pid)) {
+          visiblePids.push(pid);
+        }
       }
 
       for (const pid of visiblePids) {
         const proc = active.find((p) => p.id === pid);
         const label = proc ? proc.scriptName : (processLabelMap.get(pid) || pid.slice(0, 8));
-        const isActive = !!proc;
-        const isSelected = pid === selected && !historyId;
         const exitState = processExitMap.get(pid);
+        const isRunning = !!proc && !exitState;
+        const isSelected = pid === selected && !historyId;
 
         // Determine tab color based on state
         let tabBg = isSelected ? 'rgba(215, 153, 33, 0.1)' : 'transparent';
         let tabColor = isSelected ? 'var(--accent)' : 'var(--gruvbox-gray)';
 
-        if (!isActive && exitState) {
+        if (exitState) {
           if (exitState.code === 0) {
             tabBg = isSelected ? 'rgba(184, 187, 38, 0.1)' : 'rgba(184, 187, 38, 0.05)';
             tabColor = 'var(--gruvbox-green)';
@@ -683,13 +694,10 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           background: ${tabBg};
           color: ${tabColor};
           white-space: nowrap;
-          transition: opacity 0.3s ease;
-          ${!isActive && exitState ? 'opacity: 0.8;' : ''}
         `;
 
         // Status indicator
-        if (isActive) {
-          // Running: green dot
+        if (isRunning) {
           const dot = document.createElement('span');
           dot.className = 'status-dot active';
           dot.style.cssText = 'width: 6px; height: 6px;';
@@ -717,6 +725,30 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           setSelectedProcessId(capturedPid);
           setOutputVersion((v) => v + 1);
         };
+
+        // Close button for finished processes
+        if (exitState) {
+          const closeBtn = document.createElement('span');
+          closeBtn.style.cssText = 'font-size: 12px; line-height: 1; opacity: 0.5; margin-left: 2px;';
+          closeBtn.textContent = '×';
+          closeBtn.onmouseenter = () => { closeBtn.style.opacity = '1'; };
+          closeBtn.onmouseleave = () => { closeBtn.style.opacity = '0.5'; };
+          closeBtn.onclick = (e) => {
+            e.stopPropagation();
+            processOutputMap.delete(capturedPid);
+            processLabelMap.delete(capturedPid);
+            processExitMap.delete(capturedPid);
+            // If this was selected, pick another
+            if (selectedProcessId() === capturedPid) {
+              const remaining = [...processOutputMap.keys()];
+              setSelectedProcessId(remaining.length > 0 ? remaining[0] : null);
+            }
+            setTabsVersion((v) => v + 1);
+            setOutputVersion((v) => v + 1);
+          };
+          tabEl.appendChild(closeBtn);
+        }
+
         tabsContainer.appendChild(tabEl);
       }
     });
@@ -762,12 +794,8 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
     });
 
     return h('div', {
-      style: 'display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--gruvbox-border); overflow-x: auto; min-height: 36px;',
+      style: 'display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--gruvbox-border); overflow-x: auto; min-height: 32px;',
     },
-      // Tab label
-      h('span', {
-        style: 'font-size: 11px; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-right: var(--space-xs); white-space: nowrap;',
-      }, 'Output'),
       tabsContainer,
       killBtnContainer,
     );
@@ -844,13 +872,20 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         item.onmouseenter = () => { if (!isViewing) item.style.background = 'rgba(255,255,255,0.02)'; };
         item.onmouseleave = () => { if (!isViewing) item.style.background = 'transparent'; };
 
-        // Exit code indicator
-        const exitDot = document.createElement('span');
-        exitDot.style.cssText = `
-          width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-          background: ${entry.exitCode === 0 ? 'var(--gruvbox-green)' : entry.exitCode != null ? 'var(--gruvbox-red)' : 'var(--gruvbox-gray)'};
-        `;
-        item.appendChild(exitDot);
+        // Exit code indicator — ✓ for success, ✗ for failure, — for killed
+        const exitIndicator = document.createElement('span');
+        exitIndicator.style.cssText = 'font-size: 10px; line-height: 1; flex-shrink: 0; width: 10px; text-align: center;';
+        if (entry.exitCode === 0) {
+          exitIndicator.textContent = '✓';
+          exitIndicator.style.color = 'var(--gruvbox-green)';
+        } else if (entry.exitCode != null) {
+          exitIndicator.textContent = '✗';
+          exitIndicator.style.color = 'var(--gruvbox-red)';
+        } else {
+          exitIndicator.textContent = '—';
+          exitIndicator.style.color = 'var(--gruvbox-gray)';
+        }
+        item.appendChild(exitIndicator);
 
         // Script name
         const nameEl = document.createElement('span');
@@ -890,12 +925,21 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   // Full layout
   // -------------------------------------------------------------------------
 
+  // Output panel container — reactively shown/hidden
+  const outputPanel = document.createElement('div');
+  outputPanel.style.cssText = 'flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+
+  createEffect(() => {
+    const open = outputOpen();
+    outputPanel.style.display = open ? 'flex' : 'none';
+  });
+
   return h('div', {
     style: 'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
   },
-    // Top section: recents + packages grid
+    // Top section: recents + packages grid — takes full space when output closed
     h('div', {
-      style: 'flex: 0 0 auto; max-height: 50%; overflow-y: auto; padding: var(--space-lg); border-bottom: 1px solid var(--gruvbox-border);',
+      style: () => `flex: 1; overflow-y: auto; padding: var(--space-lg); ${outputOpen() ? 'max-height: 50%;' : ''}`,
     },
       // Feature 7: Recents
       RecentsSection(),
@@ -924,6 +968,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
             const filter = packageFilter().toLowerCase();
             const roots = rootScripts();
             const multiRoot = isMultiRoot();
+            expandVersion(); // subscribe to folder collapse changes
 
             pkgContainer.innerHTML = '';
 
@@ -946,17 +991,87 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
                 pkgContainer.appendChild(header);
               }
 
-              const grid = document.createElement('div');
-              grid.style.cssText = 'display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px;';
+              // Group packages by top-level folder
+              const folderGroups = new Map<string, PackageScripts[]>();
+              const rootLevel: PackageScripts[] = [];
 
               for (const pkg of filtered) {
-                const card = PackageCard(pkg, root.path);
-                if (card instanceof Node) {
-                  grid.appendChild(card);
+                const slashIdx = pkg.path.indexOf('/');
+                if (slashIdx === -1 || pkg.path === '.') {
+                  rootLevel.push(pkg);
+                } else {
+                  const folder = pkg.path.substring(0, slashIdx);
+                  if (!folderGroups.has(folder)) {
+                    folderGroups.set(folder, []);
+                  }
+                  folderGroups.get(folder)!.push(pkg);
                 }
               }
 
-              pkgContainer.appendChild(grid);
+              // Render root-level packages first (no folder header)
+              if (rootLevel.length > 0) {
+                const grid = document.createElement('div');
+                grid.style.cssText = 'display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px;';
+                for (const pkg of rootLevel) {
+                  const card = PackageCard(pkg, root.path);
+                  if (card instanceof Node) grid.appendChild(card);
+                }
+                pkgContainer.appendChild(grid);
+              }
+
+              // Render folder groups with collapsible headers (matches ports category style)
+              for (const [folder, packages] of folderGroups) {
+                const folderKey = `${root.path}:${folder}`;
+                const isCollapsed = collapsedFolders.has(folderKey);
+
+                const folderSection = document.createElement('div');
+                folderSection.style.cssText = 'margin-bottom: 16px;';
+
+                // Folder header — same style as ports category headers
+                const folderHeader = document.createElement('div');
+                folderHeader.style.cssText = `
+                  font-family: var(--font-mono, var(--font-code));
+                  font-size: 10px;
+                  text-transform: uppercase;
+                  letter-spacing: 0.1em;
+                  color: var(--accent, var(--gruvbox-yellow));
+                  margin-bottom: ${isCollapsed ? '0' : '6px'};
+                  padding-left: 2px;
+                  display: flex;
+                  align-items: center;
+                  gap: 6px;
+                  cursor: pointer;
+                  user-select: none;
+                `;
+
+                const chevron = document.createElement('span');
+                chevron.style.cssText = 'font-size: 9px; transition: transform 0.15s;';
+                chevron.textContent = isCollapsed ? '▸' : '▾';
+
+                const totalScripts = packages.reduce((sum, p) => sum + p.scripts.length, 0);
+                const labelText = document.createTextNode(`${folder} · ${packages.length} pkg · ${totalScripts} scripts`);
+
+                folderHeader.appendChild(chevron);
+                folderHeader.appendChild(labelText);
+
+                const capturedKey = folderKey;
+                folderHeader.onclick = () => toggleFolder(capturedKey);
+
+                folderSection.appendChild(folderHeader);
+
+                // Package cards (hidden when collapsed)
+                if (!isCollapsed) {
+                  const grid = document.createElement('div');
+                  grid.style.cssText = 'display: flex; flex-direction: column; gap: 6px;';
+                  for (const pkg of packages) {
+                    const card = PackageCard(pkg, root.path);
+                    if (card instanceof Node) grid.appendChild(card);
+                  }
+                  folderSection.appendChild(grid);
+                }
+
+                pkgContainer.appendChild(folderSection);
+              }
             }
 
             if (pkgContainer.children.length === 0 && filter) {
@@ -993,32 +1108,73 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       ),
     ),
 
-    // Bottom section: terminal output + command input
+    // Toggle bar — always visible, acts as handle to open/close output
     h('div', {
-      style: 'flex: 1; display: flex; flex-direction: column; min-height: 200px; overflow: hidden;',
+      style: `
+        display: flex; align-items: center; gap: 8px;
+        padding: 4px var(--space-sm);
+        border-top: 1px solid var(--gruvbox-border);
+        background: var(--gruvbox-bg-soft);
+        cursor: pointer; user-select: none;
+        flex-shrink: 0;
+      `,
+      onClick: () => setOutputOpen(!outputOpen()),
     },
-      ProcessTabs(),
-      HistoryPanel(),
-      h('div', {
-        style: 'flex: 1; overflow: hidden; padding: 4px 0 0 0; background: #1d2021;',
-      },
-        createShow(
-          () => selectedProcessId() !== null || viewingHistoryId() !== null,
-          () => {
-            const termEl = Terminal({ lines: terminalLines });
-            (termEl as HTMLElement).style.cssText += 'height: 100%; max-height: none;';
-            return termEl;
-          },
-          () => h('div', {
-            class: 'terminal',
-            style: 'height: 100%; max-height: none; display: flex; align-items: center; justify-content: center;',
-          },
-            h('span', {
-              style: 'color: var(--gruvbox-gray); font-style: italic;',
-            }, 'Run a script to see output here'),
-          ),
-        ),
+      h('span', {
+        style: 'font-size: 11px; color: var(--gruvbox-gray); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; font-family: var(--font-mono, var(--font-code));',
+      }, 'Output'),
+      h('span', {
+        style: 'font-size: 9px; color: var(--gruvbox-gray);',
+      }, () => outputOpen() ? '▾' : '▴'),
+      // Show active process count when collapsed
+      createShow(
+        () => {
+          tabsVersion(); // subscribe to tab changes
+          const running = activeProcesses().filter((p) => !processExitMap.has(p.id)).length;
+          return !outputOpen() && running > 0;
+        },
+        () => {
+          const badge = document.createElement('span');
+          badge.style.cssText = 'font-size: 10px; font-family: var(--font-code); padding: 1px 6px; border-radius: 2px; background: rgba(184, 187, 38, 0.15); color: var(--gruvbox-green);';
+          createEffect(() => {
+            tabsVersion();
+            const count = activeProcesses().filter((p) => !processExitMap.has(p.id)).length;
+            badge.textContent = `${count} running`;
+          });
+          return badge;
+        },
       ),
     ),
+
+    // Output panel — collapsible
+    (() => {
+      // Populate the output panel
+      outputPanel.appendChild(ProcessTabs() as Node);
+      outputPanel.appendChild(HistoryPanel() as Node);
+
+      const termContainer = document.createElement('div');
+      termContainer.style.cssText = 'flex: 1; overflow: hidden; padding: 4px 0 0 0; background: #1d2021;';
+
+      const termContent = createShow(
+        () => selectedProcessId() !== null || viewingHistoryId() !== null,
+        () => {
+          const termEl = Terminal({ lines: terminalLines });
+          (termEl as HTMLElement).style.cssText += 'height: 100%; max-height: none;';
+          return termEl;
+        },
+        () => h('div', {
+          class: 'terminal',
+          style: 'height: 100%; max-height: none; display: flex; align-items: center; justify-content: center;',
+        },
+          h('span', {
+            style: 'color: var(--gruvbox-gray); font-style: italic;',
+          }, 'Run a script to see output here'),
+        ),
+      );
+      if (termContent instanceof Node) termContainer.appendChild(termContent);
+      outputPanel.appendChild(termContainer);
+
+      return outputPanel;
+    })(),
   );
 }
