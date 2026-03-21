@@ -81,15 +81,20 @@ export function Sidebar(props: {
 
   return h('aside', { class: 'sidebar' },
     h('div', { class: 'sidebar-header' },
-      h('span', { class: 'sidebar-logo' },
-        'K',
-        h('span', { class: 'dot' }, '.'),
-        h('span', { class: 'md' }, 'md'),
-      ),
-      h('span', { class: 'sidebar-version' },
+      h('div', { style: 'display: flex; flex-direction: column; gap: 6px; min-width: 0;' },
+        h('span', { class: 'sidebar-logo' },
+          'K',
+          h('span', { class: 'dot' }, '.'),
+          h('span', { class: 'md' }, 'md'),
+        ),
         props.workspaceName
-          ? () => props.workspaceName!()
-          : 'v0.1.0',
+          ? h('div', { class: 'sidebar-project' },
+              h('span', {
+                class: 'sidebar-project-name',
+                title: () => props.workspaceName!(),
+              }, () => props.workspaceName!()),
+            )
+          : h('span', { class: 'sidebar-version' }, 'v0.1.0'),
       ),
     ),
     h('nav', { class: 'sidebar-nav' }, ...navItems),

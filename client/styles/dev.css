@@ -208,6 +208,26 @@ code, pre, kbd {
   font-family: var(--font-code);
 }
 
+.sidebar-project {
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-project-name {
+  font-family: var(--font-code);
+  font-size: 11px;
+  color: var(--accent, var(--gruvbox-yellow));
+  background: rgba(215, 153, 33, 0.1);
+  border: 1px solid rgba(215, 153, 33, 0.2);
+  padding: 2px 8px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  letter-spacing: 0.02em;
+}
+
 .sidebar-nav {
   flex: 1;
   padding: var(--space-sm) 0;
