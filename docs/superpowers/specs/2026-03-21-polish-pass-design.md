@@ -14,18 +14,22 @@ When you click a script button (e.g. "dev"), nothing changes on the button itsel
 
 ### Design
 
-Track running process IDs per script key (`root:packagePath:scriptName`). When a script is running:
+New `Map<string, string>` called `activeScriptMap` keyed by `root:packagePath:scriptName` → `processId`. This is the true "is this script running" state (the existing `runningScripts` Set is just a 2-second debounce timer, not actual running state).
 
-- The button gets a pulsing green dot (same `status-dot active` used in process tabs) prepended to the label
-- The button text changes from `dev` to `dev · running`
-- The button is disabled (no double-starts, same debounce we already have but visual)
+- Populated in `runScript()` when the API response arrives with a process_id
+- Cleared in `handleWsMessage()` when an `exit` message arrives (lookup processId in the map values)
+- The `PackageCard` `createEffect` checks this map to determine button state
+
+When a script is running:
+
+- The button gets a pulsing green dot (same `status-dot active` used in process tabs)
+- The button is disabled with reduced opacity
+- Script name is stored in a `data-script` attribute on the button (not read from `textContent`, since that would break if we append status text)
 - On process exit, the button returns to its default state
-
-The running state is derived from `activeProcesses` signal + `processExitMap` — no new state needed. The `PackageCard` function already subscribes to `runningVersion`; we just need to enhance the visual from "opacity: 0.4" to the proper indicator.
 
 ### Files Changed
 
-- `client/pages/ScriptsPage.ts` — `PackageCard` function, button rendering inside the `createEffect`
+- `client/pages/ScriptsPage.ts` — new `activeScriptMap`, populate in `runScript`, clear on exit, read in `PackageCard` effect. Store script name in `data-script` attribute instead of reading `btn.textContent`.
 
 ---
 
@@ -50,7 +54,9 @@ Replace the strip-and-textContent approach with an ANSI-to-HTML renderer. Parse 
 - 24-bit true color (`38;2;R;G;B`)
 - Cursor movement, erase sequences (not relevant for line-by-line output)
 
-**Color mapping:** Use Gruvbox palette colors for the 16 standard ANSI colors so output looks native to the theme.
+**Color mapping:** Use Gruvbox dark palette colors for the 16 standard ANSI colors. These must be hardcoded (not CSS variables that flip with theme), because the terminal background is always dark (`#1d2021`). CSS classes are scoped under `.terminal` to avoid conflicts.
+
+**Unsupported sequences:** Any ANSI sequence not in the supported set is silently stripped (same as current behavior). Never rendered as raw escape text.
 
 **Implementation:** A function `renderAnsiLine(text: string): HTMLElement` that:
 1. Splits the line on ANSI escape sequences
@@ -63,7 +69,7 @@ This replaces the current `lineEl.textContent = stripAnsi(line.text)` in Termina
 ### Files Changed
 
 - `client/components/Terminal.ts` — replace `stripAnsi` + `textContent` with `renderAnsiLine`
-- `client/styles/dev.css` — add ANSI color classes mapped to Gruvbox palette
+- `client/styles/dev.css` — add ANSI color classes under `.terminal` scope with hardcoded dark Gruvbox colors
 
 ---
 
@@ -84,13 +90,13 @@ The assigned port info is already returned by `/api/scripts/run` and stored in `
 ### Data Flow
 
 - `runScript()` already stores `port` from the API response
-- Store port in a `Map<string, number>` keyed by `root:packagePath:scriptName`
-- `PackageCard` reads this map in its reactive effect alongside `runningScripts`
-- On process exit, clear the entry
+- Store port in a `Map<string, string>` called `runningPortMap` keyed by `root:packagePath:scriptName` → port string (e.g. "4500")
+- `PackageCard` reads this map in its reactive effect alongside `activeScriptMap`
+- On process exit, clear the entry. The exit handler receives `process_id`, so `processMetaMap` needs a `rootPath` field added to enable reverse lookup from processId → composite key for cleanup.
 
 ### Files Changed
 
-- `client/pages/ScriptsPage.ts` — new `runningPortMap`, populate on script run, read in `PackageCard`
+- `client/pages/ScriptsPage.ts` — new `runningPortMap`, add `rootPath` to `processMetaMap` entries, populate on script run, clear on exit, read in `PackageCard`
 
 ---
 
@@ -104,7 +110,7 @@ After clicking Kill on a port and getting the success state, the port list doesn
 
 Already half-implemented: `killPort()` in PortsPage.ts calls `scanNow()` after a successful kill (line 163: `setTimeout(() => scanNow(), 500)`). But `scanNow` hits `POST /api/ports/scan` which broadcasts raw un-enriched data.
 
-Fix: after a successful kill, call `fetchPorts()` (the enriched GET endpoint) instead of `scanNow()`. This also picks up the managed badge correctly.
+Fix: after a successful kill, call `fetchPorts()` (the enriched GET endpoint) instead of `scanNow()`. This also picks up the managed badge correctly. The 500ms delay is best-effort — if the OS hasn't released the port yet, the next periodic WS-triggered refresh (every 5s) will catch it.
 
 ### Files Changed
 
@@ -141,8 +147,8 @@ Help panel doesn't mention:
 
 Add these to the existing Help panel sections:
 
-- **Keyboard Shortcuts section:** Add row for focus mode toggle
-- **Tips section:** Add bullet for command palette doc search ("Cmd+K searches docs, pages, and actions")
+- **Tips section:** Add bullet for focus mode ("Focus mode button in the Docs tab hides the file tree and TOC for distraction-free reading"). Note: focus mode has no keyboard shortcut — it's a UI button only.
+- **Tips section:** Add bullet for command palette doc search ("Cmd+K also searches across all docs, not just pages and actions")
 - **Tips section:** Add bullet for theme toggle ("Toggle dark/light mode from the sidebar")
 
 ### Files Changed
