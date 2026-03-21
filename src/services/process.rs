@@ -183,16 +183,24 @@ pub fn run_script(
     let script_command = port_allocator::read_script_command(&pkg_json_path, script_name)
         .unwrap_or_default();
 
-    // Allocate a port
-    let mut allocator = state.port_allocator();
-    let assigned_port = allocator.allocate(
-        &process_id,
-        package_path,
-        script_name,
-        &workspace_root.name,
-        None, // framework filled below
-    );
-    drop(allocator);
+    // Only assign ports to scripts that look like dev servers.
+    // Build, test, lint, typecheck etc. don't listen on ports.
+    let needs_port = port_allocator::is_server_script(script_name, &script_command);
+
+    let assigned_port = if needs_port {
+        let mut allocator = state.port_allocator();
+        let port = allocator.allocate(
+            &process_id,
+            package_path,
+            script_name,
+            &workspace_root.name,
+            None,
+        );
+        drop(allocator);
+        port
+    } else {
+        None
+    };
 
     // Detect framework and determine CLI flags
     let framework_info = assigned_port.and_then(|port| {
