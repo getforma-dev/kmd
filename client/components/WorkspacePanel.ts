@@ -1,4 +1,4 @@
-import { h, createSignal, createEffect } from '@getforma/core';
+import { h, createSignal, createEffect, createShow } from '@getforma/core';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -309,31 +309,34 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
         FoldersList(),
       ),
 
-      // Add folder section (only in workspace mode)
-      h('div', { class: 'ws-panel-section' },
-        h('div', { class: 'ws-panel-section-title' }, 'Add Folder'),
-        h('div', { class: 'ws-panel-add-row' },
-          h('input', {
-            class: 'ws-panel-input',
-            type: 'text',
-            placeholder: 'Absolute path (e.g., /Users/me/dev/project)',
-            ref: (el: Element) => {
-              inputRef = el as HTMLInputElement;
-            },
-            onInput: (e: Event) => {
-              setInputValue((e.target as HTMLInputElement).value);
-            },
-            onKeydown: handleInputKeydown,
-          }),
-          h('button', {
-            class: 'btn btn-primary',
-            style: 'white-space: nowrap;',
-            onClick: () => addFolder(inputValue()),
-            disabled: () => loading() || !inputValue().trim(),
-          }, () => loading() ? 'Adding...' : 'Add'),
+      // Add folder section — workspace mode only
+      createShow(
+        () => mode() === 'workspace',
+        () => h('div', { class: 'ws-panel-section' },
+          h('div', { class: 'ws-panel-section-title' }, 'Add Folder'),
+          h('div', { class: 'ws-panel-add-row' },
+            h('input', {
+              class: 'ws-panel-input',
+              type: 'text',
+              placeholder: 'Absolute path (e.g., /Users/me/dev/project)',
+              ref: (el: Element) => {
+                inputRef = el as HTMLInputElement;
+              },
+              onInput: (e: Event) => {
+                setInputValue((e.target as HTMLInputElement).value);
+              },
+              onKeydown: handleInputKeydown,
+            }),
+            h('button', {
+              class: 'btn btn-primary',
+              style: 'white-space: nowrap;',
+              onClick: () => addFolder(inputValue()),
+              disabled: () => loading() || !inputValue().trim(),
+            }, () => loading() ? 'Adding...' : 'Add'),
+          ),
+          ErrorDisplay(),
+          MonorepoMembersList(),
         ),
-        ErrorDisplay(),
-        MonorepoMembersList(),
       ),
     ),
   );
