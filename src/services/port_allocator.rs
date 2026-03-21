@@ -42,6 +42,7 @@ pub struct PortAllocator {
     allocations: HashMap<String, PortAllocation>,
 }
 
+#[allow(dead_code)]
 impl PortAllocator {
     pub fn new() -> Self {
         Self {
@@ -255,49 +256,6 @@ pub fn detect_framework_flags(command: &str, port: u16) -> Option<FrameworkFlags
     // pick it up automatically. No flags needed.
     None
 }
-
-// ---------------------------------------------------------------------------
-// Server script detection — only assign ports to scripts that start servers
-// ---------------------------------------------------------------------------
-
-/// Script names that typically start a dev server.
-const SERVER_SCRIPT_NAMES: &[&str] = &[
-    "dev", "start", "serve", "preview",
-];
-
-/// Command patterns that indicate a dev server (listens on a port).
-const SERVER_COMMAND_PATTERNS: &[&str] = &[
-    "vite", "next dev", "next start", "nuxt dev", "nuxt start", "nuxi dev",
-    "astro dev", "astro preview", "react-router dev",
-    "ng serve", "ng s", "expo start",
-    "webpack serve", "webpack-dev-server",
-    "nodemon", "ts-node-dev", "tsx watch",
-    "node server", "node src/server", "node dist/server",
-    "express", "fastify",
-    "http-server", "serve ", "live-server",
-];
-
-/// Determine if a script likely starts a dev server that listens on a port.
-/// Uses both the script name and the command string.
-pub fn is_server_script(script_name: &str, command: &str) -> bool {
-    // Check script name
-    let name_lower = script_name.to_lowercase();
-    if SERVER_SCRIPT_NAMES.iter().any(|n| name_lower == *n) {
-        return true;
-    }
-
-    // Check command string for server-like patterns
-    let cmd_lower = command.to_lowercase();
-    if SERVER_COMMAND_PATTERNS.iter().any(|p| cmd_lower.contains(p)) {
-        return true;
-    }
-
-    false
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Read the command string for a script from a package.json file.
 pub fn read_script_command(
