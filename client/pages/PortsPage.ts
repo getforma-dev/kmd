@@ -177,8 +177,8 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
           setKillResult({ port, success: false, error: data.error });
         } else if (data.confirmed) {
           setKillResult({ port, success: true });
-          // Refresh ports after successful kill
-          setTimeout(() => scanNow(), 500);
+          // Refresh enriched port data after kill
+          setTimeout(() => fetchPorts(), 500);
           // Clear success message after 3s
           setTimeout(() => {
             if (killResult()?.port === port) setKillResult(null);

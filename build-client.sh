@@ -16,7 +16,8 @@ npx esbuild client/app.ts \
   --bundle \
   --outfile=dist/client/app.js \
   --format=esm \
-  --target=es2022
+  --target=es2022 \
+  --minify
 
 # Copy static assets
 cp client/index.html dist/client/index.html
