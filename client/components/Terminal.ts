@@ -1,13 +1,149 @@
 import { h, createEffect } from '@getforma/core';
 
 // ---------------------------------------------------------------------------
-// ANSI escape code stripping
+// ANSI → HTML renderer
 // ---------------------------------------------------------------------------
 
-const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[=>]/g;
+// Matches any ANSI escape sequence (SGR, OSC, charset, mode)
+const ANSI_SEQ = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[=>]/g;
 
-function stripAnsi(text: string): string {
-  return text.replace(ANSI_REGEX, '');
+// Gruvbox dark palette for ANSI standard colors (hardcoded — terminal bg is always dark)
+const ANSI_FG: Record<number, string> = {
+  30: '#282828', 31: '#cc241d', 32: '#98971a', 33: '#d79921',
+  34: '#458588', 35: '#b16286', 36: '#689d6a', 37: '#a89984',
+  90: '#928374', 91: '#fb4934', 92: '#b8bb26', 93: '#fabd2f',
+  94: '#83a598', 95: '#d3869b', 96: '#8ec07c', 97: '#ebdbb2',
+};
+
+const ANSI_BG: Record<number, string> = {
+  40: '#282828', 41: '#cc241d', 42: '#98971a', 43: '#d79921',
+  44: '#458588', 45: '#b16286', 46: '#689d6a', 47: '#a89984',
+  100: '#928374', 101: '#fb4934', 102: '#b8bb26', 103: '#fabd2f',
+  104: '#83a598', 105: '#d3869b', 106: '#8ec07c', 107: '#ebdbb2',
+};
+
+// 256-color palette: 0-7 standard, 8-15 bright, 16-231 cube, 232-255 grayscale
+function color256(n: number): string | null {
+  if (n < 0 || n > 255) return null;
+  if (n < 8) return ANSI_FG[30 + n] || null;
+  if (n < 16) return ANSI_FG[90 + (n - 8)] || null;
+  if (n < 232) {
+    // 6x6x6 color cube
+    const idx = n - 16;
+    const r = Math.floor(idx / 36) * 51;
+    const g = Math.floor((idx % 36) / 6) * 51;
+    const b = (idx % 6) * 51;
+    return `rgb(${r},${g},${b})`;
+  }
+  // Grayscale ramp
+  const v = 8 + (n - 232) * 10;
+  return `rgb(${v},${v},${v})`;
+}
+
+interface AnsiState {
+  fg: string | null;
+  bg: string | null;
+  bold: boolean;
+  dim: boolean;
+  italic: boolean;
+  underline: boolean;
+}
+
+function applyAnsiCodes(codes: number[], state: AnsiState): void {
+  let i = 0;
+  while (i < codes.length) {
+    const c = codes[i];
+    if (c === 0) {
+      state.fg = null; state.bg = null;
+      state.bold = false; state.dim = false; state.italic = false; state.underline = false;
+    } else if (c === 1) { state.bold = true; }
+    else if (c === 2) { state.dim = true; }
+    else if (c === 3) { state.italic = true; }
+    else if (c === 4) { state.underline = true; }
+    else if (c === 22) { state.bold = false; state.dim = false; }
+    else if (c === 23) { state.italic = false; }
+    else if (c === 24) { state.underline = false; }
+    else if (c === 39) { state.fg = null; }
+    else if (c === 49) { state.bg = null; }
+    else if (ANSI_FG[c]) { state.fg = ANSI_FG[c]; }
+    else if (ANSI_BG[c]) { state.bg = ANSI_BG[c]; }
+    else if (c === 38 && codes[i + 1] === 5) {
+      state.fg = color256(codes[i + 2]) || state.fg;
+      i += 2;
+    } else if (c === 48 && codes[i + 1] === 5) {
+      state.bg = color256(codes[i + 2]) || state.bg;
+      i += 2;
+    }
+    i++;
+  }
+}
+
+function stateToStyle(state: AnsiState): string {
+  const parts: string[] = [];
+  if (state.fg) parts.push(`color:${state.fg}`);
+  if (state.bg) parts.push(`background:${state.bg}`);
+  if (state.bold) parts.push('font-weight:bold');
+  if (state.dim) parts.push('opacity:0.6');
+  if (state.italic) parts.push('font-style:italic');
+  if (state.underline) parts.push('text-decoration:underline');
+  return parts.join(';');
+}
+
+/** Render a line with ANSI escape codes into a styled div. */
+function renderAnsiLine(text: string, lineType: string): HTMLDivElement {
+  const div = document.createElement('div');
+  div.className = `terminal-line ${lineType}`;
+
+  // Fast path: no escape codes at all
+  if (!text.includes('\x1b')) {
+    div.textContent = text;
+    return div;
+  }
+
+  const state: AnsiState = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
+  let lastIndex = 0;
+
+  text.replace(ANSI_SEQ, (match, offset) => {
+    // Emit text before this escape sequence
+    if (offset > lastIndex) {
+      const chunk = text.slice(lastIndex, offset);
+      const style = stateToStyle(state);
+      if (style) {
+        const span = document.createElement('span');
+        span.style.cssText = style;
+        span.textContent = chunk;
+        div.appendChild(span);
+      } else {
+        div.appendChild(document.createTextNode(chunk));
+      }
+    }
+    lastIndex = offset + match.length;
+
+    // Parse SGR sequence: \x1b[...m
+    if (match.startsWith('\x1b[') && match.endsWith('m')) {
+      const inner = match.slice(2, -1);
+      const codes = inner ? inner.split(';').map(Number) : [0];
+      applyAnsiCodes(codes, state);
+    }
+    // All other sequences (OSC, charset, mode) are silently stripped
+    return '';
+  });
+
+  // Emit remaining text after last sequence
+  if (lastIndex < text.length) {
+    const chunk = text.slice(lastIndex);
+    const style = stateToStyle(state);
+    if (style) {
+      const span = document.createElement('span');
+      span.style.cssText = style;
+      span.textContent = chunk;
+      div.appendChild(span);
+    } else {
+      div.appendChild(document.createTextNode(chunk));
+    }
+  }
+
+  return div;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,9 +232,7 @@ export function Terminal(props: TerminalProps) {
     // Append new lines before the scroll button
     for (let i = renderedCount; i < allLines.length; i++) {
       const line = allLines[i];
-      const lineEl = document.createElement('div');
-      lineEl.className = `terminal-line ${line.type}`;
-      lineEl.textContent = stripAnsi(line.text);
+      const lineEl = renderAnsiLine(line.text, line.type);
       el.insertBefore(lineEl, scrollBtn);
     }
 
