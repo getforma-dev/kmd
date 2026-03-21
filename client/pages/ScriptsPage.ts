@@ -513,6 +513,7 @@ export function ScriptsPage(props?: ScriptsPageProps) {
 
     createEffect(() => {
       recentsVersion(); // re-run when runs change
+      runningVersion(); // re-run when running state changes
       const recents = getTopRecents(5);
 
       recentsContainer.innerHTML = '';
@@ -527,28 +528,60 @@ export function ScriptsPage(props?: ScriptsPageProps) {
       pillRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-bottom: var(--space-md);';
 
       for (const rec of recents) {
+        const scriptKey = `${rec.root}:${rec.pkg}:${rec.script}`;
+        const isRunning = activeScriptMap.has(scriptKey);
+        const port = runningPortMap.get(scriptKey);
+
         const pill = document.createElement('button');
-        pill.title = `Run ${rec.script} in ${rec.pkg} (${rec.count} runs)`;
-        pill.style.cssText = `
-          font-family: var(--font-code); font-size: 12px; padding: 4px 10px;
-          background: var(--gruvbox-bg-hard); border: 1px solid var(--gruvbox-border);
-          border-radius: 3px; color: var(--gruvbox-fg); cursor: pointer;
-          display: inline-flex; align-items: center; gap: 6px;
-          transition: border-color 0.15s, color 0.15s;
-        `;
-        pill.onmouseenter = () => { pill.style.borderColor = 'var(--accent, var(--gruvbox-yellow))'; pill.style.color = 'var(--accent, var(--gruvbox-yellow))'; };
-        pill.onmouseleave = () => { pill.style.borderColor = 'var(--gruvbox-border)'; pill.style.color = 'var(--gruvbox-fg)'; };
+        pill.title = isRunning
+          ? `${rec.script} is running${port ? ` on :${port}` : ''}`
+          : `Run ${rec.script} in ${rec.pkg} (${rec.count} runs)`;
+
+        if (isRunning) {
+          pill.style.cssText = `
+            font-family: var(--font-code); font-size: 12px; padding: 4px 10px;
+            background: var(--gruvbox-bg-hard); border: 1px solid var(--gruvbox-green);
+            border-radius: 3px; color: var(--gruvbox-green); cursor: default;
+            display: inline-flex; align-items: center; gap: 6px;
+            opacity: 0.8;
+          `;
+          pill.disabled = true;
+
+          const dot = document.createElement('span');
+          dot.className = 'status-dot active';
+          dot.style.cssText = 'width: 6px; height: 6px; flex-shrink: 0;';
+          pill.appendChild(dot);
+        } else {
+          pill.style.cssText = `
+            font-family: var(--font-code); font-size: 12px; padding: 4px 10px;
+            background: var(--gruvbox-bg-hard); border: 1px solid var(--gruvbox-border);
+            border-radius: 3px; color: var(--gruvbox-fg); cursor: pointer;
+            display: inline-flex; align-items: center; gap: 6px;
+            transition: border-color 0.15s, color 0.15s;
+          `;
+          pill.onmouseenter = () => { pill.style.borderColor = 'var(--accent, var(--gruvbox-yellow))'; pill.style.color = 'var(--accent, var(--gruvbox-yellow))'; };
+          pill.onmouseleave = () => { pill.style.borderColor = 'var(--gruvbox-border)'; pill.style.color = 'var(--gruvbox-fg)'; };
+        }
 
         const nameSpan = document.createElement('span');
         nameSpan.textContent = rec.script;
         pill.appendChild(nameSpan);
 
-        const pkgSpan = document.createElement('span');
-        pkgSpan.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray);';
-        pkgSpan.textContent = rec.pkg === '.' ? 'root' : rec.pkg.split('/').pop() || rec.pkg;
-        pill.appendChild(pkgSpan);
+        if (isRunning && port) {
+          const portSpan = document.createElement('span');
+          portSpan.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray);';
+          portSpan.textContent = `:${port}`;
+          pill.appendChild(portSpan);
+        } else {
+          const pkgSpan = document.createElement('span');
+          pkgSpan.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray);';
+          pkgSpan.textContent = rec.pkg === '.' ? 'root' : rec.pkg.split('/').pop() || rec.pkg;
+          pill.appendChild(pkgSpan);
+        }
 
-        pill.onclick = () => runScriptDebounced(rec.root, rec.pkg, rec.script);
+        if (!isRunning) {
+          pill.onclick = () => runScriptDebounced(rec.root, rec.pkg, rec.script);
+        }
         pillRow.appendChild(pill);
       }
 
@@ -707,6 +740,10 @@ export function ScriptsPage(props?: ScriptsPageProps) {
         const isActive = activeScriptMap.has(key);
         const port = runningPortMap.get(key);
 
+        // Remove any previous restart button sibling
+        const existingRestart = btn.parentElement?.querySelector(`[data-restart="${scriptName}"]`);
+        if (existingRestart) existingRestart.remove();
+
         if (isActive) {
           // Running: green dot + port + disabled
           btn.innerHTML = '';
@@ -726,6 +763,30 @@ export function ScriptsPage(props?: ScriptsPageProps) {
           btn.style.cursor = 'default';
           btn.style.borderColor = 'var(--gruvbox-green)';
           btn.style.color = 'var(--gruvbox-green)';
+
+          // Add restart button next to the running script
+          const restartBtn = document.createElement('button');
+          restartBtn.setAttribute('data-restart', scriptName);
+          restartBtn.title = 'Restart';
+          restartBtn.style.cssText = `
+            font-size: 13px; padding: 2px 6px; background: none; border: 1px solid var(--gruvbox-border);
+            border-radius: 3px; color: var(--gruvbox-gray); cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+          `;
+          restartBtn.textContent = '↻';
+          restartBtn.onmouseenter = () => { restartBtn.style.color = 'var(--accent)'; restartBtn.style.borderColor = 'var(--accent)'; };
+          restartBtn.onmouseleave = () => { restartBtn.style.color = 'var(--gruvbox-gray)'; restartBtn.style.borderColor = 'var(--gruvbox-border)'; };
+          restartBtn.onclick = (e) => {
+            e.stopPropagation();
+            const pid = activeScriptMap.get(key);
+            if (pid) {
+              if (props?.intentionalKills) props.intentionalKills.add(pid);
+              fetch(`/api/processes/${pid}/kill`, { method: 'POST' })
+                .then(() => new Promise(resolve => setTimeout(resolve, 500)))
+                .then(() => runScriptDebounced(rootPath, pkg.path, scriptName));
+            }
+          };
+          btn.after(restartBtn);
         } else if (runningScripts.has(key)) {
           // Debounce cooldown
           btn.innerHTML = '';
