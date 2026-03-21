@@ -45,9 +45,12 @@ interface ScriptRunCounts {
   [key: string]: number;
 }
 
+// Scope localStorage key by port so different kmd instances don't share recents
+const RECENTS_KEY = `kmd:${location.port}:scriptRuns`;
+
 function getScriptRunCounts(): ScriptRunCounts {
   try {
-    const raw = localStorage.getItem('kmd:scriptRuns');
+    const raw = localStorage.getItem(RECENTS_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
@@ -58,7 +61,7 @@ function incrementScriptRun(rootPath: string, packagePath: string, scriptName: s
   const counts = getScriptRunCounts();
   const key = `${rootPath}:${packagePath}:${scriptName}`;
   counts[key] = (counts[key] || 0) + 1;
-  localStorage.setItem('kmd:scriptRuns', JSON.stringify(counts));
+  localStorage.setItem(RECENTS_KEY, JSON.stringify(counts));
 }
 
 function getTopRecents(limit: number): Array<{ key: string; root: string; pkg: string; script: string; count: number }> {
