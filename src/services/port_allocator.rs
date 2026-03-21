@@ -42,6 +42,11 @@ pub struct PortAllocator {
     allocations: HashMap<String, PortAllocation>,
 }
 
+// Some methods (allocate_specific, get_allocation, find_by_port) are not yet
+// wired up but are part of the public API for planned features:
+// - allocate_specific: user override via --port in UI
+// - get_allocation: lookup by process_id for status display
+// - find_by_port: reverse lookup for port-to-process matching
 #[allow(dead_code)]
 impl PortAllocator {
     pub fn new() -> Self {
