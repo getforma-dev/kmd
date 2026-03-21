@@ -208,11 +208,6 @@ code, pre, kbd {
   font-family: var(--font-code);
 }
 
-.sidebar-project {
-  display: flex;
-  align-items: center;
-}
-
 .sidebar-project-name {
   font-family: var(--font-code);
   font-size: 11px;
