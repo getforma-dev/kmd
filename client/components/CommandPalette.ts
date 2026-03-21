@@ -113,7 +113,7 @@ export function CommandPalette(props: CommandPaletteProps) {
       .then((data: { results: SearchResult[] }) => {
         // Only update if query hasn't changed while we were fetching
         if (query().trim() === q) {
-          setDocResults(data.results.slice(0, 5));
+          setDocResults(data.results.slice(0, 10));
         }
       })
       .catch(() => {
