@@ -21,6 +21,8 @@ export interface TerminalLine {
 
 export interface TerminalProps {
   lines: () => TerminalLine[];
+  /** Reactive key — when this changes, terminal does a full rebuild (e.g. process ID). */
+  key?: () => string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +77,8 @@ export function Terminal(props: TerminalProps) {
   createEffect(() => {
     const allLines = props.lines();
 
-    const identity = allLines.length > 0 ? allLines[0].text : null;
+    // Use the key prop if provided (e.g. process ID), otherwise fall back to first line
+    const identity = props.key ? props.key() : (allLines.length > 0 ? allLines[0].text : null);
 
     const needsFullRebuild =
       identity !== renderedIdentity ||

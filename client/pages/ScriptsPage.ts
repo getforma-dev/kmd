@@ -1170,7 +1170,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       const termContent = createShow(
         () => selectedProcessId() !== null || viewingHistoryId() !== null,
         () => {
-          const termEl = Terminal({ lines: terminalLines });
+          const termEl = Terminal({ lines: terminalLines, key: () => selectedProcessId() || viewingHistoryId() });
           (termEl as HTMLElement).style.cssText += 'height: 100%; max-height: none;';
           return termEl;
         },
