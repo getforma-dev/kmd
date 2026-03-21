@@ -473,6 +473,8 @@ test.describe('Offline Assets', () => {
     const response = await page.request.get('/app.js');
     expect(response.status()).toBe(200);
     const text = await response.text();
-    expect(text).toContain('createSignal');
+    // Check for a string literal that survives minification
+    expect(text.length).toBeGreaterThan(10000);
+    expect(text).toContain('kmd');
   });
 });
