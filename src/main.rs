@@ -762,9 +762,12 @@ async fn run_ephemeral_server(
 
     let app = server::build_router(state.clone());
 
-    // Port binding — ephemeral: auto-increment 4445-4460
-    let port = port_override.unwrap_or(EPHEMERAL_PORT_START);
-    let (actual_port, listener) = if port_override.is_none() {
+    // Port binding — check PORT env var first (so kmd respects its own port allocation),
+    // then --port flag, then auto-increment 4445-4460
+    let env_port = std::env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok());
+    let explicit_port = port_override.or(env_port);
+    let port = explicit_port.unwrap_or(EPHEMERAL_PORT_START);
+    let (actual_port, listener) = if explicit_port.is_none() {
         let mut actual_port = EPHEMERAL_PORT_START;
         let mut listener = None;
 
