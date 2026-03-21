@@ -463,6 +463,14 @@ code, pre, kbd {
   background: var(--hover-overlay);
 }
 
+.file-tree-item:hover .file-tree-star {
+  opacity: 0.5 !important;
+}
+
+.file-tree-item:hover .file-tree-star:hover {
+  opacity: 1 !important;
+}
+
 .file-tree-item.selected {
   background: var(--accent-overlay);
   color: var(--accent);

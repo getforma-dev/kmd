@@ -1,5 +1,52 @@
 import { h, createSignal, createEffect } from '@getforma/core';
 
+// ---------------------------------------------------------------------------
+// Stars persistence (localStorage, scoped by port)
+// ---------------------------------------------------------------------------
+
+const STARS_KEY = `kmd:${location.port}:starredDocs`;
+
+function loadStars(): Set<string> {
+  try {
+    const raw = localStorage.getItem(STARS_KEY);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch { return new Set(); }
+}
+
+function saveStars(stars: Set<string>) {
+  try {
+    localStorage.setItem(STARS_KEY, JSON.stringify([...stars]));
+  } catch { /* ignore */ }
+}
+
+// Module-level signal so all tree instances share star state
+const [starredPaths, setStarredPaths] = createSignal<Set<string>>(loadStars());
+const [starVersion, setStarVersion] = createSignal(0);
+
+export function toggleStar(path: string) {
+  setStarredPaths((prev) => {
+    const next = new Set(prev);
+    if (next.has(path)) { next.delete(path); } else { next.add(path); }
+    saveStars(next);
+    return next;
+  });
+  setStarVersion((v) => v + 1);
+}
+
+export function isStarred(path: string): boolean {
+  starVersion(); // subscribe
+  return starredPaths().has(path);
+}
+
+export function getStarredPaths(): string[] {
+  starVersion(); // subscribe
+  return [...starredPaths()];
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 export interface TreeNode {
   name: string;
   path: string;
@@ -107,7 +154,14 @@ function TreeItem(props: {
     // Spacer to align with directory items (replaces chevron width)
     h('span', { style: 'width: 16px; display: inline-block; flex-shrink: 0;' }),
     FileIcon(),
-    h('span', { class: 'name' }, node.name),
+    h('span', { class: 'name', style: 'flex: 1;' }, node.name),
+    // Star toggle
+    h('span', {
+      class: 'file-tree-star',
+      style: () => `cursor: pointer; font-size: 12px; opacity: ${isStarred(node.path) ? '1' : '0'}; transition: opacity 0.15s; padding: 0 2px; color: var(--accent, var(--gruvbox-yellow));`,
+      onClick: (e: Event) => { e.stopPropagation(); toggleStar(node.path); },
+      title: () => isStarred(node.path) ? 'Unstar' : 'Star',
+    }, () => isStarred(node.path) ? '\u2605' : '\u2606'),
   );
 }
 
