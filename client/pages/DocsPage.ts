@@ -620,8 +620,45 @@ export function DocsPage(props?: {
         }),
       ),
 
-      // Scrollable area: search results or file tree
-      h('div', { style: 'flex: 1; overflow-y: auto; padding: var(--space-xs) 0;' },
+      // Scrollable area: search results or file tree (with keyboard nav)
+      h('div', {
+        style: 'flex: 1; overflow-y: auto; padding: var(--space-xs) 0;',
+        tabIndex: 0,
+        onKeydown: (e: KeyboardEvent) => {
+          if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter' && e.key !== 'j' && e.key !== 'k') return;
+          const container = e.currentTarget as HTMLElement;
+          const items = container.querySelectorAll('.file-tree-item') as NodeListOf<HTMLElement>;
+          if (items.length === 0) return;
+
+          // Find currently focused/selected item
+          let idx = -1;
+          for (let i = 0; i < items.length; i++) {
+            if (items[i].classList.contains('selected') || items[i].classList.contains('kb-focus')) {
+              idx = i;
+              break;
+            }
+          }
+
+          if (e.key === 'ArrowDown' || e.key === 'j') {
+            e.preventDefault();
+            const next = Math.min(idx + 1, items.length - 1);
+            for (const item of items) item.classList.remove('kb-focus');
+            items[next].classList.add('kb-focus');
+            items[next].scrollIntoView({ block: 'nearest' });
+          } else if (e.key === 'ArrowUp' || e.key === 'k') {
+            e.preventDefault();
+            const prev = Math.max(idx - 1, 0);
+            for (const item of items) item.classList.remove('kb-focus');
+            items[prev].classList.add('kb-focus');
+            items[prev].scrollIntoView({ block: 'nearest' });
+          } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (idx >= 0) {
+              items[idx].click();
+            }
+          }
+        },
+      },
         createShow(
           () => searchQuery().trim().length > 0,
           () => SearchResultsList(),

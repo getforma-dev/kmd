@@ -476,6 +476,11 @@ code, pre, kbd {
   color: var(--accent);
 }
 
+.file-tree-item.kb-focus {
+  outline: 1px solid var(--accent, var(--gruvbox-yellow));
+  outline-offset: -1px;
+}
+
 .file-tree-item svg {
   width: 16px;
   height: 16px;
