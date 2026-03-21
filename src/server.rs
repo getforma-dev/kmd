@@ -563,18 +563,64 @@ async fn api_shell_exec_handler(
 // ---------------------------------------------------------------------------
 
 /// `GET /api/ports` — Scan ports and enrich with managed process info.
+///
+/// Matches managed processes two ways:
+/// 1. By allocated port number (process respects PORT env var)
+/// 2. By PID (process ignores PORT but we still know kmd spawned it)
 async fn api_ports_handler(State(state): State<AppState>) -> impl IntoResponse {
     let port_list = ports::scan_ports().await;
+
     let allocator = state.port_allocator();
     let allocations = allocator.list_allocations();
     drop(allocator);
 
-    // Enrich port info with allocation data
+    // Also collect PID → ProcessInfo for PID-based matching
+    let procs = state.processes();
+    let pid_to_meta: Vec<(Option<u32>, crate::state::ProcessInfo)> = procs
+        .values()
+        .map(|rp| (rp.meta.pid, rp.meta.clone()))
+        .collect();
+    drop(procs);
+
     let enriched: Vec<serde_json::Value> = port_list
         .iter()
         .map(|p| {
             let mut val = serde_json::to_value(p).unwrap_or_default();
-            if let Some(alloc) = allocations.iter().find(|a| a.port == p.port) {
+
+            // Try 1: match by allocated port number
+            let alloc_match = allocations.iter().find(|a| a.port == p.port);
+
+            // Try 2: match by process group (for child processes of managed scripts).
+            // We use setpgid(0,0) when spawning, so managed process = group leader.
+            // Any child (npm → node → kmd) shares the same PGID.
+            let pid_match = if alloc_match.is_none() {
+                p.pid.and_then(|port_pid| {
+                    #[cfg(unix)]
+                    {
+                        let port_pgid = unsafe { libc::getpgid(port_pid as i32) };
+                        if port_pgid > 0 {
+                            pid_to_meta.iter().find(|(proc_pid, _)| {
+                                proc_pid.map(|pp| pp as i32 == port_pgid).unwrap_or(false)
+                            })
+                        } else {
+                            // Fallback: direct PID match
+                            pid_to_meta.iter().find(|(proc_pid, _)| {
+                                proc_pid.map(|pp| pp == port_pid).unwrap_or(false)
+                            })
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        pid_to_meta.iter().find(|(proc_pid, _)| {
+                            proc_pid.map(|pp| pp == port_pid).unwrap_or(false)
+                        })
+                    }
+                })
+            } else {
+                None
+            };
+
+            if let Some(alloc) = alloc_match {
                 val.as_object_mut().map(|obj| {
                     obj.insert("managed".to_string(), serde_json::json!(true));
                     obj.insert("managed_by".to_string(), serde_json::json!({
@@ -585,7 +631,24 @@ async fn api_ports_handler(State(state): State<AppState>) -> impl IntoResponse {
                         "framework": alloc.framework,
                     }));
                 });
+            } else if let Some((_, meta)) = pid_match {
+                // Try to get root_name from allocation if it exists
+                let root_name = allocations.iter()
+                    .find(|a| a.process_id == meta.id)
+                    .map(|a| a.root_name.as_str())
+                    .unwrap_or("");
+                val.as_object_mut().map(|obj| {
+                    obj.insert("managed".to_string(), serde_json::json!(true));
+                    obj.insert("managed_by".to_string(), serde_json::json!({
+                        "process_id": meta.id,
+                        "package_path": meta.package_path,
+                        "script_name": meta.script_name,
+                        "root_name": root_name,
+                        "framework": meta.framework,
+                    }));
+                });
             }
+
             val
         })
         .collect();
