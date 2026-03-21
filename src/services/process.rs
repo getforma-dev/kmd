@@ -195,6 +195,9 @@ pub fn run_script(
             None,
         );
         drop(allocator);
+        if port.is_none() {
+            tracing::warn!("Port pool exhausted (4500-4599) — running {script_name} without PORT assignment");
+        }
         port
     };
 

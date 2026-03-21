@@ -656,7 +656,8 @@ async fn run_workspace_server(
         .await
         .expect("Server error");
 
-    // Cleanup
+    // Cleanup: kill all managed processes so we don't leave orphans
+    cleanup_managed_processes(&state);
     cleanup_terminals();
     delete_lockfile(&name);
     println!("\n  {bold}K{reset}{bold}\x1b[33m.\x1b[0m{dim}md{reset} shut down cleanly.\n");
@@ -866,7 +867,8 @@ async fn run_ephemeral_server(
         .await
         .expect("Server error");
 
-    // Cleanup
+    // Cleanup: kill all managed processes so we don't leave orphans
+    cleanup_managed_processes(&state);
     cleanup_terminals();
 
     if let Err(err) = std::fs::remove_dir_all(&temp_dir) {
@@ -989,6 +991,20 @@ async fn bind_with_fallback(port: u16, max_offset: u16) -> (u16, TcpListener) {
     }
 
     (actual_port, listener.expect("Failed to bind to any port"))
+}
+
+/// Kill all managed script processes so we don't leave orphans on shutdown.
+fn cleanup_managed_processes(state: &crate::state::AppState) {
+    let process_ids: Vec<String> = {
+        let procs = state.processes();
+        procs.keys().cloned().collect()
+    };
+    for pid in &process_ids {
+        let _ = services::process::kill_process(state, pid);
+    }
+    if !process_ids.is_empty() {
+        tracing::info!("Killed {} managed process(es) on shutdown", process_ids.len());
+    }
 }
 
 /// Kill all PTY terminal sessions.

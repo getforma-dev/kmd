@@ -448,7 +448,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
         const actions = document.createElement('div');
         actions.style.cssText = 'display: flex; gap: 4px;';
 
-        // Hide button
+        // Hide button (always available)
         const hideBtn = document.createElement('button');
         hideBtn.className = 'btn btn-ghost';
         hideBtn.style.cssText = 'padding: 2px 6px; font-size: 10px;';
@@ -456,22 +456,62 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
         hideBtn.onclick = () => hidePort(p.port);
         actions.appendChild(hideBtn);
 
-        // Kill button — confirm if killing kmd itself
-        const killBtn = document.createElement('button');
-        killBtn.className = 'btn btn-danger';
-        killBtn.style.cssText = 'padding: 2px 8px; font-size: 10px;';
-        killBtn.textContent = killing === p.port ? 'Killing…' : 'Kill';
-        killBtn.disabled = killing === p.port;
-        killBtn.onclick = () => {
-          if (p.is_self) {
-            if (confirm('This will kill the kmd server you are currently using. This page will stop working. Continue?')) {
+        if (p.managed && p.managed_by) {
+          // Managed process: stop + restart
+          const stopBtn = document.createElement('button');
+          stopBtn.className = 'btn btn-danger';
+          stopBtn.style.cssText = 'padding: 2px 8px; font-size: 10px;';
+          stopBtn.textContent = killing === p.port ? 'Stopping…' : 'Stop';
+          stopBtn.disabled = killing === p.port;
+          stopBtn.onclick = () => {
+            // Kill via process ID (more reliable than port kill for managed)
+            fetch(`/api/processes/${p.managed_by!.process_id}/kill`, { method: 'POST' })
+              .then(() => setTimeout(() => fetchPorts(), 500))
+              .catch(() => {});
+          };
+          actions.appendChild(stopBtn);
+
+          // Restart: kill then re-run the same script
+          const restartBtn = document.createElement('button');
+          restartBtn.className = 'btn btn-ghost';
+          restartBtn.style.cssText = 'padding: 2px 8px; font-size: 10px;';
+          restartBtn.textContent = 'Restart';
+          restartBtn.onclick = () => {
+            const mb = p.managed_by!;
+            // Kill first, then re-run
+            fetch(`/api/processes/${mb.process_id}/kill`, { method: 'POST' })
+              .then(() => new Promise(resolve => setTimeout(resolve, 500)))
+              .then(() => fetch('/api/scripts/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  root: mb.root_name || '.',
+                  package_path: mb.package_path,
+                  script_name: mb.script_name,
+                }),
+              }))
+              .then(() => setTimeout(() => fetchPorts(), 1000))
+              .catch(() => {});
+          };
+          actions.appendChild(restartBtn);
+        } else {
+          // External process: kill button
+          const killBtn = document.createElement('button');
+          killBtn.className = 'btn btn-danger';
+          killBtn.style.cssText = 'padding: 2px 8px; font-size: 10px;';
+          killBtn.textContent = killing === p.port ? 'Killing…' : 'Kill';
+          killBtn.disabled = killing === p.port;
+          killBtn.onclick = () => {
+            if (p.is_self) {
+              if (confirm('This will kill the kmd server you are currently using. This page will stop working. Continue?')) {
+                killPort(p.port);
+              }
+            } else {
               killPort(p.port);
             }
-          } else {
-            killPort(p.port);
-          }
-        };
-        actions.appendChild(killBtn);
+          };
+          actions.appendChild(killBtn);
+        }
 
         card.appendChild(actions);
         cards.appendChild(card);

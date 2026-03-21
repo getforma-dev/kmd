@@ -375,7 +375,20 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       .then((r) => r.json())
       .then((data: { process_id?: string; assigned_port?: number; framework?: string; error?: string }) => {
         if (data.error) {
-          console.error('[kmd] Failed to run script:', data.error);
+          // Show error in the output panel instead of swallowing it
+          const errorPid = `error-${Date.now()}`;
+          processOutputMap.set(errorPid, [
+            { type: 'system', text: `$ npm run ${scriptName}` },
+            { type: 'system', text: `  in ${packagePath === '.' ? 'root' : packagePath}` },
+            { type: 'system', text: '' },
+            { type: 'stderr', text: `Failed to start: ${data.error}` },
+          ]);
+          processLabelMap.set(errorPid, scriptName);
+          processExitMap.set(errorPid, { code: 1, durationSecs: 0 });
+          setSelectedProcessId(errorPid);
+          setOutputOpen(true);
+          setOutputVersion((v) => v + 1);
+          setTabsVersion((v) => v + 1);
           return;
         }
         if (data.process_id) {
