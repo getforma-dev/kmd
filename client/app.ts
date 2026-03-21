@@ -171,14 +171,36 @@ function App() {
     location.hash = '#docs';
   }
 
+  // Crash badge: counts process crashes while not on Scripts tab
+  const [crashCount, setCrashCount] = createSignal(0);
+  // Processes killed intentionally from UI — don't count as crashes
+  const intentionalKills = new Set<string>();
+
+  // Clear crash badge when navigating to Scripts
+  createEffect(() => {
+    if (route() === 'scripts') {
+      setCrashCount(0);
+    }
+  });
+
   // WS message bus for cross-page communication
   const wsBus = createWSBus();
 
   // WebSocket connection
   const wsManager = createWSConnection((data) => {
     try {
-      const msg = JSON.parse(data);
+      const msg = JSON.parse(data) as { type: string; data?: { process_id?: string; code?: number | null } };
       wsBus.dispatch(msg);
+
+      // Track crashes for badge
+      if (msg.type === 'exit' && msg.data?.process_id) {
+        const pid = msg.data.process_id;
+        if (intentionalKills.has(pid)) {
+          intentionalKills.delete(pid);
+        } else if (msg.data.code !== 0 && msg.data.code !== null && route() !== 'scripts') {
+          setCrashCount((c) => c + 1);
+        }
+      }
     } catch {
       // ignore non-JSON messages
     }
@@ -358,12 +380,14 @@ function App() {
       match: 'scripts' as Route,
       render: () => ScriptsPage({
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
+        intentionalKills,
       }),
     },
     {
       match: 'ports' as Route,
       render: () => PortsPage({
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
+        intentionalKills,
       }),
     },
   ]);
@@ -393,7 +417,7 @@ function App() {
   }
 
   return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
-    Sidebar({ route, workspaceName, theme, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
+    Sidebar({ route, workspaceName, theme, crashCount, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         HamburgerButton(),

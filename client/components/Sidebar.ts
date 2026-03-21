@@ -21,6 +21,7 @@ export function Sidebar(props: {
   route: () => Route;
   workspaceName?: () => string;
   theme?: () => string;
+  crashCount?: () => number;
   onToggleTheme?: () => void;
   onHelp?: () => void;
   onWorkspaceSettings?: () => void;
@@ -29,9 +30,25 @@ export function Sidebar(props: {
     h('a', {
       class: () => `nav-item${props.route() === key ? ' active' : ''}`,
       href: `#${key}`,
+      style: 'position: relative;',
     },
       ICON_FNS[key](),
       h('span', null, LABELS[key]),
+      // Crash badge on Scripts tab
+      key === 'scripts' && props.crashCount
+        ? h('span', {
+            class: 'crash-badge',
+            style: () => {
+              const count = props.crashCount!();
+              return count > 0
+                ? 'position: absolute; top: 4px; right: 8px; background: #fb4934; color: #1d2021; font-size: 9px; font-weight: 700; min-width: 14px; height: 14px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-family: var(--font-code);'
+                : 'display: none;';
+            },
+          }, () => {
+            const count = props.crashCount!();
+            return count > 0 ? String(count) : '';
+          })
+        : null,
     )
   );
 

@@ -141,7 +141,24 @@ function loadProcessTabs(): { processes: ActiveProcess[]; selected: string | nul
 const MAX_OUTPUT_LINES = 5000;
 const MAX_HISTORY_LINES = 200;
 
-export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void) }) {
+// Color palette for process labels in "All" view (Gruvbox)
+const LABEL_COLORS = ['#b8bb26', '#83a598', '#d3869b', '#8ec07c', '#fabd2f', '#fb4934'];
+const processColorMap = new Map<string, string>();
+let colorIdx = 0;
+function getProcessColor(pid: string): string {
+  if (!processColorMap.has(pid)) {
+    processColorMap.set(pid, LABEL_COLORS[colorIdx % LABEL_COLORS.length]);
+    colorIdx++;
+  }
+  return processColorMap.get(pid)!;
+}
+
+export interface ScriptsPageProps {
+  onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void);
+  intentionalKills?: Set<string>;
+}
+
+export function ScriptsPage(props?: ScriptsPageProps) {
   // State signals
   const [rootScripts, setRootScripts] = createSignal<RootScripts[]>([]);
   const [activeProcesses, setActiveProcesses] = createSignal<ActiveProcess[]>([]);
@@ -151,6 +168,10 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
 
   // Output panel open/closed (like VS Code terminal drawer)
   const [outputOpen, setOutputOpen] = createSignal(false);
+
+  // "All" tab: unified log stream across all processes
+  const [viewingAll, setViewingAll] = createSignal(false);
+  const allOutputLines: Array<TerminalLine & { processId: string; label: string; color: string }> = [];
 
   // Feature 8: History state — persisted in sessionStorage
   const [history, setHistory] = createSignal<HistoryEntry[]>(loadHistory());
@@ -210,10 +231,14 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
 
   // Getter for current terminal lines
   const terminalLines = (): TerminalLine[] => {
-    // Read the version signal to establish reactivity
     outputVersion();
 
-    // If viewing history, show that
+    // "All" view: interleaved log stream
+    if (viewingAll()) {
+      return allOutputLines;
+    }
+
+    // History view
     const histId = viewingHistoryId();
     if (histId) {
       const entry = history().find((h) => h.processId === histId);
@@ -225,6 +250,13 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
     return processOutputMap.get(pid) ?? [];
   };
 
+  // Key for terminal identity — changes trigger full rebuild
+  const terminalKey = (): string | null => {
+    if (viewingAll()) return '__all__';
+    if (viewingHistoryId()) return viewingHistoryId();
+    return selectedProcessId();
+  };
+
   // -------------------------------------------------------------------------
   // Handle WS messages for process output
   // -------------------------------------------------------------------------
@@ -234,14 +266,25 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
 
     const pid = data.process_id;
 
+    // Helper: append to "All" stream
+    function appendToAll(line: TerminalLine) {
+      const label = processLabelMap.get(pid) || pid.slice(0, 8);
+      const color = getProcessColor(pid);
+      allOutputLines.push({ ...line, processId: pid, label, color });
+      if (allOutputLines.length > MAX_OUTPUT_LINES) allOutputLines.splice(0, allOutputLines.length - MAX_OUTPUT_LINES);
+      if (viewingAll()) setOutputVersion((v) => v + 1);
+    }
+
     if (type === 'stdout' && data.line !== undefined) {
       if (!processOutputMap.has(pid)) {
         processOutputMap.set(pid, []);
       }
       const buf = processOutputMap.get(pid)!;
-      buf.push({ type: 'stdout', text: data.line });
+      const line: TerminalLine = { type: 'stdout', text: data.line };
+      buf.push(line);
       if (buf.length > MAX_OUTPUT_LINES) buf.splice(0, buf.length - MAX_OUTPUT_LINES);
-      if (selectedProcessId() === pid && !viewingHistoryId()) {
+      appendToAll(line);
+      if (selectedProcessId() === pid && !viewingHistoryId() && !viewingAll()) {
         setOutputVersion((v) => v + 1);
       }
     } else if (type === 'stderr' && data.line !== undefined) {
@@ -249,9 +292,11 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         processOutputMap.set(pid, []);
       }
       const buf = processOutputMap.get(pid)!;
-      buf.push({ type: 'stderr', text: data.line });
+      const line: TerminalLine = { type: 'stderr', text: data.line };
+      buf.push(line);
       if (buf.length > MAX_OUTPUT_LINES) buf.splice(0, buf.length - MAX_OUTPUT_LINES);
-      if (selectedProcessId() === pid && !viewingHistoryId()) {
+      appendToAll(line);
+      if (selectedProcessId() === pid && !viewingHistoryId() && !viewingAll()) {
         setOutputVersion((v) => v + 1);
       }
     } else if (type === 'exit') {
@@ -442,6 +487,8 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   // Kill a process
   // -------------------------------------------------------------------------
   function killProcess(processId: string) {
+    // Mark as intentional kill so crash badge doesn't fire
+    if (props?.intentionalKills) props.intentionalKills.add(processId);
     fetch(`/api/processes/${processId}/kill`, {
       method: 'POST',
     })
@@ -729,6 +776,28 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       // Clear existing tabs
       tabsContainer.innerHTML = '';
 
+      // "All" tab — unified log stream (first tab)
+      const runningCount = active.filter((p) => !processExitMap.has(p.id)).length;
+      if (runningCount > 0 || allOutputLines.length > 0) {
+        const allTab = document.createElement('button');
+        const isAllSelected = viewingAll() && !historyId;
+        allTab.style.cssText = `
+          display: inline-flex; align-items: center; gap: 4px;
+          padding: 3px 8px; border: none; border-radius: 4px;
+          font-family: var(--font-code); font-size: 11px; cursor: pointer;
+          background: ${isAllSelected ? 'rgba(215, 153, 33, 0.1)' : 'transparent'};
+          color: ${isAllSelected ? 'var(--accent)' : 'var(--gruvbox-gray)'};
+          white-space: nowrap; font-weight: 600;
+        `;
+        allTab.textContent = runningCount > 0 ? `All (${runningCount})` : 'All';
+        allTab.onclick = () => {
+          setViewingAll(true);
+          setViewingHistoryId(null);
+          setOutputVersion((v) => v + 1);
+        };
+        tabsContainer.appendChild(allTab);
+      }
+
       // Show all processes that have output (active or finished)
       const visiblePids: string[] = [];
       for (const proc of active) {
@@ -797,6 +866,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
         tabEl.appendChild(document.createTextNode(label));
         const capturedPid = pid;
         tabEl.onclick = () => {
+          setViewingAll(false);
           setViewingHistoryId(null);
           setSelectedProcessId(capturedPid);
           setOutputVersion((v) => v + 1);
@@ -1233,9 +1303,14 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       termContainer.style.cssText = 'flex: 1; overflow: hidden; padding: 4px 0 0 0; background: #1d2021;';
 
       const termContent = createShow(
-        () => selectedProcessId() !== null || viewingHistoryId() !== null,
+        () => selectedProcessId() !== null || viewingHistoryId() !== null || viewingAll(),
         () => {
-          const termEl = Terminal({ lines: terminalLines, key: () => selectedProcessId() || viewingHistoryId() });
+          const termEl = Terminal({ lines: terminalLines, key: terminalKey,
+            labelFn: viewingAll() ? (line: TerminalLine) => {
+              const allLine = line as TerminalLine & { label?: string; color?: string };
+              return allLine.label ? { text: `[${allLine.label}]`, color: allLine.color || 'var(--gruvbox-gray)' } : null;
+            } : undefined,
+          });
           (termEl as HTMLElement).style.cssText += 'height: 100%; max-height: none;';
           return termEl;
         },

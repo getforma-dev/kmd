@@ -159,6 +159,8 @@ export interface TerminalProps {
   lines: () => TerminalLine[];
   /** Reactive key — when this changes, terminal does a full rebuild (e.g. process ID). */
   key?: () => string | null;
+  /** Optional label function for "All" view — prepends a colored label to each line. */
+  labelFn?: (line: TerminalLine) => { text: string; color: string } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +235,16 @@ export function Terminal(props: TerminalProps) {
     for (let i = renderedCount; i < allLines.length; i++) {
       const line = allLines[i];
       const lineEl = renderAnsiLine(line.text, line.type);
+      // Prepend label if labelFn is provided (used in "All" unified view)
+      if (props.labelFn) {
+        const label = props.labelFn(line);
+        if (label) {
+          const labelSpan = document.createElement('span');
+          labelSpan.style.cssText = `color: ${label.color}; font-weight: 600; margin-right: 8px; font-size: 11px;`;
+          labelSpan.textContent = label.text;
+          lineEl.insertBefore(labelSpan, lineEl.firstChild);
+        }
+      }
       el.insertBefore(lineEl, scrollBtn);
     }
 

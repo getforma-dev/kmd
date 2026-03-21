@@ -76,7 +76,7 @@ const CATEGORY_ORDER = ['dev', 'infra', 'tool', 'system'];
 // PortsPage
 // ---------------------------------------------------------------------------
 
-export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void) }) {
+export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void); intentionalKills?: Set<string> }) {
   const [ports, setPorts] = createSignal<PortInfo[]>([]);
   const [hiddenPorts, setHiddenPorts] = createSignal<number[]>([]);
   const [killingPort, setKillingPort] = createSignal<number | null>(null);
@@ -464,7 +464,8 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
           stopBtn.textContent = killing === p.port ? 'Stopping…' : 'Stop';
           stopBtn.disabled = killing === p.port;
           stopBtn.onclick = () => {
-            // Kill via process ID (more reliable than port kill for managed)
+            // Mark as intentional so crash badge doesn't fire
+            if (props?.intentionalKills) props.intentionalKills.add(p.managed_by!.process_id);
             fetch(`/api/processes/${p.managed_by!.process_id}/kill`, { method: 'POST' })
               .then(() => setTimeout(() => fetchPorts(), 500))
               .catch(() => {});
