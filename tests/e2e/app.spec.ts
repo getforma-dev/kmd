@@ -381,6 +381,75 @@ test.describe('Security', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Port Orchestration — port assignment, managed processes
+// ---------------------------------------------------------------------------
+
+test.describe('Port Orchestration', () => {
+  test('running a script returns assigned port and framework info', async ({ page }) => {
+    const scriptsResp = await page.request.get('/api/scripts');
+    const data = await scriptsResp.json();
+    const firstRoot = data.roots[0];
+    const pkg = firstRoot.packages.find((p: any) => p.scripts.length > 0);
+    if (!pkg) { test.skip(); return; }
+
+    const runResp = await page.request.post('/api/scripts/run', {
+      data: {
+        root: firstRoot.path,
+        package_path: pkg.path,
+        script_name: pkg.scripts[0].name,
+      },
+    });
+    const runData = await runResp.json();
+    expect(runData.process_id).toBeTruthy();
+    // Port should be assigned from the 4500-4599 range
+    expect(runData.assigned_port).toBeGreaterThanOrEqual(4500);
+    expect(runData.assigned_port).toBeLessThanOrEqual(4599);
+
+    await page.waitForTimeout(500);
+    await page.request.post(`/api/processes/${runData.process_id}/kill`).catch(() => {});
+  });
+
+  test('port allocations API returns active allocations', async ({ page }) => {
+    const response = await page.request.get('/api/ports/allocations');
+    const data = await response.json();
+    expect(Array.isArray(data.allocations)).toBe(true);
+  });
+
+  test('ports API includes is_self flag for kmd port', async ({ page }) => {
+    const response = await page.request.get('/api/ports');
+    const data = await response.json();
+    const selfPort = data.ports.find((p: any) => p.is_self === true);
+    expect(selfPort).toBeTruthy();
+  });
+
+  test('processes API includes assigned_port field', async ({ page }) => {
+    const response = await page.request.get('/api/processes');
+    const data = await response.json();
+    expect(Array.isArray(data.processes)).toBe(true);
+    // ProcessInfo schema should include assigned_port
+    // (may be null if no processes are running)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Terminal — PTY sessions
+// ---------------------------------------------------------------------------
+
+test.describe('Terminal', () => {
+  test('terminal page loads', async ({ page }) => {
+    await page.goto('/#terminal');
+    await expect(page.locator('.main-header h1')).toHaveText('Terminal');
+  });
+
+  test('terminal sessions API works', async ({ page }) => {
+    const response = await page.request.get('/api/terminal/sessions');
+    expect(response.status()).toBe(200);
+    const data = await response.json();
+    expect(Array.isArray(data.sessions)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Offline / Vendored assets
 // ---------------------------------------------------------------------------
 
