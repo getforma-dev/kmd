@@ -178,16 +178,14 @@ pub fn run_script(
     let process_id = Uuid::new_v4().to_string();
 
     // --- Port allocation ---
-    // Read the script command from package.json to detect framework
+    // Always allocate a port and set PORT env var on every script.
+    // Scripts that don't read it just ignore it — zero cost.
+    // If a custom server reads process.env.PORT, it works automatically.
     let pkg_json_path = cwd.join("package.json");
     let script_command = port_allocator::read_script_command(&pkg_json_path, script_name)
         .unwrap_or_default();
 
-    // Only assign ports to scripts that look like dev servers.
-    // Build, test, lint, typecheck etc. don't listen on ports.
-    let needs_port = port_allocator::is_server_script(script_name, &script_command);
-
-    let assigned_port = if needs_port {
+    let assigned_port = {
         let mut allocator = state.port_allocator();
         let port = allocator.allocate(
             &process_id,
@@ -198,16 +196,15 @@ pub fn run_script(
         );
         drop(allocator);
         port
-    } else {
-        None
     };
 
-    // Detect framework and determine CLI flags
+    // Detect framework from command string — only for appending CLI flags.
+    // PORT env var is always set regardless; CLI flags (--port) are only
+    // appended for known frameworks that need them.
     let framework_info = assigned_port.and_then(|port| {
         port_allocator::detect_framework_flags(&script_command, port)
     });
 
-    // Update allocation with framework name
     if let Some(ref fw) = framework_info {
         let mut allocator = state.port_allocator();
         allocator.set_framework(&process_id, &fw.framework);
