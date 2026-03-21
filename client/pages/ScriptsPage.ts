@@ -179,7 +179,7 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   const processExitMap = new Map<string, { code: number | null; durationSecs: number | null }>();
 
   // Track process metadata for history
-  const processMetaMap = new Map<string, { scriptName: string; packagePath: string; startTime: number }>();
+  const processMetaMap = new Map<string, { scriptName: string; packagePath: string; rootPath: string; startTime: number }>();
 
   // Signal to trigger terminal re-render when lines change
   const [outputVersion, setOutputVersion] = createSignal(0);
@@ -295,6 +295,12 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           return updated.slice(0, 10);
         });
 
+        // Clear active script + port tracking
+        const exitScriptKey = `${meta.rootPath}:${meta.packagePath}:${meta.scriptName}`;
+        activeScriptMap.delete(exitScriptKey);
+        runningPortMap.delete(exitScriptKey);
+        setRunningVersion((v) => v + 1);
+
         processMetaMap.delete(pid);
       }
 
@@ -389,8 +395,14 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
           processOutputMap.set(pid, lines);
 
           // Track metadata for history + label for tab display
-          processMetaMap.set(pid, { scriptName, packagePath, startTime: Date.now() });
+          processMetaMap.set(pid, { scriptName, packagePath, rootPath: root, startTime: Date.now() });
           processLabelMap.set(pid, port ? `${scriptName} :${port}` : scriptName);
+
+          // Track active running state + port for PackageCard indicators
+          const scriptKey = `${root}:${packagePath}:${scriptName}`;
+          activeScriptMap.set(scriptKey, pid);
+          if (port) runningPortMap.set(scriptKey, port);
+          setRunningVersion((v) => v + 1);
 
           // Add to active processes
           setActiveProcesses((procs) => [
@@ -501,6 +513,11 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
   const runningScripts = new Set<string>();
   const [runningVersion, setRunningVersion] = createSignal(0);
 
+  // True running state: scriptKey -> processId (persists until exit, not just debounce)
+  const activeScriptMap = new Map<string, string>();
+  // Port assigned to running scripts: scriptKey -> port number
+  const runningPortMap = new Map<string, number>();
+
   // Debounce: track last run time per script to prevent spam
   const lastRunTime = new Map<string, number>();
   const RUN_DEBOUNCE_MS = 2000;
@@ -601,15 +618,17 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
     for (const script of pkg.scripts) {
       const btn = document.createElement('button');
       btn.title = script.command;
+      btn.setAttribute('data-script', script.name);
       btn.style.cssText = `
         font-family: var(--font-code); font-size: 12px; padding: 4px 10px;
         background: var(--gruvbox-bg-hard); border: 1px solid var(--gruvbox-border);
         border-radius: 3px; color: var(--gruvbox-fg); cursor: pointer;
         transition: border-color 0.15s, color 0.15s;
+        display: inline-flex; align-items: center; gap: 5px;
       `;
       btn.textContent = script.name;
-      btn.onmouseenter = () => { btn.style.borderColor = 'var(--accent, var(--gruvbox-yellow))'; btn.style.color = 'var(--accent, var(--gruvbox-yellow))'; };
-      btn.onmouseleave = () => { btn.style.borderColor = 'var(--gruvbox-border)'; btn.style.color = 'var(--gruvbox-fg)'; };
+      btn.onmouseenter = () => { if (!btn.disabled) { btn.style.borderColor = 'var(--accent, var(--gruvbox-yellow))'; btn.style.color = 'var(--accent, var(--gruvbox-yellow))'; } };
+      btn.onmouseleave = () => { if (!btn.disabled) { btn.style.borderColor = 'var(--gruvbox-border)'; btn.style.color = 'var(--gruvbox-fg)'; } };
       btn.onclick = (e) => { e.stopPropagation(); runScriptDebounced(rootPath, pkg.path, script.name); };
       scriptsEl.appendChild(btn);
     }
@@ -623,13 +642,43 @@ export function ScriptsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) =
       scriptsEl.style.display = isExpanded ? 'flex' : 'none';
 
       for (const btn of scriptsEl.querySelectorAll('button') as NodeListOf<HTMLButtonElement>) {
-        const scriptName = btn.textContent?.trim() || '';
+        const scriptName = btn.getAttribute('data-script') || '';
         const key = `${rootPath}:${pkg.path}:${scriptName}`;
-        if (runningScripts.has(key)) {
+        const isActive = activeScriptMap.has(key);
+        const port = runningPortMap.get(key);
+
+        if (isActive) {
+          // Running: green dot + port + disabled
+          btn.innerHTML = '';
+          const dot = document.createElement('span');
+          dot.className = 'status-dot active';
+          dot.style.cssText = 'width: 6px; height: 6px; flex-shrink: 0;';
+          btn.appendChild(dot);
+          btn.appendChild(document.createTextNode(scriptName));
+          if (port) {
+            const portEl = document.createElement('span');
+            portEl.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray);';
+            portEl.textContent = `:${port}`;
+            btn.appendChild(portEl);
+          }
+          btn.disabled = true;
+          btn.style.opacity = '0.8';
+          btn.style.cursor = 'default';
+          btn.style.borderColor = 'var(--gruvbox-green)';
+          btn.style.color = 'var(--gruvbox-green)';
+        } else if (runningScripts.has(key)) {
+          // Debounce cooldown
+          btn.innerHTML = '';
+          btn.textContent = scriptName;
           btn.disabled = true;
           btn.style.opacity = '0.4';
           btn.style.cursor = 'default';
+          btn.style.borderColor = 'var(--gruvbox-border)';
+          btn.style.color = 'var(--gruvbox-fg)';
         } else {
+          // Idle
+          btn.innerHTML = '';
+          btn.textContent = scriptName;
           btn.disabled = false;
           btn.style.opacity = '1';
           btn.style.cursor = 'pointer';
