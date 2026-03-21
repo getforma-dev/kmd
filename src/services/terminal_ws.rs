@@ -20,13 +20,20 @@ pub struct TerminalWsQuery {
     rows: Option<u16>,
 }
 
+/// Clamp terminal dimensions to safe ranges to prevent resource abuse.
+fn clamp_terminal_size(cols: u16, rows: u16) -> (u16, u16) {
+    (cols.clamp(10, 500), rows.clamp(2, 200))
+}
+
 /// `GET /ws/terminal` — upgrade to a WebSocket that drives a PTY session.
 pub async fn terminal_ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<TerminalWsQuery>,
 ) -> impl IntoResponse {
-    let cols = params.cols.unwrap_or(80);
-    let rows = params.rows.unwrap_or(24);
+    let (cols, rows) = clamp_terminal_size(
+        params.cols.unwrap_or(80),
+        params.rows.unwrap_or(24),
+    );
     ws.on_upgrade(move |socket| handle_terminal_ws(socket, cols, rows))
 }
 
@@ -133,14 +140,15 @@ async fn handle_terminal_ws(socket: WebSocket, cols: u16, rows: u16) {
                 // Check if it's a JSON control message
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
                     if parsed.get("type").and_then(|t| t.as_str()) == Some("resize") {
-                        let new_cols = parsed
+                        let raw_cols = parsed
                             .get("cols")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(80) as u16;
-                        let new_rows = parsed
+                        let raw_rows = parsed
                             .get("rows")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(24) as u16;
+                        let (new_cols, new_rows) = clamp_terminal_size(raw_cols, raw_rows);
                         if let Err(e) = mgr.resize_session(&sid_for_writer, new_cols, new_rows) {
                             tracing::warn!("Terminal resize failed: {e}");
                         }
@@ -191,5 +199,32 @@ pub async fn kill_terminal_session(
             Json(serde_json::json!({ "error": err })),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_normal_values() {
+        assert_eq!(clamp_terminal_size(80, 24), (80, 24));
+    }
+
+    #[test]
+    fn clamp_too_small() {
+        assert_eq!(clamp_terminal_size(1, 1), (10, 2));
+        assert_eq!(clamp_terminal_size(0, 0), (10, 2));
+    }
+
+    #[test]
+    fn clamp_too_large() {
+        assert_eq!(clamp_terminal_size(10000, 5000), (500, 200));
+    }
+
+    #[test]
+    fn clamp_boundary_values() {
+        assert_eq!(clamp_terminal_size(10, 2), (10, 2));
+        assert_eq!(clamp_terminal_size(500, 200), (500, 200));
     }
 }

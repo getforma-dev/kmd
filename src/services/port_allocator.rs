@@ -230,3 +230,192 @@ pub fn read_script_command(
         .as_str()
         .map(|s| s.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Port allocation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn allocate_returns_port_in_range() {
+        let mut alloc = PortAllocator::new();
+        let port = alloc.allocate("p1", ".", "dev", "root", None);
+        assert!(port.is_some());
+        let p = port.unwrap();
+        assert!(p >= DEFAULT_PORT_START && p <= DEFAULT_PORT_END);
+    }
+
+    #[test]
+    fn allocate_returns_unique_ports() {
+        let mut alloc = PortAllocator::new();
+        let p1 = alloc.allocate("p1", ".", "dev", "root", None);
+        let p2 = alloc.allocate("p2", ".", "build", "root", None);
+        assert!(p1.is_some());
+        assert!(p2.is_some());
+        assert_ne!(p1.unwrap(), p2.unwrap());
+    }
+
+    #[test]
+    fn release_frees_port() {
+        let mut alloc = PortAllocator::new();
+        let p1 = alloc.allocate("p1", ".", "dev", "root", None);
+        assert!(p1.is_some());
+
+        let released = alloc.release("p1");
+        assert!(released.is_some());
+        assert_eq!(released.unwrap().port, p1.unwrap());
+    }
+
+    #[test]
+    fn release_nonexistent_returns_none() {
+        let mut alloc = PortAllocator::new();
+        assert!(alloc.release("nonexistent").is_none());
+    }
+
+    #[test]
+    fn list_allocations_empty() {
+        let alloc = PortAllocator::new();
+        assert!(alloc.list_allocations().is_empty());
+    }
+
+    #[test]
+    fn list_allocations_returns_active() {
+        let mut alloc = PortAllocator::new();
+        alloc.allocate("p1", "pkg1", "dev", "root", None);
+        alloc.allocate("p2", "pkg2", "build", "root", None);
+
+        let list = alloc.list_allocations();
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn set_framework_updates_allocation() {
+        let mut alloc = PortAllocator::new();
+        alloc.allocate("p1", ".", "dev", "root", None);
+        alloc.set_framework("p1", "Vite");
+
+        let list = alloc.list_allocations();
+        let entry = list.iter().find(|a| a.process_id == "p1").unwrap();
+        assert_eq!(entry.framework.as_deref(), Some("Vite"));
+    }
+
+    #[test]
+    fn set_framework_noop_for_nonexistent() {
+        let mut alloc = PortAllocator::new();
+        // Should not panic
+        alloc.set_framework("nonexistent", "Vite");
+    }
+
+    // -----------------------------------------------------------------------
+    // Framework detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detects_vite() {
+        let result = detect_framework_flags("vite --config custom.ts", 4500);
+        assert!(result.is_some());
+        let fw = result.unwrap();
+        assert_eq!(fw.framework, "Vite");
+        assert!(fw.flags.contains(&"--port".to_string()));
+        assert!(fw.flags.contains(&"4500".to_string()));
+    }
+
+    #[test]
+    fn detects_nextjs() {
+        let result = detect_framework_flags("next dev", 4501);
+        assert!(result.is_some());
+        let fw = result.unwrap();
+        assert_eq!(fw.framework, "Next.js");
+        // Next.js uses PORT env var — no flags
+        assert!(fw.flags.is_empty());
+    }
+
+    #[test]
+    fn detects_astro() {
+        let result = detect_framework_flags("astro dev", 4502);
+        assert!(result.is_some());
+        let fw = result.unwrap();
+        assert_eq!(fw.framework, "Astro");
+        assert!(fw.flags.contains(&"--port".to_string()));
+    }
+
+    #[test]
+    fn detects_nuxt() {
+        let result = detect_framework_flags("nuxi dev", 4503);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().framework, "Nuxt");
+    }
+
+    #[test]
+    fn detects_remix() {
+        let result = detect_framework_flags("remix dev", 4504);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().framework, "Remix");
+    }
+
+    #[test]
+    fn detects_angular() {
+        let result = detect_framework_flags("ng serve", 4505);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().framework, "Angular CLI");
+    }
+
+    #[test]
+    fn detects_webpack() {
+        let result = detect_framework_flags("webpack serve --mode development", 4506);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().framework, "webpack-dev-server");
+    }
+
+    #[test]
+    fn returns_none_for_unknown_framework() {
+        let result = detect_framework_flags("node server.js", 4507);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn skips_detection_when_port_already_set() {
+        // If the command already has --port, don't add another one
+        let result = detect_framework_flags("vite --port 3000", 4508);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn replaces_port_placeholder() {
+        let result = detect_framework_flags("vite", 4599);
+        assert!(result.is_some());
+        let fw = result.unwrap();
+        assert!(fw.flags.contains(&"4599".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // read_script_command
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reads_script_from_package_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg = dir.path().join("package.json");
+        std::fs::write(
+            &pkg,
+            r#"{"scripts": {"dev": "vite", "build": "tsc && vite build"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(read_script_command(&pkg, "dev"), Some("vite".to_string()));
+        assert_eq!(
+            read_script_command(&pkg, "build"),
+            Some("tsc && vite build".to_string())
+        );
+        assert_eq!(read_script_command(&pkg, "nonexistent"), None);
+    }
+
+    #[test]
+    fn reads_script_missing_file() {
+        let path = std::path::Path::new("/nonexistent/package.json");
+        assert_eq!(read_script_command(path, "dev"), None);
+    }
+}

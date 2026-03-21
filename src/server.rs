@@ -2,6 +2,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, Request, StatusCode},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -16,6 +17,95 @@ use crate::ws;
 #[derive(Embed)]
 #[folder = "dist/client/"]
 struct ClientAssets;
+
+// ---------------------------------------------------------------------------
+// Security middleware: Host/Origin validation (prevents DNS rebinding → RCE)
+// ---------------------------------------------------------------------------
+
+/// Validate that the Host header matches localhost.
+///
+/// DNS rebinding attacks work by resolving a malicious domain to 127.0.0.1.
+/// Without this check, any website can call our API (including /api/shell/exec)
+/// by simply rebinding its DNS. This middleware blocks that by requiring the
+/// Host header to be an explicit localhost value.
+async fn validate_host(req: Request<Body>, next: Next) -> Response {
+    // WebSocket upgrade requests also go through this middleware
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // Strip port suffix for comparison
+    let host_name = host.split(':').next().unwrap_or("");
+
+    let is_localhost = matches!(
+        host_name,
+        "localhost" | "127.0.0.1" | "[::1]" | "0.0.0.0"
+    );
+
+    if !is_localhost {
+        tracing::warn!("Blocked request with non-localhost Host header: {host}");
+        return (
+            StatusCode::FORBIDDEN,
+            "Forbidden: kmd only accepts requests from localhost",
+        )
+            .into_response();
+    }
+
+    // Also check Origin header if present (CSRF protection)
+    if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        // Parse origin to extract host
+        let origin_host = origin
+            .strip_prefix("http://")
+            .or_else(|| origin.strip_prefix("https://"))
+            .unwrap_or(origin)
+            .split(':')
+            .next()
+            .unwrap_or("");
+
+        let origin_is_localhost = matches!(
+            origin_host,
+            "localhost" | "127.0.0.1" | "[::1]" | "0.0.0.0"
+        );
+
+        if !origin_is_localhost {
+            tracing::warn!("Blocked request with non-localhost Origin: {origin}");
+            return (
+                StatusCode::FORBIDDEN,
+                "Forbidden: cross-origin requests not allowed",
+            )
+                .into_response();
+        }
+    }
+
+    next.run(req).await
+}
+
+// ---------------------------------------------------------------------------
+// Security middleware: response headers
+// ---------------------------------------------------------------------------
+
+/// Add security headers to all responses.
+async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+
+    // Prevent framing (clickjacking)
+    headers.insert("x-frame-options", "DENY".parse().unwrap());
+    // Prevent MIME-type sniffing
+    headers.insert("x-content-type-options", "nosniff".parse().unwrap());
+    // Content Security Policy: allow inline styles (needed for syntax highlighting)
+    // but block inline scripts except from self
+    headers.insert(
+        "content-security-policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:*; frame-ancestors 'none'"
+            .parse()
+            .unwrap(),
+    );
+
+    response
+}
 
 /// Build the full Axum router with all routes and middleware.
 pub fn build_router(state: AppState) -> Router {
@@ -55,6 +145,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ws/terminal", get(terminal_ws::terminal_ws_handler))
         .merge(api)
         .fallback(static_handler)
+        // Security: validate Host header to prevent DNS rebinding attacks
+        .layer(middleware::from_fn(validate_host))
+        // Security: add protective response headers
+        .layer(middleware::from_fn(add_security_headers))
         .with_state(state)
 }
 
@@ -353,7 +447,8 @@ async fn api_docs_search(
         Ok(results) => Json(serde_json::json!({ "results": results })),
         Err(err) => {
             tracing::error!("Search error: {err}");
-            Json(serde_json::json!({ "results": [], "error": err.to_string() }))
+            // Don't leak internal error details (may contain file paths)
+            Json(serde_json::json!({ "results": [], "error": "Search failed" }))
         }
     }
 }
@@ -542,11 +637,30 @@ struct ShellExecBody {
     root: Option<String>,
 }
 
+/// Maximum allowed shell command length (8 KB).
+const MAX_SHELL_COMMAND_LEN: usize = 8 * 1024;
+
 /// `POST /api/shell/exec` — Execute a shell command in a workspace root.
 async fn api_shell_exec_handler(
     State(state): State<AppState>,
     Json(body): Json<ShellExecBody>,
 ) -> impl IntoResponse {
+    // Input validation: reject excessively long commands
+    if body.command.len() > MAX_SHELL_COMMAND_LEN {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Command too long" })),
+        )
+            .into_response();
+    }
+    if body.command.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Command cannot be empty" })),
+        )
+            .into_response();
+    }
+
     let root_key = body.root.as_deref().unwrap_or(".");
     match process::run_shell_command(&state, root_key, &body.command) {
         Ok(process_id) => Json(serde_json::json!({ "process_id": process_id })).into_response(),
@@ -605,6 +719,8 @@ async fn api_ports_handler(State(state): State<AppState>) -> impl IntoResponse {
                 p.pid.and_then(|port_pid| {
                     #[cfg(unix)]
                     {
+                        // SAFETY: getpgid() is a read-only query for the process
+                        // group ID. The PID comes from lsof output (OS-provided).
                         let port_pgid = unsafe { libc::getpgid(port_pid as i32) };
                         if port_pgid > 0 {
                             pid_to_meta.iter().find(|(proc_pid, _)| {
@@ -703,7 +819,7 @@ async fn api_port_kill_handler(Path(port): Path<u16>) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 fn ports_json_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let home = std::env::var("HOME").expect("$HOME not set");
     std::path::PathBuf::from(home).join(".kmd").join("ports.json")
 }
 

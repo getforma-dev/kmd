@@ -180,7 +180,7 @@ export function DocsPage(props?: {
     const root = selectedRoot();
     if (!path) return;
 
-    fetch(`/api/docs/${encodeURI(path)}?root=${encodeURIComponent(root)}`)
+    fetch(`/api/docs/${path.split('/').map(encodeURIComponent).join('/')}?root=${encodeURIComponent(root)}`)
       .then((r) => r.json())
       .then((data: DocResponse | TruncatedResponse) => {
         if ('truncated' in data && data.truncated) {
@@ -294,7 +294,7 @@ export function DocsPage(props?: {
     setDocLoading(true);
     setIsTruncated(false);
 
-    fetch(`/api/docs/${encodeURI(path)}?root=${encodeURIComponent(root)}`)
+    fetch(`/api/docs/${path.split('/').map(encodeURIComponent).join('/')}?root=${encodeURIComponent(root)}`)
       .then((r) => r.json())
       .then((data: DocResponse | TruncatedResponse) => {
         if ('truncated' in data && data.truncated) {

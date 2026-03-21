@@ -239,6 +239,9 @@ pub fn run_script(
     }
 
     #[cfg(unix)]
+    // SAFETY: setpgid(0, 0) places the child in its own process group.
+    // This is safe because it only affects the newly forked child (pre_exec
+    // runs between fork and exec) and uses no shared state.
     unsafe {
         cmd.pre_exec(|| {
             libc::setpgid(0, 0);
@@ -288,13 +291,16 @@ pub fn kill_process(state: &AppState, process_id: &str) -> Result<(), String> {
         // Kill the entire process group (npm + child processes like node/vite)
         #[cfg(unix)]
         if let Some(pid) = os_pid {
-            // Send SIGTERM to the entire process group (negative PID = process group)
+            // SAFETY: kill() with a negative PID sends the signal to the entire
+            // process group. The PID comes from our own child.id() and we set
+            // the child as its own group leader via setpgid(0,0) at spawn time.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGTERM);
             }
             // Give it a moment, then SIGKILL if still alive
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
+                // SAFETY: Same as above — sending SIGKILL to the process group.
                 unsafe {
                     libc::kill(-(pid as i32), libc::SIGKILL);
                 }
@@ -366,6 +372,9 @@ pub fn run_shell_command(
         .stderr(std::process::Stdio::piped());
 
     #[cfg(unix)]
+    // SAFETY: setpgid(0, 0) places the child in its own process group.
+    // This is safe because it only affects the newly forked child (pre_exec
+    // runs between fork and exec) and uses no shared state.
     unsafe {
         cmd.pre_exec(|| {
             libc::setpgid(0, 0);

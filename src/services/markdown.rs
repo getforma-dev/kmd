@@ -475,3 +475,178 @@ pub fn file_exists(root_dir: &Path, relative_path: &str) -> bool {
 
 /// The 500KB size cap, exported for use in handlers.
 pub const SIZE_CAP: u64 = MAX_FILE_SIZE;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // -----------------------------------------------------------------------
+    // FTS query sanitization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sanitise_fts_wraps_tokens_in_quotes() {
+        assert_eq!(sanitise_fts_query("hello world"), "\"hello\" \"world\"");
+    }
+
+    #[test]
+    fn sanitise_fts_strips_embedded_quotes() {
+        assert_eq!(sanitise_fts_query("he\"llo"), "\"hello\"");
+    }
+
+    #[test]
+    fn sanitise_fts_handles_fts_operators() {
+        // These are FTS5 operators that could cause syntax errors
+        assert_eq!(sanitise_fts_query("OR AND NOT"), "\"OR\" \"AND\" \"NOT\"");
+    }
+
+    #[test]
+    fn sanitise_fts_handles_wildcards_and_parens() {
+        assert_eq!(sanitise_fts_query("test* (group)"), "\"test*\" \"(group)\"");
+    }
+
+    #[test]
+    fn sanitise_fts_empty_input() {
+        assert_eq!(sanitise_fts_query(""), "");
+        assert_eq!(sanitise_fts_query("   "), "");
+    }
+
+    #[test]
+    fn sanitise_fts_single_token() {
+        assert_eq!(sanitise_fts_query("hello"), "\"hello\"");
+    }
+
+    // -----------------------------------------------------------------------
+    // Path traversal protection (safe_resolve)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn safe_resolve_allows_normal_path() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::write(root.join("test.md"), "hello").unwrap();
+
+        let result = safe_resolve(root, "test.md");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn safe_resolve_blocks_traversal() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        let result = safe_resolve(root, "../../../etc/passwd");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn safe_resolve_blocks_double_dot() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("sub")).unwrap();
+
+        let result = safe_resolve(root, "sub/../../etc/passwd");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn safe_resolve_nonexistent_file() {
+        let dir = TempDir::new().unwrap();
+        let result = safe_resolve(dir.path(), "nonexistent.md");
+        assert!(result.is_none()); // canonicalize fails for nonexistent files
+    }
+
+    #[test]
+    fn safe_resolve_nested_path() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("docs/api")).unwrap();
+        fs::write(root.join("docs/api/README.md"), "# API").unwrap();
+
+        let result = safe_resolve(root, "docs/api/README.md");
+        assert!(result.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // file_exists
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn file_exists_returns_true_for_md() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("test.md"), "hello").unwrap();
+        assert!(file_exists(dir.path(), "test.md"));
+    }
+
+    #[test]
+    fn file_exists_returns_false_for_non_md() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("test.txt"), "hello").unwrap();
+        assert!(!file_exists(dir.path(), "test.txt"));
+    }
+
+    #[test]
+    fn file_exists_returns_false_for_traversal() {
+        let dir = TempDir::new().unwrap();
+        assert!(!file_exists(dir.path(), "../../../etc/passwd"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Tree building
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_tree_single_file() {
+        let files = vec![MdFile {
+            root: ".".to_string(),
+            relative_path: "README.md".to_string(),
+            absolute_path: PathBuf::from("/test/README.md"),
+            size: 100,
+            modified_at: Some(0),
+            oversized: false,
+        }];
+        let tree = build_tree(&files);
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "README.md");
+        assert_eq!(tree[0].node_type, "file");
+    }
+
+    #[test]
+    fn build_tree_nested_directories() {
+        let files = vec![
+            MdFile {
+                root: ".".to_string(),
+                relative_path: "docs/api/guide.md".to_string(),
+                absolute_path: PathBuf::from("/test/docs/api/guide.md"),
+                size: 100,
+                modified_at: Some(0),
+                oversized: false,
+            },
+            MdFile {
+                root: ".".to_string(),
+                relative_path: "README.md".to_string(),
+                absolute_path: PathBuf::from("/test/README.md"),
+                size: 50,
+                modified_at: Some(0),
+                oversized: false,
+            },
+        ];
+        let tree = build_tree(&files);
+
+        // Should have a "docs" dir and a "README.md" file at the root
+        let dir = tree.iter().find(|n| n.name == "docs");
+        let file = tree.iter().find(|n| n.name == "README.md");
+        assert!(dir.is_some());
+        assert!(file.is_some());
+        assert_eq!(dir.unwrap().node_type, "dir");
+        assert_eq!(file.unwrap().node_type, "file");
+    }
+
+    #[test]
+    fn build_tree_empty() {
+        let tree = build_tree(&[]);
+        assert!(tree.is_empty());
+    }
+}

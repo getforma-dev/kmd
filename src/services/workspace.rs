@@ -11,6 +11,52 @@ use std::path::{Path, PathBuf};
 /// Default workspace port.
 const DEFAULT_PORT: u16 = 4444;
 
+/// Maximum workspace name length.
+const MAX_NAME_LEN: usize = 64;
+
+// ---------------------------------------------------------------------------
+// Workspace name validation (prevents path traversal via crafted names)
+// ---------------------------------------------------------------------------
+
+/// Validate a workspace name to prevent path traversal and filesystem issues.
+///
+/// Rejects names containing `/`, `\`, `..`, null bytes, and names that are
+/// `.` or `..`. Only allows alphanumeric, hyphens, underscores, and dots
+/// (but not leading dots or consecutive dots).
+fn validate_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Workspace name cannot be empty.".to_string());
+    }
+    if name.len() > MAX_NAME_LEN {
+        return Err(format!(
+            "Workspace name too long (max {MAX_NAME_LEN} characters)."
+        ));
+    }
+    if name == "." || name == ".." {
+        return Err("Invalid workspace name.".to_string());
+    }
+    if name.starts_with('.') {
+        return Err("Workspace name cannot start with a dot.".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err("Workspace name cannot contain path separators or null bytes.".to_string());
+    }
+    if name.contains("..") {
+        return Err("Workspace name cannot contain '..'.".to_string());
+    }
+    // Allow only safe characters: alphanumeric, hyphen, underscore, dot
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(
+            "Workspace name can only contain letters, numbers, hyphens, underscores, and dots."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Global paths
 // ---------------------------------------------------------------------------
@@ -26,13 +72,33 @@ fn workspaces_dir() -> PathBuf {
 }
 
 /// `~/.kmd/data/<name>/`
+///
+/// Callers must validate `name` with `validate_name()` before calling.
+/// This function additionally verifies the resulting path stays under `~/.kmd/data/`.
 pub fn data_dir(name: &str) -> PathBuf {
-    home_dir().join(".kmd").join("data").join(name)
+    let dir = home_dir().join(".kmd").join("data").join(name);
+    // Defense-in-depth: verify the path doesn't escape the data directory.
+    // Uses assert (not debug_assert) because this is a security check.
+    let data_root = home_dir().join(".kmd").join("data");
+    assert!(
+        dir.starts_with(&data_root),
+        "data_dir path escaped base directory"
+    );
+    dir
 }
 
 /// Path to a workspace config file: `~/.kmd/workspaces/<name>.json`
+///
+/// Callers must validate `name` with `validate_name()` before calling.
 fn config_path(name: &str) -> PathBuf {
-    workspaces_dir().join(format!("{name}.json"))
+    let path = workspaces_dir().join(format!("{name}.json"));
+    // Defense-in-depth: verify the path doesn't escape the workspaces directory.
+    // Uses assert (not debug_assert) because this is a security check.
+    assert!(
+        path.starts_with(&workspaces_dir()),
+        "config_path escaped base directory"
+    );
+    path
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +129,7 @@ impl Default for WorkspaceConfig {
 
 /// Create a new empty workspace. Returns error if it already exists.
 pub fn create_workspace(name: &str) -> Result<WorkspaceConfig, String> {
+    validate_name(name)?;
     let path = config_path(name);
     if path.exists() {
         return Err(format!("Workspace '{name}' already exists."));
@@ -93,6 +160,9 @@ pub fn create_workspace(name: &str) -> Result<WorkspaceConfig, String> {
 
 /// Load a workspace config by name. Returns `None` if it doesn't exist.
 pub fn load_workspace(name: &str) -> Option<WorkspaceConfig> {
+    if validate_name(name).is_err() {
+        return None;
+    }
     let path = config_path(name);
     if !path.exists() {
         return None;
@@ -115,6 +185,7 @@ pub fn load_workspace(name: &str) -> Option<WorkspaceConfig> {
 
 /// Delete a workspace config and its data directory.
 pub fn delete_workspace(name: &str) -> Result<(), String> {
+    validate_name(name)?;
     let path = config_path(name);
     if !path.exists() {
         return Err(format!("Workspace '{name}' does not exist."));
@@ -586,6 +657,8 @@ fn is_workspace_running(name: &str) -> bool {
 
 /// Check if a process is alive (Unix: kill(pid, 0)).
 fn is_pid_alive(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) doesn't send a signal — it only checks whether the
+    // process exists and we have permission to signal it. No side effects.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
@@ -1020,4 +1093,88 @@ fn write_config(name: &str, config: &WorkspaceConfig) -> Result<(), String> {
         .map_err(|e| format!("Failed to write config: {e}"))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Workspace name validation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn accepts_valid_names() {
+        assert!(validate_name("my-workspace").is_ok());
+        assert!(validate_name("project_v2").is_ok());
+        assert!(validate_name("test123").is_ok());
+        assert!(validate_name("a").is_ok());
+        assert!(validate_name("my.project").is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_name() {
+        assert!(validate_name("").is_err());
+    }
+
+    #[test]
+    fn rejects_path_traversal() {
+        assert!(validate_name("..").is_err());
+        assert!(validate_name("../etc").is_err());
+        assert!(validate_name("foo/bar").is_err());
+        assert!(validate_name("foo\\bar").is_err());
+        assert!(validate_name("..hidden").is_err());
+    }
+
+    #[test]
+    fn rejects_dot_prefix() {
+        assert!(validate_name(".hidden").is_err());
+        assert!(validate_name(".").is_err());
+        assert!(validate_name("..").is_err());
+    }
+
+    #[test]
+    fn rejects_null_bytes() {
+        assert!(validate_name("test\0evil").is_err());
+    }
+
+    #[test]
+    fn rejects_special_characters() {
+        assert!(validate_name("test name").is_err()); // space
+        assert!(validate_name("test@name").is_err());
+        assert!(validate_name("test#name").is_err());
+        assert!(validate_name("test$name").is_err());
+        assert!(validate_name("test!name").is_err());
+    }
+
+    #[test]
+    fn rejects_too_long_name() {
+        let long_name = "a".repeat(MAX_NAME_LEN + 1);
+        assert!(validate_name(&long_name).is_err());
+    }
+
+    #[test]
+    fn accepts_max_length_name() {
+        let name = "a".repeat(MAX_NAME_LEN);
+        assert!(validate_name(&name).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Config path safety
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn config_path_stays_in_base() {
+        // Valid name should produce a path inside ~/.kmd/workspaces/
+        let path = config_path("my-project");
+        assert!(path.ends_with("my-project.json"));
+        assert!(path.to_string_lossy().contains(".kmd/workspaces/"));
+    }
+
+    #[test]
+    fn data_dir_stays_in_base() {
+        let path = data_dir("my-project");
+        assert!(path.ends_with("my-project"));
+        assert!(path.to_string_lossy().contains(".kmd/data/"));
+    }
 }

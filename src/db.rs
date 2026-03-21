@@ -82,6 +82,7 @@ DROP TABLE IF EXISTS md_files;
 DROP TABLE IF EXISTS script_notes;
 "#;
 
+/// SQL schema for all tables, FTS indexes, and triggers.
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS md_files (
     id INTEGER PRIMARY KEY,
@@ -130,3 +131,123 @@ CREATE TABLE IF NOT EXISTS script_notes (
     UNIQUE(root, package_path, script_name)
 );
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_db_creates_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = init_db(dir.path()).unwrap();
+
+        // Verify md_files table exists
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM md_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Verify FTS table exists
+        let fts_exists: bool = conn
+            .query_row(
+                "SELECT count(*) > 0 FROM sqlite_master WHERE type='table' AND name='md_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(fts_exists);
+
+        // Verify script_notes table exists
+        let notes_count: i64 = conn
+            .query_row("SELECT count(*) FROM script_notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(notes_count, 0);
+    }
+
+    #[test]
+    fn init_db_is_idempotent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = init_db(dir.path()).unwrap();
+
+        // Insert a row
+        conn.execute(
+            "INSERT INTO md_files (root, relative_path, absolute_path, content, size)
+             VALUES ('root', 'test.md', '/test.md', 'hello', 5)",
+            [],
+        )
+        .unwrap();
+
+        drop(conn);
+
+        // Re-init should not fail (CREATE IF NOT EXISTS)
+        let conn2 = init_db(dir.path()).unwrap();
+        let count: i64 = conn2
+            .query_row("SELECT count(*) FROM md_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn fts_trigger_indexes_content() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = init_db(dir.path()).unwrap();
+
+        conn.execute(
+            "INSERT INTO md_files (root, relative_path, absolute_path, content, size)
+             VALUES ('root', 'test.md', '/test.md', 'hello world searchable content', 30)",
+            [],
+        )
+        .unwrap();
+
+        // Search should find the inserted content via FTS
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM md_fts WHERE md_fts MATCH '\"hello\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn fts_trigger_handles_delete() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = init_db(dir.path()).unwrap();
+
+        conn.execute(
+            "INSERT INTO md_files (root, relative_path, absolute_path, content, size)
+             VALUES ('root', 'test.md', '/test.md', 'unique_keyword_xyz', 20)",
+            [],
+        )
+        .unwrap();
+
+        // Delete the row
+        conn.execute(
+            "DELETE FROM md_files WHERE relative_path = 'test.md'",
+            [],
+        )
+        .unwrap();
+
+        // FTS should no longer find it
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM md_fts WHERE md_fts MATCH '\"unique_keyword_xyz\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn wal_mode_enabled() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = init_db(dir.path()).unwrap();
+
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+    }
+}

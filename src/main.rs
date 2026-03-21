@@ -433,6 +433,8 @@ fn read_lockfile_port(name: &str) -> Option<u16> {
 
 /// Check if a process with the given PID is alive (Unix: kill(pid, 0)).
 fn is_pid_alive(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) doesn't send a signal — it only checks whether the
+    // process exists and we have permission to signal it. No side effects.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
