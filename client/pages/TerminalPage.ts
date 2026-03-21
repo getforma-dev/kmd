@@ -23,14 +23,45 @@ interface SessionEntry {
 // TerminalPage
 // ---------------------------------------------------------------------------
 
+// Read a CSS variable's computed value from the document root.
+function cssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// Build xterm.js theme from current CSS variables (respects dark/light toggle).
+function buildXtermTheme(): Record<string, string> {
+  return {
+    background: cssVar('--gruvbox-bg-hard') || '#1d2021',
+    foreground: cssVar('--gruvbox-fg') || '#ebdbb2',
+    cursor: cssVar('--accent') || '#d79921',
+    cursorAccent: cssVar('--gruvbox-bg-hard') || '#1d2021',
+    selectionBackground: cssVar('--gruvbox-bg3') || '#504945',
+    black: '#282828',
+    red: '#fb4934',
+    green: '#b8bb26',
+    yellow: '#fabd2f',
+    blue: '#83a598',
+    magenta: '#d3869b',
+    cyan: '#8ec07c',
+    white: '#ebdbb2',
+    brightBlack: '#928374',
+    brightRed: '#fb4934',
+    brightGreen: '#b8bb26',
+    brightYellow: '#fabd2f',
+    brightBlue: '#83a598',
+    brightMagenta: '#d3869b',
+    brightCyan: '#8ec07c',
+    brightWhite: '#ebdbb2',
+  };
+}
+
 export function TerminalPage() {
   const [sessions, setSessions] = createSignal<string[]>([]);
   const [activeSession, setActiveSession] = createSignal<string | null>(null);
 
   // Parent that holds all terminal containers (each session gets its own div)
   const terminalsParent = document.createElement('div');
-  // Hardcoded to match xterm.js theme background — stays dark even in light mode
-  terminalsParent.style.cssText = 'flex: 1; min-height: 0; position: relative; overflow: hidden; background: #1d2021;';
+  terminalsParent.style.cssText = 'flex: 1; min-height: 0; position: relative; overflow: hidden; background: var(--gruvbox-bg-hard);';
 
   const sessionMap = new Map<string, SessionEntry>();
 
@@ -203,31 +234,8 @@ export function TerminalPage() {
     const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal`);
     ws.binaryType = 'arraybuffer';
 
-    // xterm.js theme requires literal hex colors (CSS variables are not supported)
     const term = new Terminal({
-      theme: {
-        background: '#1d2021',
-        foreground: '#ebdbb2',
-        cursor: '#d79921',
-        cursorAccent: '#1d2021',
-        selectionBackground: '#504945',
-        black: '#282828',
-        red: '#fb4934',
-        green: '#b8bb26',
-        yellow: '#fabd2f',
-        blue: '#83a598',
-        magenta: '#d3869b',
-        cyan: '#8ec07c',
-        white: '#ebdbb2',
-        brightBlack: '#928374',
-        brightRed: '#fb4934',
-        brightGreen: '#b8bb26',
-        brightYellow: '#fabd2f',
-        brightBlue: '#83a598',
-        brightMagenta: '#d3869b',
-        brightCyan: '#8ec07c',
-        brightWhite: '#ebdbb2',
-      },
+      theme: buildXtermTheme(),
       fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
       fontSize: 13,
       cursorBlink: true,
@@ -241,8 +249,7 @@ export function TerminalPage() {
 
     // Create a dedicated container for this terminal session
     const container = document.createElement('div');
-    // Hardcoded to match xterm.js theme — always dark regardless of app theme
-    container.style.cssText = 'position: absolute; inset: 0; display: none; padding: 4px 0 0 8px; background: #1d2021;';
+    container.style.cssText = 'position: absolute; inset: 0; display: none; padding: 4px 0 0 8px; background: var(--gruvbox-bg-hard);';
 
     // Hide all other containers
     for (const [, entry] of sessionMap) {
