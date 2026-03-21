@@ -159,7 +159,7 @@ export function HelpPanel(props: { onClose: () => void }) {
           ),
           h('p', { style: 'margin: 0 0 6px;' },
             h('strong', { style: 'color: var(--gruvbox-fg);' }, 'Ports: '),
-            'Workspaces use a fixed port (default 4444). Ephemeral sessions auto-pick from 4445-4460. Use ',
+            'Workspaces auto-pick from 4444-4453. Ephemeral sessions auto-pick from 4454-4470. Use ',
             h('code', { style: 'font-size: 11px; color: var(--accent, var(--gruvbox-yellow));' }, '--port'),
             ' to override.',
           ),

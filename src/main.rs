@@ -97,12 +97,12 @@ enum Commands {
 // Port constants
 // ---------------------------------------------------------------------------
 
-/// Default port for workspace mode.
-const WORKSPACE_DEFAULT_PORT: u16 = 4444;
-/// Ephemeral port range start.
-const EPHEMERAL_PORT_START: u16 = 4445;
-/// Ephemeral port range end (inclusive).
-const EPHEMERAL_PORT_END: u16 = 4460;
+/// Workspace port range (auto-increment, supports multiple concurrent workspaces).
+const WORKSPACE_PORT_START: u16 = 4444;
+const WORKSPACE_PORT_END: u16 = 4453;
+/// Ephemeral port range (auto-increment).
+const EPHEMERAL_PORT_START: u16 = 4454;
+const EPHEMERAL_PORT_END: u16 = 4470;
 
 // ---------------------------------------------------------------------------
 // Project root detection
@@ -364,7 +364,7 @@ fn get_workspace_port(name: &str) -> u16 {
     if let Some(config) = services::workspace::load_workspace(name) {
         return config.port;
     }
-    WORKSPACE_DEFAULT_PORT
+    WORKSPACE_PORT_START
 }
 
 /// Resolve a folder argument to an absolute path.
@@ -549,21 +549,29 @@ async fn run_workspace_server(
     // Build the Axum router
     let app = server::build_router(state.clone());
 
-    // Port binding — workspace: fixed port, error if taken
-    let (actual_port, listener) = if port_override.is_none() {
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        match TcpListener::bind(addr).await {
-            Ok(l) => (port, l),
-            Err(_) => {
+    // Port binding — workspace: auto-increment from 4444-4453
+    let (actual_port, listener) = if port_override.is_some() {
+        // Explicit --port: try that port, auto-increment up to +10
+        bind_with_fallback(port, 10).await
+    } else {
+        // Auto-increment through the workspace range
+        let mut bound = None;
+        for try_port in WORKSPACE_PORT_START..=WORKSPACE_PORT_END {
+            let addr = SocketAddr::from(([127, 0, 0, 1], try_port));
+            if let Ok(l) = TcpListener::bind(addr).await {
+                bound = Some((try_port, l));
+                break;
+            }
+        }
+        match bound {
+            Some(b) => b,
+            None => {
                 eprintln!(
-                    "  Port {port} is already in use. Is another kmd instance running? Check with `kmd status {name}`."
+                    "  No available ports in range {WORKSPACE_PORT_START}-{WORKSPACE_PORT_END}. Close some kmd instances."
                 );
                 std::process::exit(1);
             }
         }
-    } else {
-        // Explicit --port: try that port, auto-increment up to +10
-        bind_with_fallback(port, 10).await
     };
 
     // Write lockfile
