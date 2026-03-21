@@ -64,6 +64,8 @@ pub struct AppStateInner {
     pub roots: Mutex<Vec<WorkspaceRoot>>,
     /// Whether this is running in workspace mode (true) or ephemeral mode (false).
     pub is_workspace: bool,
+    /// The port this kmd server is listening on (set after binding).
+    pub server_port: Mutex<u16>,
 }
 
 impl AppState {
@@ -84,6 +86,7 @@ impl AppState {
                 workspace_name: ws_config.name,
                 roots: Mutex::new(roots),
                 is_workspace: true,
+                server_port: Mutex::new(0),
             }),
         }
     }
@@ -110,6 +113,7 @@ impl AppState {
                 workspace_name: name,
                 roots: Mutex::new(vec![root]),
                 is_workspace: false,
+                server_port: Mutex::new(0),
             }),
         }
     }
@@ -153,6 +157,16 @@ impl AppState {
     /// Whether this is running in workspace mode (true) or ephemeral mode (false).
     pub fn is_workspace(&self) -> bool {
         self.inner.is_workspace
+    }
+
+    /// Set the port this server is listening on (called after binding).
+    pub fn set_server_port(&self, port: u16) {
+        *self.inner.server_port.lock().expect("Server port mutex poisoned") = port;
+    }
+
+    /// Get the port this server is listening on.
+    pub fn server_port(&self) -> u16 {
+        *self.inner.server_port.lock().expect("Server port mutex poisoned")
     }
 
     /// Resolve a workspace config's folders into WorkspaceRoot structs.

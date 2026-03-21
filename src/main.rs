@@ -641,6 +641,7 @@ async fn run_workspace_server(
     }
 
     // Serve
+    state.set_server_port(actual_port);
     tracing::info!("Listening on 127.0.0.1:{actual_port}");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -850,6 +851,7 @@ async fn run_ephemeral_server(
         }
     }
 
+    state.set_server_port(actual_port);
     tracing::info!("Listening on 127.0.0.1:{actual_port}");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

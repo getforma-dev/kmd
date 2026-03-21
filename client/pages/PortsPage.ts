@@ -22,6 +22,7 @@ interface PortInfo {
   category: string | null;
   managed?: boolean;
   managed_by?: ManagedBy;
+  is_self?: boolean;
 }
 
 interface ManagedProcess {
@@ -435,6 +436,14 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
           card.appendChild(pidBadge);
         }
 
+        // "this server" badge for kmd itself
+        if (p.is_self) {
+          const selfBadge = document.createElement('span');
+          selfBadge.style.cssText = 'font-size: 9px; padding: 1px 5px; border-radius: 2px; background: rgba(184, 187, 38, 0.15); color: var(--gruvbox-green); font-family: var(--font-code); text-transform: uppercase; letter-spacing: 0.05em;';
+          selfBadge.textContent = 'this server';
+          card.appendChild(selfBadge);
+        }
+
         // Action buttons
         const actions = document.createElement('div');
         actions.style.cssText = 'display: flex; gap: 4px;';
@@ -447,13 +456,21 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
         hideBtn.onclick = () => hidePort(p.port);
         actions.appendChild(hideBtn);
 
-        // Kill button
+        // Kill button — confirm if killing kmd itself
         const killBtn = document.createElement('button');
         killBtn.className = 'btn btn-danger';
         killBtn.style.cssText = 'padding: 2px 8px; font-size: 10px;';
         killBtn.textContent = killing === p.port ? 'Killing…' : 'Kill';
         killBtn.disabled = killing === p.port;
-        killBtn.onclick = () => killPort(p.port);
+        killBtn.onclick = () => {
+          if (p.is_self) {
+            if (confirm('This will kill the kmd server you are currently using. This page will stop working. Continue?')) {
+              killPort(p.port);
+            }
+          } else {
+            killPort(p.port);
+          }
+        };
         actions.appendChild(killBtn);
 
         card.appendChild(actions);

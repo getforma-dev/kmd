@@ -569,6 +569,7 @@ async fn api_shell_exec_handler(
 /// 2. By PID (process ignores PORT but we still know kmd spawned it)
 async fn api_ports_handler(State(state): State<AppState>) -> impl IntoResponse {
     let port_list = ports::scan_ports().await;
+    let self_port = state.server_port();
 
     let allocator = state.port_allocator();
     let allocations = allocator.list_allocations();
@@ -586,6 +587,13 @@ async fn api_ports_handler(State(state): State<AppState>) -> impl IntoResponse {
         .iter()
         .map(|p| {
             let mut val = serde_json::to_value(p).unwrap_or_default();
+
+            // Mark if this port is kmd itself
+            if self_port > 0 && p.port == self_port {
+                val.as_object_mut().map(|obj| {
+                    obj.insert("is_self".to_string(), serde_json::json!(true));
+                });
+            }
 
             // Try 1: match by allocated port number
             let alloc_match = allocations.iter().find(|a| a.port == p.port);
