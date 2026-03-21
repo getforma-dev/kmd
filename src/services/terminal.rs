@@ -169,14 +169,6 @@ impl TerminalManager {
         Ok(())
     }
 
-    /// Remove a session from the manager without killing (used when child exits naturally).
-    pub fn remove_session(&self, id: &str) {
-        self.sessions
-            .lock()
-            .expect("terminal sessions mutex poisoned")
-            .remove(id);
-    }
-
     /// List all active session IDs.
     pub fn list_sessions(&self) -> Vec<String> {
         self.sessions

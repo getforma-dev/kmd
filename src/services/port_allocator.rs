@@ -42,12 +42,6 @@ pub struct PortAllocator {
     allocations: HashMap<String, PortAllocation>,
 }
 
-// Some methods (allocate_specific, get_allocation, find_by_port) are not yet
-// wired up but are part of the public API for planned features:
-// - allocate_specific: user override via --port in UI
-// - get_allocation: lookup by process_id for status display
-// - find_by_port: reverse lookup for port-to-process matching
-#[allow(dead_code)]
 impl PortAllocator {
     pub fn new() -> Self {
         Self {
@@ -93,48 +87,9 @@ impl PortAllocator {
         None
     }
 
-    /// Allocate a specific port (user override via --port).
-    pub fn allocate_specific(
-        &mut self,
-        port: u16,
-        process_id: &str,
-        package_path: &str,
-        script_name: &str,
-        root_name: &str,
-        framework: Option<&str>,
-    ) -> Result<(), String> {
-        if self.allocations.values().any(|a| a.port == port) {
-            return Err(format!("Port {port} is already allocated to another managed process"));
-        }
-        if !is_port_available(port) {
-            return Err(format!("Port {port} is already in use"));
-        }
-
-        let allocation = PortAllocation {
-            port,
-            process_id: process_id.to_string(),
-            package_path: package_path.to_string(),
-            script_name: script_name.to_string(),
-            root_name: root_name.to_string(),
-            framework: framework.map(|s| s.to_string()),
-        };
-        self.allocations.insert(process_id.to_string(), allocation);
-        Ok(())
-    }
-
     /// Release a port when a process exits.
     pub fn release(&mut self, process_id: &str) -> Option<PortAllocation> {
         self.allocations.remove(process_id)
-    }
-
-    /// Get the allocation for a process.
-    pub fn get_allocation(&self, process_id: &str) -> Option<&PortAllocation> {
-        self.allocations.get(process_id)
-    }
-
-    /// Find allocation by port number.
-    pub fn find_by_port(&self, port: u16) -> Option<&PortAllocation> {
-        self.allocations.values().find(|a| a.port == port)
     }
 
     /// List all active allocations.
