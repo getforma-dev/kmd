@@ -12,7 +12,7 @@ export default defineConfig({
   },
   // kmd binary starts the server — webServer manages the lifecycle
   webServer: {
-    command: './forma-dev/target/release/kmd --no-open --port 4444',
+    command: './forma-dev/target/release/kmd --no-open --port 4444 --force',
     port: 4444,
     timeout: 30_000,
     reuseExistingServer: false,
