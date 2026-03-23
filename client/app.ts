@@ -129,6 +129,24 @@ function applyTheme(theme: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Feature 5: Desktop notifications
+// ---------------------------------------------------------------------------
+
+function showDesktopNotification(title: string, body: string) {
+  if (!('Notification' in window)) return;
+
+  if (Notification.permission === 'granted') {
+    new Notification(title, { body, icon: '/favicon.ico' });
+  } else if (Notification.permission !== 'denied') {
+    Notification.requestPermission().then((perm) => {
+      if (perm === 'granted') {
+        new Notification(title, { body, icon: '/favicon.ico' });
+      }
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // App root
 // ---------------------------------------------------------------------------
 
@@ -191,6 +209,14 @@ function App() {
     try {
       const msg = JSON.parse(data) as { type: string; data?: { process_id?: string; code?: number | null } };
       wsBus.dispatch(msg);
+
+      // Feature 5: Desktop notifications for crashes/events
+      if (msg.type === 'notification' && (msg as any).data) {
+        const notif = (msg as any).data as { title: string; body: string; level: string };
+        if (notif.level === 'error' || notif.level === 'warning') {
+          showDesktopNotification(notif.title, notif.body);
+        }
+      }
 
       // Track crashes for badge
       if (msg.type === 'exit' && msg.data?.process_id) {

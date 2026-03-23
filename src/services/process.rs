@@ -95,6 +95,10 @@ fn spawn_managed_process(
                     Some(code) => {
                         // Only broadcast if we're the first to clean up
                         // (kill_process may have already removed + broadcast)
+                        let meta_clone = {
+                            let procs = state.processes();
+                            procs.get(&pid).map(|rp| rp.meta.clone())
+                        };
                         let was_present = {
                             let mut procs = state.processes();
                             procs.remove(&pid).is_some()
@@ -108,9 +112,25 @@ fn spawn_managed_process(
                                 }
                             }
                             let _ = tx.send(ServerMessage::Exit {
-                                process_id: pid,
+                                process_id: pid.clone(),
                                 code,
                             });
+
+                            // Send desktop notification for crashes
+                            if code != Some(0) && code.is_some() {
+                                if let Some(ref meta) = meta_clone {
+                                    let _ = tx.send(ServerMessage::Notification {
+                                        title: format!("{} crashed", meta.script_name),
+                                        body: format!("Exit code {}", code.unwrap_or(-1)),
+                                        level: "error".to_string(),
+                                    });
+                                }
+                            }
+
+                            // Trigger chain rules
+                            if let Some(ref meta) = meta_clone {
+                                trigger_chains(&state, meta, code);
+                            }
                         }
                         break;
                     }
@@ -400,4 +420,45 @@ pub fn run_shell_command(
     };
 
     spawn_managed_process(state, child, meta)
+}
+
+/// Check chain rules and trigger follow-up scripts when a process exits.
+fn trigger_chains(state: &AppState, meta: &ProcessInfo, exit_code: Option<i32>) {
+    let rules = state.chain_rules();
+    let matching: Vec<_> = rules
+        .iter()
+        .filter(|r| {
+            r.enabled
+                && r.source_package == meta.package_path
+                && r.source_script == meta.script_name
+                && match r.trigger_code {
+                    Some(expected) => exit_code == Some(expected),
+                    None => true, // trigger on any exit
+                }
+        })
+        .cloned()
+        .collect();
+    drop(rules);
+
+    for rule in matching {
+        tracing::info!(
+            "Chain triggered: {} → {} (exit code {:?})",
+            rule.source_script,
+            rule.target_script,
+            exit_code
+        );
+        match run_script(state, &rule.target_root, &rule.target_package, &rule.target_script) {
+            Ok(result) => {
+                let _ = state.broadcast_tx().send(ServerMessage::Notification {
+                    title: format!("Chain: {} started", rule.target_script),
+                    body: format!("Triggered by {} exit", rule.source_script),
+                    level: "info".to_string(),
+                });
+                tracing::info!("Chain started {} (pid {})", rule.target_script, result.process_id);
+            }
+            Err(err) => {
+                tracing::error!("Chain failed to start {}: {err}", rule.target_script);
+            }
+        }
+    }
 }

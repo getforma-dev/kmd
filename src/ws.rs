@@ -32,6 +32,24 @@ pub enum ServerMessage {
     /// Markdown index is ready after initial scan
     #[serde(rename = "index_ready")]
     IndexReady { file_count: usize },
+    /// Notification for desktop alerts (process crash, port down, etc.)
+    #[serde(rename = "notification")]
+    Notification { title: String, body: String, level: String },
+    /// Resource usage update for running processes
+    #[serde(rename = "resources")]
+    Resources { processes: Vec<ProcessResources> },
+    /// Git status update for workspace roots
+    #[serde(rename = "git_status")]
+    GitStatus { roots: Vec<crate::services::git::GitStatus> },
+}
+
+/// Resource usage for a single process.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessResources {
+    pub process_id: String,
+    pub pid: u32,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
 }
 
 /// Information about a listening port.

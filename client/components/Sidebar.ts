@@ -1,7 +1,36 @@
-import { h } from '@getforma/core';
+import { h, createSignal, createEffect, onCleanup } from '@getforma/core';
 import { iconDocs, iconScripts, iconPorts, iconTerminal } from './icons';
 
 export type Route = 'docs' | 'scripts' | 'ports' | 'terminal';
+
+// ---------------------------------------------------------------------------
+// Feature 4: Git status polling
+// ---------------------------------------------------------------------------
+
+interface GitRootStatus {
+  root: string;
+  branch: string | null;
+  dirty_count: number;
+  is_dirty: boolean;
+  head_short: string | null;
+}
+
+function useGitStatus() {
+  const [gitStatus, setGitStatus] = createSignal<GitRootStatus[]>([]);
+
+  function refresh() {
+    fetch('/api/git/status')
+      .then((r) => r.json())
+      .then((data: { roots: GitRootStatus[] }) => setGitStatus(data.roots || []))
+      .catch(() => {});
+  }
+
+  refresh();
+  const timer = setInterval(refresh, 15000); // Poll every 15s
+  onCleanup(() => clearInterval(timer));
+
+  return gitStatus;
+}
 
 const LABELS: Record<Route, string> = {
   docs: 'Docs',
@@ -96,6 +125,77 @@ export function Sidebar(props: {
     );
   }
 
+  // Feature 4: Git status
+  const gitStatus = useGitStatus();
+
+  function GitStatusIndicator() {
+    const container = document.createElement('div');
+    container.style.cssText = 'padding: 0 16px 8px; font-size: 11px; font-family: var(--font-code);';
+
+    createEffect(() => {
+      const statuses = gitStatus();
+      container.innerHTML = '';
+      if (statuses.length === 0) return;
+
+      for (const s of statuses) {
+        if (!s.branch) continue;
+        const row = document.createElement('div');
+        row.style.cssText = 'display: flex; align-items: center; gap: 5px; padding: 2px 0; color: var(--gruvbox-fg2);';
+
+        // Branch icon (git branch)
+        const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        icon.setAttribute('viewBox', '0 0 24 24');
+        icon.setAttribute('fill', 'none');
+        icon.setAttribute('stroke', 'currentColor');
+        icon.setAttribute('stroke-width', '2');
+        icon.setAttribute('stroke-linecap', 'round');
+        icon.style.cssText = 'width: 12px; height: 12px; flex-shrink: 0; opacity: 0.6;';
+        const line1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line1.setAttribute('x1', '6'); line1.setAttribute('y1', '3');
+        line1.setAttribute('x2', '6'); line1.setAttribute('y2', '15');
+        const circle1 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle1.setAttribute('cx', '18'); circle1.setAttribute('cy', '6'); circle1.setAttribute('r', '3');
+        const circle2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle2.setAttribute('cx', '6'); circle2.setAttribute('cy', '18'); circle2.setAttribute('r', '3');
+        const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path1.setAttribute('d', 'M18 9a9 9 0 0 1-9 9');
+        icon.appendChild(line1);
+        icon.appendChild(circle1);
+        icon.appendChild(circle2);
+        icon.appendChild(path1);
+        row.appendChild(icon);
+
+        // Branch name
+        const branch = document.createElement('span');
+        branch.style.cssText = 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px;';
+        branch.textContent = s.branch;
+        branch.title = s.branch;
+        row.appendChild(branch);
+
+        // Dirty indicator
+        if (s.is_dirty) {
+          const dirty = document.createElement('span');
+          dirty.style.cssText = 'color: var(--gruvbox-yellow); font-size: 10px;';
+          dirty.textContent = `+${s.dirty_count}`;
+          dirty.title = `${s.dirty_count} uncommitted change${s.dirty_count === 1 ? '' : 's'}`;
+          row.appendChild(dirty);
+        }
+
+        // Short hash
+        if (s.head_short) {
+          const hash = document.createElement('span');
+          hash.style.cssText = 'color: var(--gruvbox-gray); font-size: 10px; margin-left: auto;';
+          hash.textContent = s.head_short;
+          row.appendChild(hash);
+        }
+
+        container.appendChild(row);
+      }
+    });
+
+    return container;
+  }
+
   return h('aside', { class: 'sidebar' },
     h('div', { class: 'sidebar-header' },
       h('span', { class: 'sidebar-logo' },
@@ -110,6 +210,7 @@ export function Sidebar(props: {
           }, () => props.workspaceName!())
         : h('span', { class: 'sidebar-version' }, 'v0.1.0'),
     ),
+    GitStatusIndicator(),
     h('nav', { class: 'sidebar-nav' }, ...navItems),
     h('div', { class: 'sidebar-footer' },
       h('button', {

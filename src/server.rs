@@ -9,7 +9,7 @@ use axum::{
 };
 use rust_embed::Embed;
 use serde::Deserialize;
-use crate::services::{markdown, ports, process, scripts, terminal_ws};
+use crate::services::{env, git, markdown, ports, process, scripts, terminal_ws};
 use crate::state::AppState;
 use crate::ws;
 
@@ -138,7 +138,21 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/ports/hidden", get(api_ports_hidden_get).post(api_ports_hidden_set))
         .route("/api/ports/{port}/kill", post(api_port_kill_handler))
         // Port allocations
-        .route("/api/ports/allocations", get(api_port_allocations_handler));
+        .route("/api/ports/allocations", get(api_port_allocations_handler))
+        // Script notes (feature 1)
+        .route("/api/scripts/notes", get(api_script_notes_get).post(api_script_notes_set))
+        // Git status (feature 4)
+        .route("/api/git/status", get(api_git_status_handler))
+        // Resource monitoring (feature 3)
+        .route("/api/processes/resources", get(api_process_resources_handler))
+        // Env file management (feature 7)
+        .route("/api/env", get(api_env_list_handler))
+        .route("/api/env/file", get(api_env_file_handler))
+        .route("/api/env/compare", get(api_env_compare_handler))
+        // Script chaining (feature 6)
+        .route("/api/chains", get(api_chains_list).post(api_chains_create))
+        .route("/api/chains/{id}", axum::routing::delete(api_chains_delete))
+        .route("/api/chains/{id}/toggle", post(api_chains_toggle));
 
     Router::new()
         .route("/ws", get(ws::ws_handler))
@@ -859,5 +873,291 @@ async fn api_ports_hidden_set(Json(body): Json<serde_json::Value>) -> impl IntoR
         Json(serde_json::json!({ "ok": true, "hidden": hidden }))
     } else {
         Json(serde_json::json!({ "error": "Expected { hidden: [port, ...] }" }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Feature 1: Script notes API
+// ---------------------------------------------------------------------------
+
+/// Query params for getting a script note.
+#[derive(Deserialize)]
+struct ScriptNoteQuery {
+    root: Option<String>,
+    package_path: String,
+    script_name: String,
+}
+
+/// `GET /api/scripts/notes` — Get a note for a script.
+async fn api_script_notes_get(
+    State(state): State<AppState>,
+    Query(params): Query<ScriptNoteQuery>,
+) -> impl IntoResponse {
+    let root = params.root.as_deref().unwrap_or(".");
+    let conn = state.db();
+    let note: Option<String> = conn
+        .query_row(
+            "SELECT note FROM script_notes WHERE root = ?1 AND package_path = ?2 AND script_name = ?3",
+            rusqlite::params![root, &params.package_path, &params.script_name],
+            |row| row.get(0),
+        )
+        .ok();
+    Json(serde_json::json!({ "note": note }))
+}
+
+/// Body for setting a script note.
+#[derive(Deserialize)]
+struct ScriptNoteBody {
+    root: Option<String>,
+    package_path: String,
+    script_name: String,
+    note: String,
+}
+
+/// `POST /api/scripts/notes` — Set or update a note for a script.
+async fn api_script_notes_set(
+    State(state): State<AppState>,
+    Json(body): Json<ScriptNoteBody>,
+) -> impl IntoResponse {
+    let root = body.root.as_deref().unwrap_or(".");
+    let conn = state.db();
+
+    if body.note.trim().is_empty() {
+        // Delete the note
+        let _ = conn.execute(
+            "DELETE FROM script_notes WHERE root = ?1 AND package_path = ?2 AND script_name = ?3",
+            rusqlite::params![root, &body.package_path, &body.script_name],
+        );
+    } else {
+        // Upsert the note
+        let _ = conn.execute(
+            "INSERT INTO script_notes (root, package_path, script_name, note)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(root, package_path, script_name) DO UPDATE SET note = ?4",
+            rusqlite::params![root, &body.package_path, &body.script_name, &body.note],
+        );
+    }
+
+    Json(serde_json::json!({ "ok": true }))
+}
+
+// ---------------------------------------------------------------------------
+// Feature 3: Process resource monitoring
+// ---------------------------------------------------------------------------
+
+/// `GET /api/processes/resources` — CPU/memory usage for running processes.
+async fn api_process_resources_handler(State(state): State<AppState>) -> impl IntoResponse {
+    use sysinfo::System;
+
+    let procs = state.processes();
+    let pids: Vec<(String, u32)> = procs
+        .values()
+        .filter_map(|rp| rp.meta.pid.map(|pid| (rp.meta.id.clone(), pid)))
+        .collect();
+    drop(procs);
+
+    if pids.is_empty() {
+        return Json(serde_json::json!({ "processes": [] }));
+    }
+
+    let mut sys = System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    let resources: Vec<serde_json::Value> = pids
+        .iter()
+        .filter_map(|(id, pid)| {
+            let sys_pid = sysinfo::Pid::from_u32(*pid);
+            sys.process(sys_pid).map(|proc_info| {
+                serde_json::json!({
+                    "process_id": id,
+                    "pid": pid,
+                    "cpu_percent": proc_info.cpu_usage(),
+                    "memory_bytes": proc_info.memory(),
+                })
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({ "processes": resources }))
+}
+
+// ---------------------------------------------------------------------------
+// Feature 4: Git status API
+// ---------------------------------------------------------------------------
+
+/// `GET /api/git/status` — Git branch/dirty status per workspace root.
+async fn api_git_status_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let roots = state.roots();
+    let roots_clone: Vec<_> = roots.clone();
+    drop(roots);
+
+    let statuses = git::get_status(&roots_clone);
+
+    Json(serde_json::json!({ "roots": statuses }))
+}
+
+// ---------------------------------------------------------------------------
+// Feature 6: Script chaining API
+// ---------------------------------------------------------------------------
+
+/// `GET /api/chains` — List all chain rules.
+async fn api_chains_list(State(state): State<AppState>) -> impl IntoResponse {
+    let chains = state.chain_rules();
+    let list: Vec<_> = chains.clone();
+    Json(serde_json::json!({ "chains": list }))
+}
+
+/// Body for creating a chain rule.
+#[derive(Deserialize)]
+struct CreateChainBody {
+    source_root: Option<String>,
+    source_package: String,
+    source_script: String,
+    trigger_code: Option<i32>,
+    target_root: Option<String>,
+    target_package: String,
+    target_script: String,
+}
+
+/// `POST /api/chains` — Create a new chain rule.
+async fn api_chains_create(
+    State(state): State<AppState>,
+    Json(body): Json<CreateChainBody>,
+) -> impl IntoResponse {
+    use crate::state::ChainRule;
+
+    let rule = ChainRule {
+        id: uuid::Uuid::new_v4().to_string(),
+        source_root: body.source_root.unwrap_or_else(|| ".".to_string()),
+        source_package: body.source_package,
+        source_script: body.source_script,
+        trigger_code: body.trigger_code,
+        target_root: body.target_root.unwrap_or_else(|| ".".to_string()),
+        target_package: body.target_package,
+        target_script: body.target_script,
+        enabled: true,
+    };
+
+    let mut chains = state.chain_rules();
+    chains.push(rule.clone());
+
+    Json(serde_json::json!({ "ok": true, "chain": rule }))
+}
+
+/// `DELETE /api/chains/:id` — Delete a chain rule.
+async fn api_chains_delete(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let mut chains = state.chain_rules();
+    let before = chains.len();
+    chains.retain(|r| r.id != id);
+    let removed = chains.len() < before;
+    Json(serde_json::json!({ "ok": removed }))
+}
+
+/// `POST /api/chains/:id/toggle` — Toggle a chain rule on/off.
+async fn api_chains_toggle(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let mut chains = state.chain_rules();
+    if let Some(rule) = chains.iter_mut().find(|r| r.id == id) {
+        rule.enabled = !rule.enabled;
+        Json(serde_json::json!({ "ok": true, "enabled": rule.enabled }))
+    } else {
+        Json(serde_json::json!({ "ok": false, "error": "Chain not found" }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Feature 7: .env file management API
+// ---------------------------------------------------------------------------
+
+/// Query params for env listing.
+#[derive(Deserialize)]
+struct EnvListQuery {
+    reveal: Option<bool>,
+}
+
+/// `GET /api/env` — List all .env files with masked values.
+async fn api_env_list_handler(
+    State(state): State<AppState>,
+    Query(params): Query<EnvListQuery>,
+) -> impl IntoResponse {
+    let roots = state.roots();
+    let roots_clone: Vec<_> = roots.clone();
+    drop(roots);
+
+    let reveal = params.reveal.unwrap_or(false);
+    let files = env::discover_env_files(&roots_clone, reveal);
+
+    Json(serde_json::json!({ "files": files }))
+}
+
+/// Query params for reading a specific env file.
+#[derive(Deserialize)]
+struct EnvFileQuery {
+    root: Option<String>,
+    path: String,
+    reveal: Option<bool>,
+}
+
+/// `GET /api/env/file` — Read a specific .env file.
+async fn api_env_file_handler(
+    State(state): State<AppState>,
+    Query(params): Query<EnvFileQuery>,
+) -> impl IntoResponse {
+    let root_key = params.root.as_deref().unwrap_or(".");
+    let roots = state.roots();
+    let root = roots.iter().find(|r| r.relative_path == root_key).cloned();
+    drop(roots);
+
+    match root {
+        Some(r) => {
+            let reveal = params.reveal.unwrap_or(false);
+            match env::read_env_file(&r.absolute_path, &params.path, reveal) {
+                Some(vars) => Json(serde_json::json!({ "variables": vars })).into_response(),
+                None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "File not found" }))).into_response(),
+            }
+        }
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Root not found" }))).into_response(),
+    }
+}
+
+/// Query params for comparing two env files.
+#[derive(Deserialize)]
+struct EnvCompareQuery {
+    root_a: Option<String>,
+    path_a: String,
+    root_b: Option<String>,
+    path_b: String,
+}
+
+/// `GET /api/env/compare` — Compare two .env files.
+async fn api_env_compare_handler(
+    State(state): State<AppState>,
+    Query(params): Query<EnvCompareQuery>,
+) -> impl IntoResponse {
+    let root_key_a = params.root_a.as_deref().unwrap_or(".");
+    let root_key_b = params.root_b.as_deref().unwrap_or(".");
+    let roots = state.roots();
+    let root_a = roots.iter().find(|r| r.relative_path == root_key_a).cloned();
+    let root_b = roots.iter().find(|r| r.relative_path == root_key_b).cloned();
+    drop(roots);
+
+    let (Some(ra), Some(rb)) = (root_a, root_b) else {
+        return Json(serde_json::json!({ "error": "Root not found" })).into_response();
+    };
+
+    let vars_a = env::read_env_file(&ra.absolute_path, &params.path_a, true);
+    let vars_b = env::read_env_file(&rb.absolute_path, &params.path_b, true);
+
+    match (vars_a, vars_b) {
+        (Some(a), Some(b)) => {
+            let diff = env::compare_env_files(&a, &b);
+            Json(serde_json::json!({ "diff": diff })).into_response()
+        }
+        _ => Json(serde_json::json!({ "error": "One or both files not found" })).into_response(),
     }
 }

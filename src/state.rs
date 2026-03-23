@@ -43,6 +43,29 @@ pub struct WorkspaceRoot {
     pub absolute_path: PathBuf,
 }
 
+/// A chain rule: "when script X exits with code 0, run script Y".
+#[derive(Debug, Clone, Serialize)]
+pub struct ChainRule {
+    /// Unique ID for this chain rule.
+    pub id: String,
+    /// Root key for the source script.
+    pub source_root: String,
+    /// Package path for the source script.
+    pub source_package: String,
+    /// Script name that triggers the chain.
+    pub source_script: String,
+    /// Only trigger on this exit code (None = any exit).
+    pub trigger_code: Option<i32>,
+    /// Root key for the target script.
+    pub target_root: String,
+    /// Package path for the target script.
+    pub target_package: String,
+    /// Script name to run when triggered.
+    pub target_script: String,
+    /// Whether this chain is enabled.
+    pub enabled: bool,
+}
+
 /// Shared application state, wrapped in Arc for cheap cloning across handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -66,6 +89,8 @@ pub struct AppStateInner {
     pub is_workspace: bool,
     /// The port this kmd server is listening on (set after binding).
     pub server_port: Mutex<u16>,
+    /// Script chain rules ("when X finishes, run Y").
+    pub chain_rules: Mutex<Vec<ChainRule>>,
 }
 
 impl AppState {
@@ -87,6 +112,7 @@ impl AppState {
                 roots: Mutex::new(roots),
                 is_workspace: true,
                 server_port: Mutex::new(0),
+                chain_rules: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -114,6 +140,7 @@ impl AppState {
                 roots: Mutex::new(vec![root]),
                 is_workspace: false,
                 server_port: Mutex::new(0),
+                chain_rules: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -167,6 +194,11 @@ impl AppState {
     /// Get the port this server is listening on.
     pub fn server_port(&self) -> u16 {
         *self.inner.server_port.lock().expect("Server port mutex poisoned")
+    }
+
+    /// Access the chain rules (locks the mutex).
+    pub fn chain_rules(&self) -> std::sync::MutexGuard<'_, Vec<ChainRule>> {
+        self.inner.chain_rules.lock().expect("Chain rules mutex poisoned")
     }
 
     /// Resolve a workspace config's folders into WorkspaceRoot structs.

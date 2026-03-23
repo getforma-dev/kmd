@@ -178,6 +178,9 @@ export function ScriptsPage(props?: ScriptsPageProps) {
   const [viewingHistoryId, setViewingHistoryId] = createSignal<string | null>(null);
   const [showHistory, setShowHistory] = createSignal(false);
 
+  // Feature 2: Log filtering
+  const [logFilter, setLogFilter] = createSignal('');
+
   // Helper: get all packages flattened
   const allPackages = (): PackageScripts[] => {
     const result: PackageScripts[] = [];
@@ -232,22 +235,30 @@ export function ScriptsPage(props?: ScriptsPageProps) {
   // Getter for current terminal lines
   const terminalLines = (): TerminalLine[] => {
     outputVersion();
+    const filter = logFilter().toLowerCase();
+
+    let lines: TerminalLine[];
 
     // "All" view: interleaved log stream
     if (viewingAll()) {
-      return allOutputLines;
-    }
-
-    // History view
-    const histId = viewingHistoryId();
-    if (histId) {
+      lines = allOutputLines;
+    } else if (viewingHistoryId()) {
+      // History view
+      const histId = viewingHistoryId();
       const entry = history().find((h) => h.processId === histId);
-      return entry ? entry.lines : [];
+      lines = entry ? entry.lines : [];
+    } else {
+      const pid = selectedProcessId();
+      if (!pid) return [];
+      lines = processOutputMap.get(pid) ?? [];
     }
 
-    const pid = selectedProcessId();
-    if (!pid) return [];
-    return processOutputMap.get(pid) ?? [];
+    // Apply log filter
+    if (filter) {
+      lines = lines.filter((l) => l.text.toLowerCase().includes(filter));
+    }
+
+    return lines;
   };
 
   // Key for terminal identity — changes trigger full rebuild
@@ -400,6 +411,31 @@ export function ScriptsPage(props?: ScriptsPageProps) {
     .catch(() => {
       // Non-critical, ignore
     });
+
+  // Feature 1: Script notes cache
+  const scriptNotesCache = new Map<string, string>();
+  const [notesVersion, setNotesVersion] = createSignal(0);
+
+  function getScriptNoteKey(root: string, pkg: string, script: string): string {
+    return `${root}:${pkg}:${script}`;
+  }
+
+  function fetchScriptNote(root: string, pkg: string, script: string): string {
+    const key = getScriptNoteKey(root, pkg, script);
+    notesVersion(); // subscribe to updates
+    return scriptNotesCache.get(key) || '';
+  }
+
+  function saveScriptNote(root: string, pkg: string, script: string, note: string) {
+    const key = getScriptNoteKey(root, pkg, script);
+    scriptNotesCache.set(key, note);
+    setNotesVersion((v) => v + 1);
+    fetch('/api/scripts/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root, package_path: pkg, script_name: script, note }),
+    }).catch(() => {});
+  }
 
   // -------------------------------------------------------------------------
   // Run a script
@@ -1359,6 +1395,32 @@ export function ScriptsPage(props?: ScriptsPageProps) {
       // Populate the output panel
       outputPanel.appendChild(ProcessTabs() as Node);
       outputPanel.appendChild(HistoryPanel() as Node);
+
+      // Log filter bar
+      const filterBar = h('div', {
+        style: 'display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--gruvbox-border); background: var(--gruvbox-bg-hard);',
+      },
+        h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', style: 'width: 14px; height: 14px; opacity: 0.5; flex-shrink: 0;' },
+          h('circle', { cx: '11', cy: '11', r: '8' }),
+          h('line', { x1: '21', y1: '21', x2: '16.65', y2: '16.65' }),
+        ),
+        h('input', {
+          type: 'text',
+          placeholder: 'Filter logs…',
+          style: 'flex: 1; background: transparent; border: none; color: var(--gruvbox-fg); font-size: 12px; font-family: var(--font-code); outline: none;',
+          onInput: (e: Event) => setLogFilter((e.target as HTMLInputElement).value),
+          value: () => logFilter(),
+        }),
+        createShow(
+          () => logFilter().length > 0,
+          () => h('button', {
+            style: 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; padding: 2px 4px;',
+            onClick: () => setLogFilter(''),
+          }, '✕ Clear'),
+          () => h('span', { style: 'display: none;' }),
+        ),
+      );
+      if (filterBar instanceof Node) outputPanel.appendChild(filterBar);
 
       const termContainer = document.createElement('div');
       termContainer.style.cssText = 'flex: 1; overflow: hidden; padding: 4px 0 0 0; background: #1d2021;';
