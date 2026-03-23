@@ -120,7 +120,12 @@ pub fn build_router(state: AppState) -> Router {
         // Docs routes — search must come before the wildcard
         .route("/api/docs", get(api_docs_tree))
         .route("/api/docs/search", get(api_docs_search))
-        .route("/api/docs/{*path}", get(api_docs_render).patch(api_docs_patch))
+        .route("/api/docs/raw/{*path}", get(api_docs_raw))
+        .route("/api/docs/annotations", get(api_annotations_list).post(api_annotations_create))
+        .route("/api/docs/annotations/{id}", axum::routing::delete(api_annotations_delete))
+        .route("/api/docs/bookmarks", get(api_bookmarks_list).post(api_bookmarks_create))
+        .route("/api/docs/bookmarks/{id}", axum::routing::delete(api_bookmarks_delete))
+        .route("/api/docs/{*path}", get(api_docs_render).put(api_docs_write).delete(api_docs_delete).patch(api_docs_patch))
         // Script routes
         .route("/api/scripts", get(api_scripts_handler))
         .route("/api/scripts/run", post(api_scripts_run_handler))
@@ -577,6 +582,302 @@ async fn api_docs_patch(
     }
 
     Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Doc raw read, write, delete handlers
+// ---------------------------------------------------------------------------
+
+/// `GET /api/docs/raw/*path?root=<folder>` — Return raw markdown content for editing.
+async fn api_docs_raw(
+    State(state): State<AppState>,
+    Path(file_path): Path<String>,
+    Query(params): Query<DocRenderQuery>,
+) -> impl IntoResponse {
+    let root_key = params.root.as_deref().unwrap_or(".");
+    let workspace_root = match state.roots().iter().find(|r| r.relative_path == root_key).cloned() {
+        Some(r) => r,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Root not found" }))).into_response(),
+    };
+
+    match markdown::read_raw(&workspace_root.absolute_path, &file_path) {
+        Some(content) => Json(serde_json::json!({ "content": content, "path": file_path })).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "File not found" }))).into_response(),
+    }
+}
+
+/// Request body for writing a doc.
+#[derive(Deserialize)]
+struct DocWriteBody {
+    root: Option<String>,
+    content: String,
+}
+
+/// `PUT /api/docs/*path` — Write raw markdown content to a file.
+async fn api_docs_write(
+    State(state): State<AppState>,
+    Path(file_path): Path<String>,
+    Json(body): Json<DocWriteBody>,
+) -> impl IntoResponse {
+    let root_key = body.root.as_deref().unwrap_or(".");
+    let workspace_root = match state.roots().iter().find(|r| r.relative_path == root_key).cloned() {
+        Some(r) => r,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Root not found" }))).into_response(),
+    };
+
+    match markdown::write_file(&workspace_root.absolute_path, &file_path, &body.content) {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err }))).into_response(),
+    }
+}
+
+/// `DELETE /api/docs/*path?root=<folder>` — Delete a markdown file.
+async fn api_docs_delete(
+    State(state): State<AppState>,
+    Path(file_path): Path<String>,
+    Query(params): Query<DocRenderQuery>,
+) -> impl IntoResponse {
+    let root_key = params.root.as_deref().unwrap_or(".");
+    let workspace_root = match state.roots().iter().find(|r| r.relative_path == root_key).cloned() {
+        Some(r) => r,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Root not found" }))).into_response(),
+    };
+
+    match markdown::delete_file(&workspace_root.absolute_path, &file_path) {
+        Ok(()) => {
+            // Cascade delete annotations and bookmarks for this file
+            let conn = state.db();
+            let _ = conn.execute(
+                "DELETE FROM doc_annotations WHERE root = ?1 AND file_path = ?2",
+                rusqlite::params![root_key, &file_path],
+            );
+            let _ = conn.execute(
+                "DELETE FROM doc_bookmarks WHERE root = ?1 AND file_path = ?2",
+                rusqlite::params![root_key, &file_path],
+            );
+            // Remove from index
+            let _ = conn.execute(
+                "DELETE FROM md_files WHERE root = ?1 AND relative_path = ?2",
+                rusqlite::params![root_key, &file_path],
+            );
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err }))).into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Annotations API (highlights + comments on docs)
+// ---------------------------------------------------------------------------
+
+/// Query params for listing annotations.
+#[derive(Deserialize)]
+struct AnnotationListQuery {
+    root: Option<String>,
+    file_path: Option<String>,
+}
+
+/// `GET /api/docs/annotations?root=.&file_path=README.md` — List annotations.
+async fn api_annotations_list(
+    State(state): State<AppState>,
+    Query(params): Query<AnnotationListQuery>,
+) -> impl IntoResponse {
+    let conn = state.db();
+
+    let annotations: Vec<serde_json::Value> = if let Some(ref fp) = params.file_path {
+        let root = params.root.as_deref().unwrap_or(".");
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, root, file_path, highlight_text, note, color, created_at
+             FROM doc_annotations WHERE root = ?1 AND file_path = ?2
+             ORDER BY created_at DESC"
+        ).unwrap();
+        stmt.query_map(rusqlite::params![root, fp], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "root": row.get::<_, String>(1)?,
+                "file_path": row.get::<_, String>(2)?,
+                "highlight_text": row.get::<_, String>(3)?,
+                "note": row.get::<_, String>(4)?,
+                "color": row.get::<_, String>(5)?,
+                "created_at": row.get::<_, i64>(6)?,
+            }))
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    } else {
+        // All annotations (for bookmarks panel overview)
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, root, file_path, highlight_text, note, color, created_at
+             FROM doc_annotations ORDER BY created_at DESC LIMIT 100"
+        ).unwrap();
+        stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "root": row.get::<_, String>(1)?,
+                "file_path": row.get::<_, String>(2)?,
+                "highlight_text": row.get::<_, String>(3)?,
+                "note": row.get::<_, String>(4)?,
+                "color": row.get::<_, String>(5)?,
+                "created_at": row.get::<_, i64>(6)?,
+            }))
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    };
+
+    Json(serde_json::json!({ "annotations": annotations }))
+}
+
+/// Body for creating an annotation.
+#[derive(Deserialize)]
+struct CreateAnnotationBody {
+    root: Option<String>,
+    file_path: String,
+    highlight_text: String,
+    note: String,
+    color: Option<String>,
+}
+
+/// `POST /api/docs/annotations` — Create an annotation on a doc.
+async fn api_annotations_create(
+    State(state): State<AppState>,
+    Json(body): Json<CreateAnnotationBody>,
+) -> impl IntoResponse {
+    let root = body.root.as_deref().unwrap_or(".");
+    let color = body.color.as_deref().unwrap_or("yellow");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let conn = state.db();
+    match conn.execute(
+        "INSERT OR REPLACE INTO doc_annotations (root, file_path, highlight_text, note, color, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![root, &body.file_path, &body.highlight_text, &body.note, color, now],
+    ) {
+        Ok(_) => {
+            let id = conn.last_insert_rowid();
+            Json(serde_json::json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(err) => {
+            tracing::error!("Failed to create annotation: {err}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Failed to save annotation" }))).into_response()
+        }
+    }
+}
+
+/// `DELETE /api/docs/annotations/:id` — Delete an annotation.
+async fn api_annotations_delete(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = state.db();
+    let deleted = conn.execute("DELETE FROM doc_annotations WHERE id = ?1", rusqlite::params![id])
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    Json(serde_json::json!({ "ok": deleted }))
+}
+
+// ---------------------------------------------------------------------------
+// Bookmarks API (saved heading references)
+// ---------------------------------------------------------------------------
+
+/// Query params for listing bookmarks.
+#[derive(Deserialize)]
+struct BookmarkListQuery {
+    root: Option<String>,
+    file_path: Option<String>,
+}
+
+/// `GET /api/docs/bookmarks` — List bookmarks (optionally filtered by file).
+async fn api_bookmarks_list(
+    State(state): State<AppState>,
+    Query(params): Query<BookmarkListQuery>,
+) -> impl IntoResponse {
+    let conn = state.db();
+
+    let bookmarks: Vec<serde_json::Value> = if let Some(ref fp) = params.file_path {
+        let root = params.root.as_deref().unwrap_or(".");
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, root, file_path, heading_id, heading_text, created_at
+             FROM doc_bookmarks WHERE root = ?1 AND file_path = ?2
+             ORDER BY created_at DESC"
+        ).unwrap();
+        stmt.query_map(rusqlite::params![root, fp], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "root": row.get::<_, String>(1)?,
+                "file_path": row.get::<_, String>(2)?,
+                "heading_id": row.get::<_, String>(3)?,
+                "heading_text": row.get::<_, String>(4)?,
+                "created_at": row.get::<_, i64>(5)?,
+            }))
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    } else {
+        // All bookmarks across all files
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, root, file_path, heading_id, heading_text, created_at
+             FROM doc_bookmarks ORDER BY created_at DESC LIMIT 100"
+        ).unwrap();
+        stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "root": row.get::<_, String>(1)?,
+                "file_path": row.get::<_, String>(2)?,
+                "heading_id": row.get::<_, String>(3)?,
+                "heading_text": row.get::<_, String>(4)?,
+                "created_at": row.get::<_, i64>(5)?,
+            }))
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    };
+
+    Json(serde_json::json!({ "bookmarks": bookmarks }))
+}
+
+/// Body for creating a bookmark.
+#[derive(Deserialize)]
+struct CreateBookmarkBody {
+    root: Option<String>,
+    file_path: String,
+    heading_id: String,
+    heading_text: String,
+}
+
+/// `POST /api/docs/bookmarks` — Bookmark a heading.
+async fn api_bookmarks_create(
+    State(state): State<AppState>,
+    Json(body): Json<CreateBookmarkBody>,
+) -> impl IntoResponse {
+    let root = body.root.as_deref().unwrap_or(".");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let conn = state.db();
+    match conn.execute(
+        "INSERT OR REPLACE INTO doc_bookmarks (root, file_path, heading_id, heading_text, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![root, &body.file_path, &body.heading_id, &body.heading_text, now],
+    ) {
+        Ok(_) => {
+            let id = conn.last_insert_rowid();
+            Json(serde_json::json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(err) => {
+            tracing::error!("Failed to create bookmark: {err}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Failed to save bookmark" }))).into_response()
+        }
+    }
+}
+
+/// `DELETE /api/docs/bookmarks/:id` — Remove a bookmark.
+async fn api_bookmarks_delete(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = state.db();
+    let deleted = conn.execute("DELETE FROM doc_bookmarks WHERE id = ?1", rusqlite::params![id])
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    Json(serde_json::json!({ "ok": deleted }))
 }
 
 // ---------------------------------------------------------------------------

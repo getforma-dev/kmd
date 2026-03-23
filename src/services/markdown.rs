@@ -473,6 +473,41 @@ pub fn file_exists(root_dir: &Path, relative_path: &str) -> bool {
             .is_some_and(|e| e.eq_ignore_ascii_case("md"))
 }
 
+/// Read the raw markdown content of a file (for editing).
+/// Returns `None` for path traversal attempts or read failures.
+pub fn read_raw(root_dir: &Path, relative_path: &str) -> Option<String> {
+    let abs = safe_resolve(root_dir, relative_path)?;
+    fs::read_to_string(&abs).ok()
+}
+
+/// Write raw markdown content to a file.
+/// Returns an error string on failure or path traversal.
+pub fn write_file(root_dir: &Path, relative_path: &str, content: &str) -> Result<(), String> {
+    let abs = safe_resolve(root_dir, relative_path)
+        .ok_or_else(|| "Path traversal detected or file does not exist".to_string())?;
+
+    // Only allow writing to .md files
+    if !abs.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+        return Err("Can only write to .md files".to_string());
+    }
+
+    fs::write(&abs, content).map_err(|e| format!("Failed to write file: {e}"))
+}
+
+/// Delete a markdown file from disk.
+/// Returns an error string on failure or path traversal.
+pub fn delete_file(root_dir: &Path, relative_path: &str) -> Result<(), String> {
+    let abs = safe_resolve(root_dir, relative_path)
+        .ok_or_else(|| "Path traversal detected or file does not exist".to_string())?;
+
+    // Only allow deleting .md files
+    if !abs.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+        return Err("Can only delete .md files".to_string());
+    }
+
+    fs::remove_file(&abs).map_err(|e| format!("Failed to delete file: {e}"))
+}
+
 /// The 500KB size cap, exported for use in handlers.
 pub const SIZE_CAP: u64 = MAX_FILE_SIZE;
 

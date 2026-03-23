@@ -122,6 +122,19 @@ export function DocsPage(props?: {
     ? [props.focusMode, props.setFocusMode!]
     : createSignal(false);
 
+  // Edit mode state
+  const [editMode, setEditMode] = createSignal(false);
+  const [rawContent, setRawContent] = createSignal('');
+  const [saving, setSaving] = createSignal(false);
+  const [deleting, setDeleting] = createSignal(false);
+
+  // Annotations state
+  const [annotations, setAnnotations] = createSignal<Array<{id: number; highlight_text: string; note: string; color: string}>>([]);
+
+  // Bookmarks state
+  const [bookmarks, setBookmarks] = createSignal<Array<{id: number; file_path: string; heading_id: string; heading_text: string; root: string}>>([]);
+  const [showBookmarks, setShowBookmarks] = createSignal(false);
+
   // Debounce timer
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   onCleanup(() => {
@@ -492,10 +505,149 @@ export function DocsPage(props?: {
   }
 
   // -------------------------------------------------------------------------
+  // Edit mode functions
+  // -------------------------------------------------------------------------
+
+  function enterEditMode() {
+    const path = selectedPath();
+    const root = selectedRoot();
+    if (!path) return;
+
+    fetch(`/api/docs/raw/${path.split('/').map(encodeURIComponent).join('/')}?root=${encodeURIComponent(root)}`)
+      .then((r) => r.json())
+      .then((data: { content: string }) => {
+        setRawContent(data.content);
+        setEditMode(true);
+      })
+      .catch((err) => console.error('[kmd] Failed to load raw content:', err));
+  }
+
+  function saveEdit() {
+    const path = selectedPath();
+    const root = selectedRoot();
+    if (!path) return;
+
+    setSaving(true);
+    fetch(`/api/docs/${path.split('/').map(encodeURIComponent).join('/')}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root, content: rawContent() }),
+    })
+      .then((r) => r.json())
+      .then(() => {
+        setEditMode(false);
+        setSaving(false);
+        refreshCurrentDoc();
+      })
+      .catch((err) => {
+        console.error('[kmd] Failed to save:', err);
+        setSaving(false);
+      });
+  }
+
+  function cancelEdit() {
+    setEditMode(false);
+    setRawContent('');
+  }
+
+  function deleteCurrentDoc() {
+    const path = selectedPath();
+    const root = selectedRoot();
+    if (!path) return;
+    if (!confirm(`Delete ${path}? This cannot be undone.`)) return;
+
+    setDeleting(true);
+    fetch(`/api/docs/${path.split('/').map(encodeURIComponent).join('/')}?root=${encodeURIComponent(root)}`, {
+      method: 'DELETE',
+    })
+      .then((r) => r.json())
+      .then(() => {
+        setDeleting(false);
+        setSelectedPath('');
+        setDocHtml('');
+        refreshTree();
+      })
+      .catch((err) => {
+        console.error('[kmd] Failed to delete:', err);
+        setDeleting(false);
+      });
+  }
+
+  // -------------------------------------------------------------------------
+  // Annotations functions
+  // -------------------------------------------------------------------------
+
+  function fetchAnnotations() {
+    const path = selectedPath();
+    const root = selectedRoot();
+    if (!path) return;
+    fetch(`/api/docs/annotations?root=${encodeURIComponent(root)}&file_path=${encodeURIComponent(path)}`)
+      .then((r) => r.json())
+      .then((data: { annotations: any[] }) => setAnnotations(data.annotations || []))
+      .catch(() => {});
+  }
+
+  function createAnnotation(highlightText: string, note: string, color: string) {
+    const path = selectedPath();
+    const root = selectedRoot();
+    fetch('/api/docs/annotations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root, file_path: path, highlight_text: highlightText, note, color }),
+    })
+      .then(() => fetchAnnotations())
+      .catch(() => {});
+  }
+
+  function deleteAnnotation(id: number) {
+    fetch(`/api/docs/annotations/${id}`, { method: 'DELETE' })
+      .then(() => fetchAnnotations())
+      .catch(() => {});
+  }
+
+  // -------------------------------------------------------------------------
+  // Bookmarks functions
+  // -------------------------------------------------------------------------
+
+  function fetchBookmarks() {
+    fetch('/api/docs/bookmarks')
+      .then((r) => r.json())
+      .then((data: { bookmarks: any[] }) => setBookmarks(data.bookmarks || []))
+      .catch(() => {});
+  }
+
+  function createBookmark(headingId: string, headingText: string) {
+    const path = selectedPath();
+    const root = selectedRoot();
+    fetch('/api/docs/bookmarks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root, file_path: path, heading_id: headingId, heading_text: headingText }),
+    })
+      .then(() => fetchBookmarks())
+      .catch(() => {});
+  }
+
+  function deleteBookmark(id: number) {
+    fetch(`/api/docs/bookmarks/${id}`, { method: 'DELETE' })
+      .then(() => fetchBookmarks())
+      .catch(() => {});
+  }
+
+  // Load bookmarks on mount
+  fetchBookmarks();
+
+  // Load annotations when selected file changes
+  createEffect(() => {
+    if (selectedPath()) fetchAnnotations();
+  });
+
+  // -------------------------------------------------------------------------
   // Handle file tree selection
   // -------------------------------------------------------------------------
 
   function handleFileSelect(path: string, root: string) {
+    setEditMode(false); // exit edit mode when switching files
     setSelectedPath(path);
     setSelectedRoot(root);
   }
@@ -723,16 +875,20 @@ export function DocsPage(props?: {
             tocEl.removeChild(tocEl.lastChild!);
           }
 
+          const currentBookmarks = bookmarks();
           for (const entry of entries) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display: flex; align-items: center; gap: 2px;';
+
             const item = document.createElement('a');
             item.className = `toc-item toc-level-${entry.level}${entry.id === activeId ? ' active' : ''}`;
+            item.style.cssText += 'flex: 1; min-width: 0;';
             item.textContent = entry.text;
             item.href = `#${entry.id}`;
             item.addEventListener('click', (e) => {
               e.preventDefault();
               const target = document.getElementById(entry.id);
               if (target) {
-                // Scroll the container so the heading is near the top with some padding
                 const scrollContainer = target.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
                 if (scrollContainer) {
                   const offsetTop = target.offsetTop - scrollContainer.offsetTop;
@@ -743,7 +899,28 @@ export function DocsPage(props?: {
                 setActiveTocId(entry.id);
               }
             });
-            tocEl.appendChild(item);
+            row.appendChild(item);
+
+            // Bookmark button
+            const isBookmarked = currentBookmarks.some((b) => b.heading_id === entry.id && b.file_path === selectedPath());
+            const bmBtn = document.createElement('button');
+            bmBtn.style.cssText = `background: none; border: none; cursor: pointer; font-size: 10px; padding: 0 2px; color: ${isBookmarked ? 'var(--accent)' : 'var(--gruvbox-gray)'}; opacity: ${isBookmarked ? '1' : '0'}; transition: opacity 0.15s;`;
+            bmBtn.textContent = isBookmarked ? '★' : '☆';
+            bmBtn.title = isBookmarked ? 'Remove bookmark' : 'Bookmark this section';
+            row.addEventListener('mouseenter', () => { if (!isBookmarked) bmBtn.style.opacity = '0.6'; });
+            row.addEventListener('mouseleave', () => { if (!isBookmarked) bmBtn.style.opacity = '0'; });
+            bmBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (isBookmarked) {
+                const bm = currentBookmarks.find((b) => b.heading_id === entry.id && b.file_path === selectedPath());
+                if (bm) deleteBookmark(bm.id);
+              } else {
+                createBookmark(entry.id, entry.text);
+              }
+            });
+            row.appendChild(bmBtn);
+
+            tocEl.appendChild(row);
           }
         });
 
@@ -761,16 +938,183 @@ export function DocsPage(props?: {
     return h('div', { class: 'doc-content-area', style: 'flex: 1; min-width: 0; display: flex;' },
       // Main content column — flex column: breadcrumb bar + scrollable content
       h('div', { style: 'flex: 1; min-width: 0; display: flex; flex-direction: column;' },
-        // Breadcrumb bar — fixed at top, not inside scroll container
+        // Breadcrumb bar — fixed at top with action buttons
         h('div', {
-          style: 'flex-shrink: 0; height: 28px; display: flex; align-items: center; padding: 0 var(--space-lg); border-bottom: 1px solid var(--gruvbox-border); background: var(--gruvbox-bg); gap: 8px;',
+          style: 'flex-shrink: 0; min-height: 28px; display: flex; align-items: center; padding: 0 var(--space-lg); border-bottom: 1px solid var(--gruvbox-border); background: var(--gruvbox-bg); gap: 6px;',
         },
           Breadcrumb(),
+          h('span', { style: 'margin-left: auto;' }),
+          // Bookmarks toggle
           h('button', {
             class: 'btn btn-ghost',
-            style: 'padding: 2px 10px; font-size: 10px; flex-shrink: 0; margin-left: auto;',
+            style: 'padding: 2px 8px; font-size: 10px; flex-shrink: 0;',
+            onClick: () => setShowBookmarks(!showBookmarks()),
+            title: 'Bookmarks',
+          }, () => `Bookmarks${bookmarks().length > 0 ? ` (${bookmarks().length})` : ''}`),
+          // Edit button
+          createShow(
+            () => !!selectedPath() && !editMode(),
+            () => h('button', {
+              class: 'btn btn-ghost',
+              style: 'padding: 2px 8px; font-size: 10px; flex-shrink: 0;',
+              onClick: () => enterEditMode(),
+            }, 'Edit'),
+            () => h('span', { style: 'display: none;' }),
+          ),
+          // Save / Cancel (edit mode)
+          createShow(
+            () => editMode(),
+            () => h('div', { style: 'display: flex; gap: 4px;' },
+              h('button', {
+                class: 'btn btn-primary',
+                style: 'padding: 2px 10px; font-size: 10px;',
+                onClick: () => saveEdit(),
+                disabled: () => saving(),
+              }, () => saving() ? 'Saving...' : 'Save'),
+              h('button', {
+                class: 'btn btn-ghost',
+                style: 'padding: 2px 8px; font-size: 10px;',
+                onClick: () => cancelEdit(),
+              }, 'Cancel'),
+            ),
+            () => h('span', { style: 'display: none;' }),
+          ),
+          // Delete button
+          createShow(
+            () => !!selectedPath(),
+            () => h('button', {
+              class: 'btn btn-ghost',
+              style: 'padding: 2px 8px; font-size: 10px; color: var(--gruvbox-red); flex-shrink: 0;',
+              onClick: () => deleteCurrentDoc(),
+              disabled: () => deleting(),
+              title: 'Delete this file',
+            }, () => deleting() ? 'Deleting...' : 'Delete'),
+            () => h('span', { style: 'display: none;' }),
+          ),
+          // Focus button
+          h('button', {
+            class: 'btn btn-ghost',
+            style: 'padding: 2px 10px; font-size: 10px; flex-shrink: 0;',
             onClick: () => setFocusMode(!focusMode()),
           }, () => focusMode() ? 'Exit focus' : 'Focus'),
+        ),
+        // Bookmarks panel (dropdown)
+        createShow(
+          () => showBookmarks(),
+          () => {
+            const panel = document.createElement('div');
+            panel.style.cssText = 'border-bottom: 1px solid var(--gruvbox-border); padding: 8px 16px; background: var(--gruvbox-bg-soft); max-height: 200px; overflow-y: auto;';
+
+            createEffect(() => {
+              const bms = bookmarks();
+              panel.innerHTML = '';
+
+              if (bms.length === 0) {
+                panel.innerHTML = '<div style="color: var(--gruvbox-gray); font-size: 12px; padding: 4px 0;">No bookmarks yet. Click the bookmark icon next to headings to save them.</div>';
+                return;
+              }
+
+              const title = document.createElement('div');
+              title.style.cssText = 'font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray); margin-bottom: 6px; font-family: var(--font-code);';
+              title.textContent = 'Bookmarks';
+              panel.appendChild(title);
+
+              for (const bm of bms) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; font-size: 12px;';
+
+                const fileLabel = document.createElement('span');
+                fileLabel.style.cssText = 'color: var(--gruvbox-gray); font-family: var(--font-code); font-size: 10px; flex-shrink: 0;';
+                fileLabel.textContent = bm.file_path.split('/').pop() || bm.file_path;
+                row.appendChild(fileLabel);
+
+                const headingLabel = document.createElement('span');
+                headingLabel.style.cssText = 'color: var(--gruvbox-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                headingLabel.textContent = bm.heading_text;
+                row.appendChild(headingLabel);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; margin-left: auto; flex-shrink: 0; padding: 0 4px;';
+                removeBtn.textContent = '×';
+                removeBtn.onclick = (e) => { e.stopPropagation(); deleteBookmark(bm.id); };
+                row.appendChild(removeBtn);
+
+                row.onclick = () => {
+                  handleFileSelect(bm.file_path, bm.root);
+                  setShowBookmarks(false);
+                  // Scroll to heading after content loads
+                  setTimeout(() => {
+                    const target = document.getElementById(bm.heading_id);
+                    if (target) {
+                      const scrollContainer = target.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
+                      if (scrollContainer) {
+                        const offsetTop = target.offsetTop - scrollContainer.offsetTop;
+                        scrollContainer.scrollTo({ top: offsetTop - 16, behavior: 'smooth' });
+                      }
+                    }
+                  }, 500);
+                };
+
+                panel.appendChild(row);
+              }
+            });
+
+            return panel;
+          },
+          () => h('div', { style: 'display: none;' }),
+        ),
+        // Annotations panel (below breadcrumb, above content)
+        createShow(
+          () => annotations().length > 0 && !editMode(),
+          () => {
+            const panel = document.createElement('div');
+            panel.style.cssText = 'border-bottom: 1px solid var(--gruvbox-border); padding: 6px 16px; background: var(--gruvbox-bg-soft);';
+
+            createEffect(() => {
+              const anns = annotations();
+              panel.innerHTML = '';
+              if (anns.length === 0) return;
+
+              const label = document.createElement('div');
+              label.style.cssText = 'font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray); margin-bottom: 4px; font-family: var(--font-code);';
+              label.textContent = `${anns.length} annotation${anns.length === 1 ? '' : 's'}`;
+              panel.appendChild(label);
+
+              for (const ann of anns) {
+                const colorMap: Record<string, string> = {
+                  yellow: 'rgba(215, 153, 33, 0.15)',
+                  green: 'rgba(184, 187, 38, 0.15)',
+                  blue: 'rgba(131, 165, 152, 0.15)',
+                  pink: 'rgba(211, 134, 155, 0.15)',
+                };
+                const row = document.createElement('div');
+                row.style.cssText = `display: flex; align-items: flex-start; gap: 8px; padding: 4px 8px; border-radius: 4px; margin-bottom: 3px; background: ${colorMap[ann.color] || colorMap.yellow}; font-size: 12px;`;
+
+                const quote = document.createElement('span');
+                quote.style.cssText = 'color: var(--gruvbox-fg2); font-style: italic; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                quote.textContent = `"${ann.highlight_text.slice(0, 60)}${ann.highlight_text.length > 60 ? '…' : ''}"`;
+                row.appendChild(quote);
+
+                if (ann.note) {
+                  const note = document.createElement('span');
+                  note.style.cssText = 'color: var(--gruvbox-fg); flex: 1;';
+                  note.textContent = ann.note;
+                  row.appendChild(note);
+                }
+
+                const removeBtn = document.createElement('button');
+                removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; flex-shrink: 0; padding: 0 2px;';
+                removeBtn.textContent = '×';
+                removeBtn.onclick = () => deleteAnnotation(ann.id);
+                row.appendChild(removeBtn);
+
+                panel.appendChild(row);
+              }
+            });
+
+            return panel;
+          },
+          () => h('div', { style: 'display: none;' }),
         ),
         // Scrollable content area
         h('div', {
@@ -810,6 +1154,54 @@ export function DocsPage(props?: {
           () => !selectedPath(),
           () => h('div', { class: 'page-stub' }, 'Select a document from the sidebar.'),
           () => createShow(
+            () => editMode(),
+            () => h('div', { style: 'display: flex; flex-direction: column; height: 100%;' },
+              h('textarea', {
+                style: 'flex: 1; width: 100%; background: var(--gruvbox-bg-hard); color: var(--gruvbox-fg); border: 1px solid var(--gruvbox-border); border-radius: var(--radius-md); padding: var(--space-md); font-family: var(--font-code); font-size: 13px; line-height: 1.6; resize: none; outline: none; tab-size: 2;',
+                value: () => rawContent(),
+                onInput: (e: Event) => setRawContent((e.target as HTMLTextAreaElement).value),
+                onKeydown: (e: KeyboardEvent) => {
+                  // Cmd+S to save
+                  if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+                    e.preventDefault();
+                    saveEdit();
+                  }
+                  // Tab inserts 2 spaces
+                  if (e.key === 'Tab') {
+                    e.preventDefault();
+                    const ta = e.target as HTMLTextAreaElement;
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    const value = ta.value;
+                    ta.value = value.substring(0, start) + '  ' + value.substring(end);
+                    ta.selectionStart = ta.selectionEnd = start + 2;
+                    setRawContent(ta.value);
+                  }
+                },
+              }),
+              // Annotation creation bar (when text is selected in edit mode)
+              h('div', {
+                style: 'display: flex; gap: 8px; padding: 8px 0; align-items: center;',
+              },
+                h('span', { style: 'font-size: 11px; color: var(--gruvbox-gray);' }, 'Select text above, then:'),
+                ...(['yellow', 'green', 'blue', 'pink'] as const).map((color) => {
+                  const colorHex: Record<string, string> = { yellow: '#d79921', green: '#b8bb26', blue: '#83a598', pink: '#d3869b' };
+                  return h('button', {
+                    class: 'btn btn-ghost',
+                    style: `padding: 2px 8px; font-size: 10px; border-color: ${colorHex[color]}; color: ${colorHex[color]};`,
+                    onClick: () => {
+                      const ta = document.querySelector('textarea') as HTMLTextAreaElement | null;
+                      if (!ta) return;
+                      const selected = ta.value.substring(ta.selectionStart, ta.selectionEnd).trim();
+                      if (!selected) return;
+                      const note = prompt('Add a note (optional):') || '';
+                      createAnnotation(selected, note, color);
+                    },
+                  }, `Annotate ${color}`);
+                }),
+              ),
+            ),
+            () => createShow(
             () => docLoading(),
             () => h('div', {
               style: 'display: flex; align-items: center; gap: var(--space-sm); color: var(--gruvbox-gray); font-size: 14px; padding: var(--space-md) 0;',
@@ -850,6 +1242,7 @@ export function DocsPage(props?: {
                 }),
             ),
           ),
+        ),
         ),
         ), // close scrollable content div
       ), // close flex column

@@ -130,6 +130,30 @@ CREATE TABLE IF NOT EXISTS script_notes (
     note TEXT,
     UNIQUE(root, package_path, script_name)
 );
+
+-- Annotations: highlight + comment attached to a text selection in a doc.
+-- Anchored by a text snippet so they survive minor edits.
+CREATE TABLE IF NOT EXISTS doc_annotations (
+    id INTEGER PRIMARY KEY,
+    root TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    highlight_text TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    color TEXT NOT NULL DEFAULT 'yellow',
+    created_at INTEGER NOT NULL,
+    UNIQUE(root, file_path, highlight_text, note)
+);
+
+-- Bookmarks: saved references to specific headings in docs.
+CREATE TABLE IF NOT EXISTS doc_bookmarks (
+    id INTEGER PRIMARY KEY,
+    root TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    heading_id TEXT NOT NULL,
+    heading_text TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(root, file_path, heading_id)
+);
 "#;
 
 #[cfg(test)]
