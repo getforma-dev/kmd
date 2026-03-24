@@ -1283,77 +1283,141 @@ export function DocsPage(props?: {
                     markdownDiv.style.margin = focusMode() ? '0 auto' : '';
                   });
 
-                  // Render HTML + apply inline highlights from annotations
+                  // Render HTML, then apply highlights via DOM (not regex on raw HTML)
                   createEffect(() => {
-                    let html = docHtml();
+                    const html = docHtml();
                     const anns = annotations();
 
-                    // Apply highlights: find annotation text in HTML and wrap with <mark>
-                    for (const ann of anns) {
-                      const escapedText = ann.highlight_text
-                        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                      // Match the text but not inside HTML tags
-                      const regex = new RegExp(`(?<=>)([^<]*?)(${escapedText})([^<]*?)(?=<)`, 'gi');
-                      html = html.replace(regex, (_, before, match, after) => {
-                        const bg = COLOR_BG[ann.color] || COLOR_BG.yellow;
-                        const border = COLOR_BORDER[ann.color] || COLOR_BORDER.yellow;
-                        const noteAttr = ann.note ? ` data-note="${ann.note.replace(/"/g, '&quot;')}"` : '';
-                        const annIdAttr = ` data-ann-id="${ann.id}"`;
-                        return `${before}<mark style="background:${bg};border-bottom:2px solid ${border};border-radius:2px;padding:0 1px;cursor:pointer;position:relative;" class="kmd-highlight"${noteAttr}${annIdAttr}>${match}</mark>${after}`;
-                      });
-                    }
-
+                    // Set clean HTML first — no regex manipulation
                     markdownDiv.innerHTML = html;
 
-                    // Attach tooltip behavior to highlights
-                    requestAnimationFrame(() => {
-                      const highlights = markdownDiv.querySelectorAll('.kmd-highlight');
-                      highlights.forEach((el) => {
-                        const mark = el as HTMLElement;
-                        const note = mark.dataset.note;
-                        const annId = mark.dataset.annId;
-                        let tooltip: HTMLDivElement | null = null;
+                    // Apply highlights by walking text nodes (skips pre, code, mark)
+                    if (anns.length > 0) {
+                      applyHighlights(markdownDiv, anns, COLOR_BG, COLOR_BORDER);
+                    }
 
-                        mark.addEventListener('mouseenter', () => {
-                          if (!tooltip) {
-                            tooltip = document.createElement('div');
-                            tooltip.style.cssText = 'position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: 6px; padding: 6px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 50; font-size: 12px; max-width: 280px; white-space: normal; pointer-events: auto;';
-
-                            if (note) {
-                              const noteText = document.createElement('div');
-                              noteText.style.cssText = 'color: var(--gruvbox-fg); margin-bottom: 4px; line-height: 1.4;';
-                              noteText.textContent = note;
-                              tooltip.appendChild(noteText);
-                            }
-
-                            const removeBtn = document.createElement('button');
-                            removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-red); cursor: pointer; font-size: 10px; padding: 0; font-family: var(--font-code); opacity: 0.7;';
-                            removeBtn.textContent = 'Remove highlight';
-                            removeBtn.addEventListener('click', () => {
-                              if (annId) deleteAnnotation(Number(annId));
-                              if (tooltip) { tooltip.remove(); tooltip = null; }
-                            });
-                            removeBtn.addEventListener('mouseenter', () => { removeBtn.style.opacity = '1'; });
-                            removeBtn.addEventListener('mouseleave', () => { removeBtn.style.opacity = '0.7'; });
-                            tooltip.appendChild(removeBtn);
-
-                            mark.style.position = 'relative';
-                            mark.appendChild(tooltip);
-                          }
-                          if (tooltip) tooltip.style.display = 'block';
-                        });
-
-                        mark.addEventListener('mouseleave', (e) => {
-                          // Delay hide so user can interact with tooltip
-                          setTimeout(() => {
-                            if (tooltip && !mark.matches(':hover') && !tooltip.matches(':hover')) {
-                              tooltip.style.display = 'none';
-                            }
-                          }, 200);
-                        });
+                    // Trigger mermaid rendering after DOM is set
+                    if (html && html.includes('class="mermaid"')) {
+                      requestAnimationFrame(() => {
+                        import('../lib/mermaid').then(m => m.renderMermaidDiagrams());
                       });
-                    });
+                    }
                   });
+
+                  // DOM-based highlight application (safe for pre/code/mermaid)
+                  function applyHighlights(
+                    container: HTMLElement,
+                    anns: Array<{id: number; highlight_text: string; note: string; color: string}>,
+                    bgMap: Record<string, string>,
+                    borderMap: Record<string, string>,
+                  ) {
+                    requestAnimationFrame(() => {
+                      for (const ann of anns) {
+                        highlightTextInDOM(container, ann, bgMap, borderMap);
+                      }
+                    });
+                  }
+
+                  function highlightTextInDOM(
+                    container: HTMLElement,
+                    ann: {id: number; highlight_text: string; note: string; color: string},
+                    bgMap: Record<string, string>,
+                    borderMap: Record<string, string>,
+                  ) {
+                    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+                      acceptNode: (node) => {
+                        // Skip text inside pre, code, mark, and mermaid elements
+                        let parent = node.parentElement;
+                        while (parent && parent !== container) {
+                          const tag = parent.tagName.toLowerCase();
+                          if (tag === 'pre' || tag === 'code' || tag === 'mark') {
+                            return NodeFilter.FILTER_REJECT;
+                          }
+                          if (parent.classList.contains('mermaid')) {
+                            return NodeFilter.FILTER_REJECT;
+                          }
+                          parent = parent.parentElement;
+                        }
+                        return NodeFilter.FILTER_ACCEPT;
+                      },
+                    });
+
+                    const textNodes: Text[] = [];
+                    let node: Node | null;
+                    while ((node = walker.nextNode())) {
+                      textNodes.push(node as Text);
+                    }
+
+                    for (const textNode of textNodes) {
+                      const idx = textNode.textContent?.indexOf(ann.highlight_text) ?? -1;
+                      if (idx === -1) continue;
+
+                      // Split the text node and wrap the matched part in <mark>
+                      const before = textNode.textContent!.substring(0, idx);
+                      const matched = ann.highlight_text;
+                      const after = textNode.textContent!.substring(idx + matched.length);
+
+                      const mark = document.createElement('mark');
+                      const bg = bgMap[ann.color] || bgMap.yellow;
+                      const border = borderMap[ann.color] || borderMap.yellow;
+                      mark.style.cssText = `background:${bg};border-bottom:2px solid ${border};border-radius:2px;padding:0 1px;cursor:pointer;position:relative;`;
+                      mark.className = 'kmd-highlight';
+                      mark.dataset.annId = String(ann.id);
+                      if (ann.note) mark.dataset.note = ann.note;
+                      mark.textContent = matched;
+
+                      // Attach tooltip
+                      attachHighlightTooltip(mark, ann);
+
+                      const parent = textNode.parentNode!;
+                      if (before) parent.insertBefore(document.createTextNode(before), textNode);
+                      parent.insertBefore(mark, textNode);
+                      if (after) parent.insertBefore(document.createTextNode(after), textNode);
+                      parent.removeChild(textNode);
+
+                      break; // Only highlight first occurrence per annotation
+                    }
+                  }
+
+                  function attachHighlightTooltip(mark: HTMLElement, ann: {id: number; note: string}) {
+                    let tooltip: HTMLDivElement | null = null;
+
+                    mark.addEventListener('mouseenter', () => {
+                      if (!tooltip) {
+                        tooltip = document.createElement('div');
+                        tooltip.style.cssText = 'position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: 6px; padding: 6px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 50; font-size: 12px; max-width: 280px; white-space: normal; pointer-events: auto;';
+
+                        if (ann.note) {
+                          const noteText = document.createElement('div');
+                          noteText.style.cssText = 'color: var(--gruvbox-fg); margin-bottom: 4px; line-height: 1.4;';
+                          noteText.textContent = ann.note;
+                          tooltip.appendChild(noteText);
+                        }
+
+                        const removeBtn = document.createElement('button');
+                        removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-red); cursor: pointer; font-size: 10px; padding: 0; font-family: var(--font-code); opacity: 0.7;';
+                        removeBtn.textContent = 'Remove highlight';
+                        removeBtn.addEventListener('click', () => {
+                          deleteAnnotation(ann.id);
+                          if (tooltip) { tooltip.remove(); tooltip = null; }
+                        });
+                        removeBtn.addEventListener('mouseenter', () => { removeBtn.style.opacity = '1'; });
+                        removeBtn.addEventListener('mouseleave', () => { removeBtn.style.opacity = '0.7'; });
+                        tooltip.appendChild(removeBtn);
+
+                        mark.appendChild(tooltip);
+                      }
+                      if (tooltip) tooltip.style.display = 'block';
+                    });
+
+                    mark.addEventListener('mouseleave', () => {
+                      setTimeout(() => {
+                        if (tooltip && !mark.matches(':hover')) {
+                          tooltip.style.display = 'none';
+                        }
+                      }, 200);
+                    });
+                  }
 
                   // Show toolbar on text selection in the markdown
                   markdownDiv.addEventListener('mouseup', () => {
