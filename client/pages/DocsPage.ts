@@ -1155,52 +1155,47 @@ export function DocsPage(props?: {
           () => h('div', { class: 'page-stub' }, 'Select a document from the sidebar.'),
           () => createShow(
             () => editMode(),
-            () => h('div', { style: 'display: flex; flex-direction: column; height: 100%;' },
-              h('textarea', {
-                style: 'flex: 1; width: 100%; background: var(--gruvbox-bg-hard); color: var(--gruvbox-fg); border: 1px solid var(--gruvbox-border); border-radius: var(--radius-md); padding: var(--space-md); font-family: var(--font-code); font-size: 13px; line-height: 1.6; resize: none; outline: none; tab-size: 2;',
-                value: () => rawContent(),
-                onInput: (e: Event) => setRawContent((e.target as HTMLTextAreaElement).value),
-                onKeydown: (e: KeyboardEvent) => {
-                  // Cmd+S to save
-                  if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-                    e.preventDefault();
-                    saveEdit();
-                  }
-                  // Tab inserts 2 spaces
-                  if (e.key === 'Tab') {
-                    e.preventDefault();
-                    const ta = e.target as HTMLTextAreaElement;
-                    const start = ta.selectionStart;
-                    const end = ta.selectionEnd;
-                    const value = ta.value;
-                    ta.value = value.substring(0, start) + '  ' + value.substring(end);
-                    ta.selectionStart = ta.selectionEnd = start + 2;
-                    setRawContent(ta.value);
-                  }
-                },
-              }),
-              // Annotation creation bar (when text is selected in edit mode)
-              h('div', {
-                style: 'display: flex; gap: 8px; padding: 8px 0; align-items: center;',
-              },
-                h('span', { style: 'font-size: 11px; color: var(--gruvbox-gray);' }, 'Select text above, then:'),
-                ...(['yellow', 'green', 'blue', 'pink'] as const).map((color) => {
-                  const colorHex: Record<string, string> = { yellow: '#d79921', green: '#b8bb26', blue: '#83a598', pink: '#d3869b' };
-                  return h('button', {
-                    class: 'btn btn-ghost',
-                    style: `padding: 2px 8px; font-size: 10px; border-color: ${colorHex[color]}; color: ${colorHex[color]};`,
-                    onClick: () => {
-                      const ta = document.querySelector('textarea') as HTMLTextAreaElement | null;
-                      if (!ta) return;
-                      const selected = ta.value.substring(ta.selectionStart, ta.selectionEnd).trim();
-                      if (!selected) return;
-                      const note = prompt('Add a note (optional):') || '';
-                      createAnnotation(selected, note, color);
-                    },
-                  }, `Annotate ${color}`);
-                }),
-              ),
-            ),
+            () => {
+              // Edit mode: raw markdown textarea
+              const editorContainer = document.createElement('div');
+              editorContainer.style.cssText = 'display: flex; flex-direction: column; height: 100%;';
+
+              const textarea = document.createElement('textarea');
+              textarea.style.cssText = 'flex: 1; width: 100%; background: var(--gruvbox-bg-hard); color: var(--gruvbox-fg); border: 1px solid var(--gruvbox-border); border-radius: var(--radius-md); padding: 16px; font-family: var(--font-code); font-size: 13px; line-height: 1.6; resize: none; outline: none; tab-size: 2;';
+              textarea.spellcheck = false;
+
+              // Set initial value
+              createEffect(() => {
+                const content = rawContent();
+                if (textarea.value !== content) {
+                  textarea.value = content;
+                }
+              });
+
+              textarea.addEventListener('input', () => setRawContent(textarea.value));
+              textarea.addEventListener('keydown', (e: KeyboardEvent) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+                  e.preventDefault();
+                  saveEdit();
+                }
+                if (e.key === 'Tab') {
+                  e.preventDefault();
+                  const start = textarea.selectionStart;
+                  const end = textarea.selectionEnd;
+                  const val = textarea.value;
+                  textarea.value = val.substring(0, start) + '  ' + val.substring(end);
+                  textarea.selectionStart = textarea.selectionEnd = start + 2;
+                  setRawContent(textarea.value);
+                }
+              });
+
+              editorContainer.appendChild(textarea);
+
+              // Focus textarea on mount
+              requestAnimationFrame(() => textarea.focus());
+
+              return editorContainer;
+            },
             () => createShow(
             () => docLoading(),
             () => h('div', {
@@ -1235,11 +1230,98 @@ export function DocsPage(props?: {
                   onClick: () => copyPath(selectedPath()),
                 }, 'Copy path'),
               ),
-              () => h('div', {
-                  class: 'markdown-body fade-in',
-                  style: () => focusMode() ? 'max-width: 900px; margin: 0 auto;' : '',
-                  dangerouslySetInnerHTML: () => ({ __html: docHtml() }),
-                }),
+              () => {
+                  // Floating annotation toolbar (appears on text selection)
+                  const toolbar = document.createElement('div');
+                  toolbar.style.cssText = 'position: absolute; display: none; z-index: 100; background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: 6px; padding: 4px 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); gap: 4px; align-items: center;';
+
+                  const colorHexMap: Record<string, string> = { yellow: '#d79921', green: '#b8bb26', blue: '#83a598', pink: '#d3869b' };
+
+                  for (const color of ['yellow', 'green', 'blue', 'pink'] as const) {
+                    const btn = document.createElement('button');
+                    btn.style.cssText = `width: 20px; height: 20px; border-radius: 50%; border: 2px solid ${colorHexMap[color]}; background: ${colorHexMap[color]}30; cursor: pointer; padding: 0; transition: transform 0.1s;`;
+                    btn.title = `Highlight ${color}`;
+                    btn.addEventListener('mouseenter', () => { btn.style.transform = 'scale(1.2)'; });
+                    btn.addEventListener('mouseleave', () => { btn.style.transform = 'scale(1)'; });
+                    btn.addEventListener('mousedown', (e) => {
+                      e.preventDefault(); // Prevent losing selection
+                      const sel = window.getSelection();
+                      const selectedText = sel?.toString().trim();
+                      if (!selectedText) return;
+
+                      const note = prompt('Add a note (optional):') || '';
+                      createAnnotation(selectedText, note, color);
+                      toolbar.style.display = 'none';
+                      sel?.removeAllRanges();
+                    });
+                    toolbar.appendChild(btn);
+                  }
+
+                  // Add note-only button
+                  const noteBtn = document.createElement('button');
+                  noteBtn.style.cssText = 'background: none; border: 1px solid var(--gruvbox-border); border-radius: 4px; color: var(--gruvbox-fg2); cursor: pointer; padding: 2px 8px; font-size: 10px; font-family: var(--font-code); margin-left: 2px;';
+                  noteBtn.textContent = '+ Note';
+                  noteBtn.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    const sel = window.getSelection();
+                    const selectedText = sel?.toString().trim();
+                    if (!selectedText) return;
+
+                    const note = prompt('Add your note:');
+                    if (note === null) return; // cancelled
+                    createAnnotation(selectedText, note, 'yellow');
+                    toolbar.style.display = 'none';
+                    sel?.removeAllRanges();
+                  });
+                  toolbar.appendChild(noteBtn);
+
+                  // Container for markdown + toolbar
+                  const wrapper = document.createElement('div');
+                  wrapper.style.cssText = 'position: relative;';
+
+                  const markdownDiv = document.createElement('div');
+                  markdownDiv.className = 'markdown-body fade-in';
+
+                  createEffect(() => {
+                    markdownDiv.style.maxWidth = focusMode() ? '900px' : '';
+                    markdownDiv.style.margin = focusMode() ? '0 auto' : '';
+                  });
+
+                  createEffect(() => {
+                    markdownDiv.innerHTML = docHtml();
+                  });
+
+                  // Show toolbar on text selection
+                  markdownDiv.addEventListener('mouseup', () => {
+                    setTimeout(() => {
+                      const sel = window.getSelection();
+                      const selectedText = sel?.toString().trim();
+                      if (!selectedText || selectedText.length < 2) {
+                        toolbar.style.display = 'none';
+                        return;
+                      }
+
+                      const range = sel!.getRangeAt(0);
+                      const rect = range.getBoundingClientRect();
+                      const wrapperRect = wrapper.getBoundingClientRect();
+
+                      toolbar.style.display = 'flex';
+                      toolbar.style.left = `${rect.left - wrapperRect.left + rect.width / 2 - 70}px`;
+                      toolbar.style.top = `${rect.top - wrapperRect.top - 40}px`;
+                    }, 10);
+                  });
+
+                  // Hide toolbar when clicking elsewhere
+                  document.addEventListener('mousedown', (e) => {
+                    if (!toolbar.contains(e.target as Node)) {
+                      toolbar.style.display = 'none';
+                    }
+                  });
+
+                  wrapper.appendChild(toolbar);
+                  wrapper.appendChild(markdownDiv);
+                  return wrapper;
+                },
             ),
           ),
         ),
