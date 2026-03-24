@@ -1,4 +1,5 @@
 import { h, createSignal, createEffect, createShow, onCleanup } from '@getforma/core';
+import { stripHtml } from '../lib/security';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,11 +126,7 @@ export function CommandPalette(props: CommandPaletteProps) {
   // Helpers
   // -------------------------------------------------------------------------
 
-  function stripHtml(html: string): string {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    return tmp.textContent || tmp.innerText || '';
-  }
+  // stripHtml is imported from ../lib/security (uses DOMParser, not innerHTML)
 
   function executeSelected() {
     const r = results();

@@ -1,4 +1,5 @@
 import { h, createSignal, createEffect, createShow } from '@getforma/core';
+import { kmdFetch } from '../lib/security';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,7 +76,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
     setLoading(true);
     setError('');
 
-    fetch('/api/workspace/add', {
+    kmdFetch('/api/workspace/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ paths: [path.trim()] }),
@@ -101,7 +102,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
   function removeFolder(path: string) {
     setError('');
 
-    fetch('/api/workspace/remove', {
+    kmdFetch('/api/workspace/remove', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),

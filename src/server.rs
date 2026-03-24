@@ -9,6 +9,8 @@ use axum::{
 };
 use rust_embed::Embed;
 use serde::Deserialize;
+use std::sync::{LazyLock, Mutex as StdMutex};
+use std::time::Instant;
 use crate::services::{env, git, markdown, ports, process, scripts, terminal_ws};
 use crate::state::AppState;
 use crate::ws;
@@ -17,6 +19,45 @@ use crate::ws;
 #[derive(Embed)]
 #[folder = "dist/client/"]
 struct ClientAssets;
+
+// ---------------------------------------------------------------------------
+// Rate limiter for mutating endpoints
+// ---------------------------------------------------------------------------
+
+struct RateLimiter {
+    state: StdMutex<(f64, Instant)>,
+    max_tokens: f64,
+    refill_rate: f64,
+}
+
+impl RateLimiter {
+    fn new(max_tokens: f64, refill_rate: f64) -> Self {
+        Self {
+            state: StdMutex::new((max_tokens, Instant::now())),
+            max_tokens,
+            refill_rate,
+        }
+    }
+
+    fn try_acquire(&self) -> bool {
+        let mut s = self.state.lock().unwrap();
+        let now = Instant::now();
+        let elapsed = now.duration_since(s.1).as_secs_f64();
+        s.0 = (s.0 + elapsed * self.refill_rate).min(self.max_tokens);
+        s.1 = now;
+        if s.0 >= 1.0 {
+            s.0 -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Global rate limiter: burst of 20 requests, refills at 5/sec.
+static MUTATING_RATE_LIMITER: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(20.0, 5.0)
+});
 
 // ---------------------------------------------------------------------------
 // Security middleware: Host/Origin validation (prevents DNS rebinding → RCE)
@@ -41,7 +82,7 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
 
     let is_localhost = matches!(
         host_name,
-        "localhost" | "127.0.0.1" | "[::1]" | "0.0.0.0"
+        "localhost" | "127.0.0.1" | "[::1]"
     );
 
     if !is_localhost {
@@ -53,7 +94,11 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
             .into_response();
     }
 
-    // Also check Origin header if present (CSRF protection)
+    // Check Origin header (CSRF protection)
+    let is_websocket = req.headers().get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+
     if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
         // Parse origin to extract host
         let origin_host = origin
@@ -66,7 +111,7 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
 
         let origin_is_localhost = matches!(
             origin_host,
-            "localhost" | "127.0.0.1" | "[::1]" | "0.0.0.0"
+            "localhost" | "127.0.0.1" | "[::1]"
         );
 
         if !origin_is_localhost {
@@ -77,6 +122,38 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
             )
                 .into_response();
         }
+    } else if is_websocket {
+        // WebSocket upgrades MUST include an Origin header — reject if absent
+        tracing::warn!("Blocked WebSocket upgrade without Origin header");
+        return (
+            StatusCode::FORBIDDEN,
+            "Forbidden: WebSocket requires Origin header",
+        )
+            .into_response();
+    }
+
+    // CSRF: mutating requests must include X-KMD-Client header
+    let method = req.method().clone();
+    let needs_csrf = matches!(method, axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE | axum::http::Method::PATCH);
+    if needs_csrf && !is_websocket {
+        let has_csrf = req.headers().get("x-kmd-client").is_some();
+        if !has_csrf {
+            tracing::warn!("Blocked mutating request without X-KMD-Client header: {} {}", method, req.uri());
+            return (
+                StatusCode::FORBIDDEN,
+                "Forbidden: missing X-KMD-Client header",
+            )
+                .into_response();
+        }
+    }
+
+    // Rate limit mutating requests
+    if needs_csrf && !MUTATING_RATE_LIMITER.try_acquire() {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit exceeded. Try again shortly.",
+        )
+            .into_response();
     }
 
     next.run(req).await
@@ -95,11 +172,10 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     // Prevent MIME-type sniffing
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-    // Content Security Policy: allow inline styles (needed for syntax highlighting)
-    // but block inline scripts except from self
+    // Content Security Policy: block inline scripts, allow inline styles (syntax highlighting)
     headers.insert(
         "content-security-policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:*; frame-ancestors 'none'"
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:*; frame-ancestors 'none'"
             .parse()
             .unwrap(),
     );
@@ -111,6 +187,8 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         // Workspace info
+        // Health check (returns nonce for lockfile integrity verification)
+        .route("/api/health", get(api_health_handler))
         .route("/api/workspace", get(api_workspace_handler))
         // Workspace management (hot-reload add/remove folders)
         .route("/api/workspace/add", post(api_workspace_add_handler))
@@ -195,6 +273,18 @@ async fn static_handler(req: Request<Body>) -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Health check handler
+// ---------------------------------------------------------------------------
+
+/// `GET /api/health` — Returns nonce for lockfile integrity verification.
+async fn api_health_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "ok": true,
+        "nonce": state.auth_token(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Workspace API handler
 // ---------------------------------------------------------------------------
 
@@ -216,6 +306,7 @@ async fn api_workspace_handler(State(state): State<AppState>) -> impl IntoRespon
         "name": state.workspace_name(),
         "roots": roots,
         "mode": if state.is_workspace() { "workspace" } else { "ephemeral" },
+        "terminal_token": state.auth_token(),
     }))
 }
 
@@ -734,13 +825,21 @@ struct CreateAnnotationBody {
     color: Option<String>,
 }
 
+/// Allowed annotation color values.
+const ALLOWED_ANNOTATION_COLORS: &[&str] = &["yellow", "green", "blue", "red", "purple", "orange", "pink", "cyan"];
+
 /// `POST /api/docs/annotations` — Create an annotation on a doc.
 async fn api_annotations_create(
     State(state): State<AppState>,
     Json(body): Json<CreateAnnotationBody>,
 ) -> impl IntoResponse {
     let root = body.root.as_deref().unwrap_or(".");
-    let color = body.color.as_deref().unwrap_or("yellow");
+    let color_input = body.color.as_deref().unwrap_or("yellow");
+    let color = if ALLOWED_ANNOTATION_COLORS.contains(&color_input) {
+        color_input
+    } else {
+        "yellow"
+    };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -958,8 +1057,18 @@ const MAX_SHELL_COMMAND_LEN: usize = 8 * 1024;
 /// `POST /api/shell/exec` — Execute a shell command in a workspace root.
 async fn api_shell_exec_handler(
     State(state): State<AppState>,
+    req_headers: axum::http::HeaderMap,
     Json(body): Json<ShellExecBody>,
 ) -> impl IntoResponse {
+    // Auth token check: shell exec requires Bearer token
+    let token = req_headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if token != Some(state.auth_token()) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "Shell exec requires auth token (displayed at kmd startup)" }))).into_response();
+    }
+
     // Input validation: reject excessively long commands
     if body.command.len() > MAX_SHELL_COMMAND_LEN {
         return (
@@ -1114,7 +1223,51 @@ async fn api_ports_scan_handler(State(state): State<AppState>) -> impl IntoRespo
 }
 
 /// `POST /api/ports/:port/kill` — Kill the process listening on a port.
-async fn api_port_kill_handler(Path(port): Path<u16>) -> impl IntoResponse {
+///
+/// Security: only allows killing ports within the KMD-managed range (4444–4599)
+/// to prevent abuse that could kill system services or unrelated processes.
+async fn api_port_kill_handler(
+    State(state): State<AppState>,
+    Path(port): Path<u16>,
+) -> impl IntoResponse {
+    use crate::services::port_allocator::{DEFAULT_PORT_START, DEFAULT_PORT_END};
+
+    let self_port = state.server_port();
+    let is_kmd_range = (4444..=4460).contains(&port)
+        || (DEFAULT_PORT_START..=DEFAULT_PORT_END).contains(&port);
+
+    // Also allow killing ports that are actively managed by KMD
+    let is_managed = {
+        let allocator = state.port_allocator();
+        allocator.list_allocations().iter().any(|a| a.port == port)
+    };
+
+    // Also allow killing processes that KMD spawned (match by PID)
+    let managed_pids: Vec<Option<u32>> = {
+        let procs = state.processes();
+        procs.values().map(|rp| rp.meta.pid).collect()
+    };
+    let port_list = ports::scan_ports().await;
+    let is_kmd_process = port_list.iter().any(|p| {
+        p.port == port && p.pid.is_some_and(|pid| {
+            managed_pids.iter().any(|mp| *mp == Some(pid))
+        })
+    });
+
+    if port == self_port {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Cannot kill kmd's own port" })),
+        ).into_response();
+    }
+
+    if !is_kmd_range && !is_managed && !is_kmd_process {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Can only kill ports in the kmd-managed range or kmd-spawned processes" })),
+        ).into_response();
+    }
+
     match ports::kill_port(port).await {
         Ok(confirmed) => Json(serde_json::json!({
             "ok": true,
@@ -1451,14 +1604,9 @@ async fn api_env_compare_handler(
         return Json(serde_json::json!({ "error": "Root not found" })).into_response();
     };
 
-    let vars_a = env::read_env_file(&ra.absolute_path, &params.path_a, true);
-    let vars_b = env::read_env_file(&rb.absolute_path, &params.path_b, true);
-
-    match (vars_a, vars_b) {
-        (Some(a), Some(b)) => {
-            let diff = env::compare_env_files(&a, &b);
-            Json(serde_json::json!({ "diff": diff })).into_response()
-        }
-        _ => Json(serde_json::json!({ "error": "One or both files not found" })).into_response(),
+    // Security: compare using hashed values — never reveals plaintext secrets
+    match env::compare_env_files_secure(&ra.absolute_path, &params.path_a, &rb.absolute_path, &params.path_b) {
+        Some(diff) => Json(serde_json::json!({ "diff": diff })).into_response(),
+        None => Json(serde_json::json!({ "error": "One or both files not found" })).into_response(),
     }
 }

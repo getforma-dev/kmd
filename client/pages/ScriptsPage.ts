@@ -1,5 +1,7 @@
 import { h, createSignal, createEffect, createShow, onCleanup } from '@getforma/core';
 import { Terminal, type TerminalLine } from '../components/Terminal';
+import { kmdFetch } from '../lib/security';
+import { log } from '../lib/log';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -390,7 +392,7 @@ export function ScriptsPage(props?: ScriptsPageProps) {
       setLoading(false);
     })
     .catch((err) => {
-      console.error('[kmd] Failed to fetch scripts:', err);
+      log.error('[kmd] Failed to fetch scripts:', err);
       setLoading(false);
     });
 
@@ -430,7 +432,7 @@ export function ScriptsPage(props?: ScriptsPageProps) {
     const key = getScriptNoteKey(root, pkg, script);
     scriptNotesCache.set(key, note);
     setNotesVersion((v) => v + 1);
-    fetch('/api/scripts/notes', {
+    kmdFetch('/api/scripts/notes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ root, package_path: pkg, script_name: script, note }),
@@ -448,7 +450,7 @@ export function ScriptsPage(props?: ScriptsPageProps) {
     // Clear history viewing when starting new process
     setViewingHistoryId(null);
 
-    fetch('/api/scripts/run', {
+    kmdFetch('/api/scripts/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ root, package_path: packagePath, script_name: scriptName }),
@@ -515,7 +517,7 @@ export function ScriptsPage(props?: ScriptsPageProps) {
         }
       })
       .catch((err) => {
-        console.error('[kmd] Failed to run script:', err);
+        log.error('[kmd] Failed to run script:', err);
       });
   }
 
@@ -525,17 +527,17 @@ export function ScriptsPage(props?: ScriptsPageProps) {
   function killProcess(processId: string) {
     // Mark as intentional kill so crash badge doesn't fire
     if (props?.intentionalKills) props.intentionalKills.add(processId);
-    fetch(`/api/processes/${processId}/kill`, {
+    kmdFetch(`/api/processes/${processId}/kill`, {
       method: 'POST',
     })
       .then((r) => r.json())
       .then((data: { ok?: boolean; error?: string }) => {
         if (data.error) {
-          console.error('[kmd] Failed to kill process:', data.error);
+          log.error('[kmd] Failed to kill process:', data.error);
         }
       })
       .catch((err) => {
-        console.error('[kmd] Failed to kill process:', err);
+        log.error('[kmd] Failed to kill process:', err);
       });
   }
 
@@ -817,7 +819,7 @@ export function ScriptsPage(props?: ScriptsPageProps) {
             const pid = activeScriptMap.get(key);
             if (pid) {
               if (props?.intentionalKills) props.intentionalKills.add(pid);
-              fetch(`/api/processes/${pid}/kill`, { method: 'POST' })
+              kmdFetch(`/api/processes/${pid}/kill`, { method: 'POST' })
                 .then(() => new Promise(resolve => setTimeout(resolve, 500)))
                 .then(() => runScriptDebounced(rootPath, pkg.path, scriptName));
             }

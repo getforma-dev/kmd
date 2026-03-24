@@ -55,7 +55,11 @@ function buildXtermTheme(): Record<string, string> {
   };
 }
 
-export function TerminalPage() {
+interface TerminalPageProps {
+  terminalToken: () => string;
+}
+
+export function TerminalPage(props: TerminalPageProps) {
   const [sessions, setSessions] = createSignal<string[]>([]);
   const [activeSession, setActiveSession] = createSignal<string | null>(null);
 
@@ -231,7 +235,8 @@ export function TerminalPage() {
 
   function createSession() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal`);
+    const token = props.terminalToken();
+    const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal?token=${encodeURIComponent(token)}`);
     ws.binaryType = 'arraybuffer';
 
     const term = new Terminal({

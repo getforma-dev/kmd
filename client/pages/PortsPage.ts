@@ -1,4 +1,5 @@
 import { h, createSignal, createEffect, onCleanup } from '@getforma/core';
+import { kmdFetch } from '../lib/security';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -157,7 +158,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
 
   function scanNow() {
     setScanning(true);
-    fetch('/api/ports/scan', { method: 'POST' })
+    kmdFetch('/api/ports/scan', { method: 'POST' })
       .then((r) => r.json())
       .then((data: { ports: PortInfo[] }) => {
         setPorts(data.ports);
@@ -169,7 +170,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   function killPort(port: number) {
     setKillingPort(port);
     setKillResult(null);
-    fetch(`/api/ports/${port}/kill`, { method: 'POST' })
+    kmdFetch(`/api/ports/${port}/kill`, { method: 'POST' })
       .then((r) => r.json())
       .then((data: { ok?: boolean; confirmed?: boolean; error?: string }) => {
         setKillingPort(null);
@@ -196,7 +197,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   function hidePort(port: number) {
     const updated = [...hiddenPorts(), port];
     setHiddenPorts(updated);
-    fetch('/api/ports/hidden', {
+    kmdFetch('/api/ports/hidden', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hidden: updated }),
@@ -206,7 +207,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   function unhidePort(port: number) {
     const updated = hiddenPorts().filter((p) => p !== port);
     setHiddenPorts(updated);
-    fetch('/api/ports/hidden', {
+    kmdFetch('/api/ports/hidden', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hidden: updated }),
@@ -466,7 +467,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
           stopBtn.onclick = () => {
             // Mark as intentional so crash badge doesn't fire
             if (props?.intentionalKills) props.intentionalKills.add(p.managed_by!.process_id);
-            fetch(`/api/processes/${p.managed_by!.process_id}/kill`, { method: 'POST' })
+            kmdFetch(`/api/processes/${p.managed_by!.process_id}/kill`, { method: 'POST' })
               .then(() => setTimeout(() => fetchPorts(), 500))
               .catch(() => {});
           };
@@ -480,9 +481,9 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
           restartBtn.onclick = () => {
             const mb = p.managed_by!;
             // Kill first, then re-run
-            fetch(`/api/processes/${mb.process_id}/kill`, { method: 'POST' })
+            kmdFetch(`/api/processes/${mb.process_id}/kill`, { method: 'POST' })
               .then(() => new Promise(resolve => setTimeout(resolve, 500)))
-              .then(() => fetch('/api/scripts/run', {
+              .then(() => kmdFetch('/api/scripts/run', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

@@ -388,11 +388,13 @@ fn resolve_folder_path(cwd: &Path, folder: &str) -> String {
 // Server lockfile helpers (~/.kmd/data/<name>/server.lock)
 // ---------------------------------------------------------------------------
 
-/// Lockfile content: `{"pid": <pid>, "port": <port>}`
+/// Lockfile content: `{"pid": <pid>, "port": <port>, "nonce": "<token>"}`
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ServerLock {
     pid: u32,
     port: u16,
+    #[serde(default)]
+    nonce: String,
 }
 
 fn lockfile_path(name: &str) -> PathBuf {
@@ -400,10 +402,11 @@ fn lockfile_path(name: &str) -> PathBuf {
 }
 
 /// Write the server lockfile after binding (workspace mode only).
-fn write_lockfile(name: &str, port: u16) {
+fn write_lockfile(name: &str, port: u16, nonce: &str) {
     let lock = ServerLock {
         pid: std::process::id(),
         port,
+        nonce: nonce.to_string(),
     };
     let data = services::workspace::data_dir(name);
     let _ = std::fs::create_dir_all(&data);
@@ -539,8 +542,11 @@ async fn run_workspace_server(
     let port = port_override.unwrap_or(config.port);
     let db_dir = services::workspace::data_dir(&name);
 
+    // Generate auth token for sensitive endpoints
+    let auth_token = uuid::Uuid::new_v4().to_string().replace("-", "");
+
     // Initialize state
-    let state = AppState::new_workspace(config, &db_dir);
+    let state = AppState::new_workspace(config, &db_dir, auth_token.clone());
 
     // Channel to receive the file count from the indexing task
     let (file_count_tx, file_count_rx) = oneshot::channel::<usize>();
@@ -576,8 +582,8 @@ async fn run_workspace_server(
         }
     };
 
-    // Write lockfile
-    write_lockfile(&name, actual_port);
+    // Write lockfile (nonce = auth token for integrity verification)
+    write_lockfile(&name, actual_port, &auth_token);
 
     // Wait briefly for file count
     let file_count = tokio::time::timeout(
@@ -635,6 +641,7 @@ async fn run_workspace_server(
         println!(
             "  {dim}Port{reset} {dim}······{reset} {actual_port} (fixed)"
         );
+        println!("  {dim}Token{reset} {dim}·····{reset} {auth_token}");
     }
     println!();
     println!(
@@ -767,7 +774,10 @@ async fn run_ephemeral_server(
         port: EPHEMERAL_PORT_START,
     };
 
-    let state = AppState::new_ephemeral(config.name.clone(), &cwd, &temp_dir);
+    // Generate auth token for sensitive endpoints
+    let auth_token = uuid::Uuid::new_v4().to_string().replace("-", "");
+
+    let state = AppState::new_ephemeral(config.name.clone(), &cwd, &temp_dir, auth_token.clone());
 
     let (file_count_tx, file_count_rx) = oneshot::channel::<usize>();
     spawn_background_tasks(&state, file_count_tx);
@@ -848,6 +858,7 @@ async fn run_ephemeral_server(
                 roots[0].absolute_path.display()
             );
         }
+        println!("  {dim}Token{reset} {dim}·····{reset} {auth_token}");
     }
     println!();
     println!(

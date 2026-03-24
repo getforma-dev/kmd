@@ -205,6 +205,15 @@ pub fn run_script(
     let script_command = port_allocator::read_script_command(&pkg_json_path, script_name)
         .unwrap_or_default();
 
+    // Security: reject if the script doesn't exist in package.json
+    if script_command.is_empty() {
+        return Err(format!(
+            "Script '{}' not found in {}/package.json",
+            script_name,
+            cwd.display()
+        ));
+    }
+
     let assigned_port = {
         let mut allocator = state.port_allocator();
         let port = allocator.allocate(

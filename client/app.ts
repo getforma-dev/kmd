@@ -7,6 +7,8 @@ import { DocsPage } from './pages/DocsPage';
 import { ScriptsPage } from './pages/ScriptsPage';
 import { PortsPage } from './pages/PortsPage';
 import { TerminalPage } from './pages/TerminalPage';
+import { kmdFetch } from './lib/security';
+import { log } from './lib/log';
 
 // ---------------------------------------------------------------------------
 // Hash-based routing
@@ -44,7 +46,7 @@ function createWSConnection(onMessage: (data: string) => void): WSManager {
 
     ws.onopen = () => {
       attempt = 0;
-      console.log('[kmd] WebSocket connected');
+      log.info('[kmd] WebSocket connected');
     };
 
     ws.onmessage = (e) => {
@@ -56,7 +58,7 @@ function createWSConnection(onMessage: (data: string) => void): WSManager {
       // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
       const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
       attempt++;
-      console.log(`[kmd] WebSocket closed, reconnecting in ${delay}ms...`);
+      log.info(`[kmd] WebSocket closed, reconnecting in ${delay}ms...`);
       reconnectTimer = setTimeout(connect, delay);
     };
 
@@ -93,7 +95,7 @@ function createWSBus() {
       try {
         handler(msg);
       } catch (err) {
-        console.error('[kmd] WS handler error:', err);
+        log.error('[kmd] WS handler error:', err);
       }
     }
   }
@@ -108,6 +110,7 @@ function createWSBus() {
 interface WorkspaceInfo {
   name: string;
   roots: Array<{ name: string; path: string }>;
+  terminal_token?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +162,7 @@ function App() {
   const [workspacePanelOpen, setWorkspacePanelOpen] = createSignal(false);
   const [focusMode, setFocusMode] = createSignal(localStorage.getItem('kmd:focusMode') === 'true');
   const [theme, setTheme] = createSignal(getInitialTheme());
+  const [terminalToken, setTerminalToken] = createSignal('');
 
   // Persist sidebar and focus state
   createEffect(() => {
@@ -207,14 +211,22 @@ function App() {
   // WebSocket connection
   const wsManager = createWSConnection((data) => {
     try {
-      const msg = JSON.parse(data) as { type: string; data?: { process_id?: string; code?: number | null } };
+      const parsed = JSON.parse(data);
+      // Validate WS message structure before dispatching
+      if (typeof parsed !== 'object' || parsed === null || typeof parsed.type !== 'string') {
+        return;
+      }
+      const msg = parsed as { type: string; data?: { process_id?: string; code?: number | null } };
       wsBus.dispatch(msg);
 
       // Feature 5: Desktop notifications for crashes/events
-      if (msg.type === 'notification' && (msg as any).data) {
-        const notif = (msg as any).data as { title: string; body: string; level: string };
-        if (notif.level === 'error' || notif.level === 'warning') {
-          showDesktopNotification(notif.title, notif.body);
+      if (msg.type === 'notification' && msg.data && typeof msg.data === 'object') {
+        const notifData = msg.data as Record<string, unknown>;
+        const title = typeof notifData.title === 'string' ? notifData.title : '';
+        const body = typeof notifData.body === 'string' ? notifData.body : '';
+        const level = typeof notifData.level === 'string' ? notifData.level : '';
+        if (level === 'error' || level === 'warning') {
+          showDesktopNotification(title, body);
         }
       }
 
@@ -239,6 +251,9 @@ function App() {
     .then((data: WorkspaceInfo) => {
       if (data.name) {
         setWorkspaceName(data.name);
+      }
+      if (data.terminal_token) {
+        setTerminalToken(data.terminal_token);
       }
     })
     .catch(() => {
@@ -367,7 +382,7 @@ function App() {
         // Navigate to ports and trigger scan
         location.hash = '#ports';
         requestAnimationFrame(() => {
-          fetch('/api/ports/scan', { method: 'POST' }).catch(() => {});
+          kmdFetch('/api/ports/scan', { method: 'POST' }).catch(() => {});
         });
         break;
       case 'refresh-docs':
@@ -420,7 +435,7 @@ function App() {
 
   // Terminal page is mounted OUTSIDE createSwitch so it survives tab switches.
   // We show/hide it based on route instead of letting createSwitch destroy it.
-  const terminalPageEl = TerminalPage();
+  const terminalPageEl = TerminalPage({ terminalToken });
   const terminalWrapper = h('div', {
     style: () => route() === 'terminal'
       ? 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;'

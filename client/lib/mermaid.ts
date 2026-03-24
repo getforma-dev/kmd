@@ -29,6 +29,10 @@ async function ensureMermaid(): Promise<any> {
 
     const script = document.createElement('script');
     script.src = '/vendor/mermaid.min.js';
+    // SRI hash — recompute if mermaid.min.js is ever updated:
+    //   openssl dgst -sha384 -binary client/vendor/mermaid.min.js | openssl base64 -A
+    script.integrity = 'sha384-tI0sDqjGJcqrQ8e/XKiQGS+ee11v5knTNWx2goxMBxe4DO9U0uKlfxJtYB9ILZ4j';
+    script.crossOrigin = 'anonymous';
     script.onload = () => {
       const mermaid = (window as any).mermaid;
       if (!mermaid) {
@@ -52,6 +56,7 @@ async function ensureMermaid(): Promise<any> {
 function initMermaid(mermaid: any) {
   mermaid.initialize({
     startOnLoad: false,
+    securityLevel: 'strict',
     theme: 'dark',
     themeVariables: {
       darkMode: true,
@@ -89,6 +94,9 @@ export async function renderMermaidDiagrams(): Promise<void> {
     const mermaid = await ensureMermaid();
     await mermaid.run({ nodes: Array.from(nodes) });
   } catch (err) {
-    console.warn('[kmd] Mermaid rendering failed:', err);
+    // Mermaid rendering is non-critical; suppress in production
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('kmd:debug') === '1') {
+      console.warn('[kmd] Mermaid rendering failed:', err);
+    }
   }
 }

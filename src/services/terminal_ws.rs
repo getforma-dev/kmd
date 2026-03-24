@@ -1,7 +1,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Query, WebSocketUpgrade,
+        Query, State, WebSocketUpgrade,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -12,12 +12,14 @@ use serde::Deserialize;
 use tokio::task;
 
 use super::terminal;
+use crate::state::AppState;
 
 /// Query parameters for the terminal WebSocket endpoint.
 #[derive(Deserialize)]
 pub struct TerminalWsQuery {
     cols: Option<u16>,
     rows: Option<u16>,
+    token: Option<String>,
 }
 
 /// Clamp terminal dimensions to safe ranges to prevent resource abuse.
@@ -27,14 +29,23 @@ fn clamp_terminal_size(cols: u16, rows: u16) -> (u16, u16) {
 
 /// `GET /ws/terminal` — upgrade to a WebSocket that drives a PTY session.
 pub async fn terminal_ws_handler(
+    State(state): State<AppState>,
     ws: WebSocketUpgrade,
     Query(params): Query<TerminalWsQuery>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    // Auth token check: terminal WS requires token query parameter
+    match params.token.as_deref() {
+        Some(t) if t == state.auth_token() => {}
+        _ => {
+            return (axum::http::StatusCode::FORBIDDEN, "Forbidden: terminal requires auth token").into_response();
+        }
+    }
+
     let (cols, rows) = clamp_terminal_size(
         params.cols.unwrap_or(80),
         params.rows.unwrap_or(24),
     );
-    ws.on_upgrade(move |socket| handle_terminal_ws(socket, cols, rows))
+    ws.on_upgrade(move |socket| handle_terminal_ws(socket, cols, rows)).into_response()
 }
 
 async fn handle_terminal_ws(socket: WebSocket, cols: u16, rows: u16) {

@@ -10,6 +10,7 @@
 
 use ammonia::Builder;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use syntect::html::{ClassStyle, ClassedHTMLGenerator};
@@ -55,6 +56,26 @@ static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
 
     // Allow data: URIs for images (base64-embedded images in markdown)
     builder.url_schemes(["http", "https", "mailto", "data"].into_iter().collect());
+
+    // Security: restrict data: URIs to image/* on <img src> only
+    builder.attribute_filter(|element, attribute, value| {
+        let trimmed = value.trim_start().to_lowercase();
+        if trimmed.starts_with("data:") {
+            // Only allow data:image/* on img src
+            if element == "img" && attribute == "src" && trimmed.starts_with("data:image/") {
+                return Some(Cow::Borrowed(value));
+            }
+            // Block data: URIs on all other elements/attributes
+            return None;
+        }
+        // Block javascript: and vbscript: URIs everywhere
+        if (attribute == "href" || attribute == "src")
+            && (trimmed.starts_with("javascript:") || trimmed.starts_with("vbscript:"))
+        {
+            return None;
+        }
+        Some(Cow::Borrowed(value))
+    });
 
     // Strip dangerous content rather than escaping it
     builder.strip_comments(true);

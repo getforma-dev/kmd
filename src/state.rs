@@ -91,13 +91,15 @@ pub struct AppStateInner {
     pub server_port: Mutex<u16>,
     /// Script chain rules ("when X finishes, run Y").
     pub chain_rules: Mutex<Vec<ChainRule>>,
+    /// Auth token for gating sensitive endpoints (shell exec, terminal WS).
+    pub auth_token: String,
 }
 
 impl AppState {
     /// Create a new AppState for workspace mode.
     ///
     /// `db_dir` is `~/.kmd/data/<name>/`.
-    pub fn new_workspace(ws_config: WorkspaceConfig, db_dir: &Path) -> Self {
+    pub fn new_workspace(ws_config: WorkspaceConfig, db_dir: &Path, auth_token: String) -> Self {
         let conn = db::init_db(db_dir).expect("Failed to initialize database");
         let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(256);
         let roots = Self::resolve_workspace_roots(&ws_config);
@@ -113,6 +115,7 @@ impl AppState {
                 is_workspace: true,
                 server_port: Mutex::new(0),
                 chain_rules: Mutex::new(Vec::new()),
+                auth_token,
             }),
         }
     }
@@ -120,7 +123,7 @@ impl AppState {
     /// Create a new AppState for ephemeral mode.
     ///
     /// `cwd` is the current working directory. `db_dir` is a temp directory.
-    pub fn new_ephemeral(name: String, cwd: &Path, db_dir: &Path) -> Self {
+    pub fn new_ephemeral(name: String, cwd: &Path, db_dir: &Path, auth_token: String) -> Self {
         let conn = db::init_db(db_dir).expect("Failed to initialize database");
         let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(256);
 
@@ -141,6 +144,7 @@ impl AppState {
                 is_workspace: false,
                 server_port: Mutex::new(0),
                 chain_rules: Mutex::new(Vec::new()),
+                auth_token,
             }),
         }
     }
@@ -199,6 +203,11 @@ impl AppState {
     /// Access the chain rules (locks the mutex).
     pub fn chain_rules(&self) -> std::sync::MutexGuard<'_, Vec<ChainRule>> {
         self.inner.chain_rules.lock().expect("Chain rules mutex poisoned")
+    }
+
+    /// Get the auth token for gating sensitive endpoints.
+    pub fn auth_token(&self) -> &str {
+        &self.inner.auth_token
     }
 
     /// Resolve a workspace config's folders into WorkspaceRoot structs.

@@ -2,6 +2,8 @@ import { h, createSignal, createEffect, createShow, onCleanup } from '@getforma/
 import { MultiRootFileTree, type TreeNode, type RootTreeData } from '../components/FileTree';
 import { SearchBar } from '../components/SearchBar';
 import { renderMermaidDiagrams } from '../lib/mermaid';
+import { sanitizeHtml, sanitizeSnippet, kmdFetch, isValidDocPath } from '../lib/security';
+import { log } from '../lib/log';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -184,7 +186,7 @@ export function DocsPage(props?: {
         setRoots(data.roots);
       })
       .catch((err) => {
-        console.error('[kmd] Failed to refresh docs tree:', err);
+        log.error('[kmd] Failed to refresh docs tree:', err);
       });
   }
 
@@ -206,7 +208,7 @@ export function DocsPage(props?: {
         }
       })
       .catch((err) => {
-        console.error('[kmd] Failed to refresh doc:', err);
+        log.error('[kmd] Failed to refresh doc:', err);
       });
   }
 
@@ -287,7 +289,7 @@ export function DocsPage(props?: {
       }
     })
     .catch((err) => {
-      console.error('[kmd] Failed to fetch docs tree:', err);
+      log.error('[kmd] Failed to fetch docs tree:', err);
       setLoading(false);
     });
 
@@ -321,7 +323,7 @@ export function DocsPage(props?: {
         setDocLoading(false);
       })
       .catch((err) => {
-        console.error('[kmd] Failed to fetch doc:', err);
+        log.error('[kmd] Failed to fetch doc:', err);
         setDocHtml('<p>Failed to load document.</p>');
         setDocLoading(false);
       });
@@ -477,7 +479,7 @@ export function DocsPage(props?: {
           setIsSearching(false);
         })
         .catch((err) => {
-          console.error('[kmd] Search failed:', err);
+          log.error('[kmd] Search failed:', err);
           setIsSearching(false);
         });
     }, 300);
@@ -519,7 +521,7 @@ export function DocsPage(props?: {
         setRawContent(data.content);
         setEditMode(true);
       })
-      .catch((err) => console.error('[kmd] Failed to load raw content:', err));
+      .catch((err) => log.error('[kmd] Failed to load raw content:', err));
   }
 
   function saveEdit() {
@@ -528,7 +530,7 @@ export function DocsPage(props?: {
     if (!path) return;
 
     setSaving(true);
-    fetch(`/api/docs/${path.split('/').map(encodeURIComponent).join('/')}`, {
+    kmdFetch(`/api/docs/${path.split('/').map(encodeURIComponent).join('/')}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ root, content: rawContent() }),
@@ -540,7 +542,7 @@ export function DocsPage(props?: {
         refreshCurrentDoc();
       })
       .catch((err) => {
-        console.error('[kmd] Failed to save:', err);
+        log.error('[kmd] Failed to save:', err);
         setSaving(false);
       });
   }
@@ -557,7 +559,7 @@ export function DocsPage(props?: {
     if (!confirm(`Delete ${path}? This cannot be undone.`)) return;
 
     setDeleting(true);
-    fetch(`/api/docs/${path.split('/').map(encodeURIComponent).join('/')}?root=${encodeURIComponent(root)}`, {
+    kmdFetch(`/api/docs/${path.split('/').map(encodeURIComponent).join('/')}?root=${encodeURIComponent(root)}`, {
       method: 'DELETE',
     })
       .then((r) => r.json())
@@ -568,7 +570,7 @@ export function DocsPage(props?: {
         refreshTree();
       })
       .catch((err) => {
-        console.error('[kmd] Failed to delete:', err);
+        log.error('[kmd] Failed to delete:', err);
         setDeleting(false);
       });
   }
@@ -590,7 +592,7 @@ export function DocsPage(props?: {
   function createAnnotation(highlightText: string, note: string, color: string) {
     const path = selectedPath();
     const root = selectedRoot();
-    fetch('/api/docs/annotations', {
+    kmdFetch('/api/docs/annotations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ root, file_path: path, highlight_text: highlightText, note, color }),
@@ -600,7 +602,7 @@ export function DocsPage(props?: {
   }
 
   function deleteAnnotation(id: number) {
-    fetch(`/api/docs/annotations/${id}`, { method: 'DELETE' })
+    kmdFetch(`/api/docs/annotations/${id}`, { method: 'DELETE' })
       .then(() => fetchAnnotations())
       .catch(() => {});
   }
@@ -619,7 +621,7 @@ export function DocsPage(props?: {
   function createBookmark(headingId: string, headingText: string) {
     const path = selectedPath();
     const root = selectedRoot();
-    fetch('/api/docs/bookmarks', {
+    kmdFetch('/api/docs/bookmarks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ root, file_path: path, heading_id: headingId, heading_text: headingText }),
@@ -629,7 +631,7 @@ export function DocsPage(props?: {
   }
 
   function deleteBookmark(id: number) {
-    fetch(`/api/docs/bookmarks/${id}`, { method: 'DELETE' })
+    kmdFetch(`/api/docs/bookmarks/${id}`, { method: 'DELETE' })
       .then(() => fetchBookmarks())
       .catch(() => {});
   }
@@ -691,7 +693,7 @@ export function DocsPage(props?: {
                   }, displayPath),
                   h('span', {
                     style: 'color: var(--gruvbox-gray); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;',
-                    dangerouslySetInnerHTML: { __html: result.snippet },
+                    dangerouslySetInnerHTML: { __html: sanitizeSnippet(result.snippet) },
                   }),
                 );
               }),
@@ -1288,8 +1290,8 @@ export function DocsPage(props?: {
                     const html = docHtml();
                     const anns = annotations();
 
-                    // Set clean HTML first — no regex manipulation
-                    markdownDiv.innerHTML = html;
+                    // Defense-in-depth: sanitize server-rendered HTML before DOM injection
+                    markdownDiv.innerHTML = sanitizeHtml(html);
 
                     // Apply highlights by walking text nodes (skips pre, code, mark)
                     if (anns.length > 0) {

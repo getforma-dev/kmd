@@ -111,6 +111,48 @@ pub struct EnvDiff {
     pub same: Vec<String>,
 }
 
+/// Compare two env files by hashing values — never reveals plaintext secrets.
+pub fn compare_env_files_secure(
+    root_a: &Path, path_a: &str,
+    root_b: &Path, path_b: &str,
+) -> Option<EnvDiff> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn hash_value(v: &str) -> u64 {
+        let mut h = DefaultHasher::new();
+        v.hash(&mut h);
+        h.finish()
+    }
+
+    // Read raw values (reveal=true internally, but never exposed)
+    let vars_a = read_env_file(root_a, path_a, true)?;
+    let vars_b = read_env_file(root_b, path_b, true)?;
+
+    let a_map: BTreeMap<&str, u64> = vars_a.iter().map(|v| (v.key.as_str(), hash_value(&v.value))).collect();
+    let b_map: BTreeMap<&str, u64> = vars_b.iter().map(|v| (v.key.as_str(), hash_value(&v.value))).collect();
+
+    let mut only_a = Vec::new();
+    let mut only_b = Vec::new();
+    let mut differ = Vec::new();
+    let mut same = Vec::new();
+
+    for key in a_map.keys() {
+        if !b_map.contains_key(key) { only_a.push(key.to_string()); }
+    }
+    for key in b_map.keys() {
+        if !a_map.contains_key(key) { only_b.push(key.to_string()); }
+    }
+    for (key, hash_a) in &a_map {
+        if let Some(hash_b) = b_map.get(key) {
+            if hash_a != hash_b { differ.push(key.to_string()); }
+            else { same.push(key.to_string()); }
+        }
+    }
+
+    Some(EnvDiff { only_a, only_b, differ, same })
+}
+
 // ---------------------------------------------------------------------------
 // Internal
 // ---------------------------------------------------------------------------
@@ -214,7 +256,7 @@ fn parse_env_content(content: &str, reveal: bool) -> Vec<EnvVar> {
             let display_value = if reveal {
                 value
             } else {
-                mask_value(&value)
+                mask_value(&key, &value)
             };
 
             vars.push(EnvVar {
@@ -228,14 +270,41 @@ fn parse_env_content(content: &str, reveal: bool) -> Vec<EnvVar> {
     vars
 }
 
-fn mask_value(value: &str) -> String {
+/// Check whether a key name indicates a sensitive secret.
+fn is_sensitive_key(key: &str) -> bool {
+    let upper = key.to_uppercase();
+    upper.contains("SECRET")
+        || upper.contains("PASSWORD")
+        || upper.contains("PASSWD")
+        || upper.contains("TOKEN")
+        || upper.contains("API_KEY")
+        || upper.contains("APIKEY")
+        || upper.contains("PRIVATE")
+        || upper.contains("AUTH")
+        || upper.contains("CREDENTIAL")
+        || upper.ends_with("_KEY")
+        || upper.ends_with("_SALT")
+        || upper.ends_with("_HASH")
+        || upper.starts_with("AWS_")
+        || upper.starts_with("GITHUB_")
+        || upper.starts_with("STRIPE_")
+        || upper.starts_with("OPENAI_")
+        || upper.starts_with("ANTHROPIC_")
+        || upper == "DATABASE_URL"
+        || upper == "REDIS_URL"
+        || upper == "MONGO_URI"
+        || upper == "MONGODB_URI"
+}
+
+fn mask_value(key: &str, value: &str) -> String {
     if value.is_empty() {
         return String::new();
     }
-    if value.len() <= 4 {
-        return "••••".to_string();
+    // Fully mask sensitive keys — never reveal partial values
+    if is_sensitive_key(key) || value.len() <= 4 {
+        return "••••••••".to_string();
     }
-    // Show first 2 and last 2 characters
+    // Non-sensitive values: show first 2 and last 2 characters
     let first = &value[..2];
     let last = &value[value.len() - 2..];
     format!("{first}••••{last}")
