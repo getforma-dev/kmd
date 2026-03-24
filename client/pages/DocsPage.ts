@@ -998,12 +998,22 @@ export function DocsPage(props?: {
             onClick: () => setFocusMode(!focusMode()),
           }, () => focusMode() ? 'Exit focus' : 'Focus'),
         ),
-        // Bookmarks panel (dropdown)
-        createShow(
-          () => showBookmarks(),
-          () => {
+        // Bookmarks panel (smooth slide transition — always rendered, height animated)
+        (() => {
             const panel = document.createElement('div');
-            panel.style.cssText = 'border-bottom: 1px solid var(--gruvbox-border); padding: 8px 16px; background: var(--gruvbox-bg-soft); max-height: 200px; overflow-y: auto;';
+            panel.style.cssText = 'border-bottom: 1px solid var(--gruvbox-border); background: var(--gruvbox-bg-soft); overflow: hidden; transition: max-height 0.25s ease, padding 0.25s ease, opacity 0.2s ease; max-height: 0; padding: 0 16px; opacity: 0;';
+
+            createEffect(() => {
+              if (showBookmarks()) {
+                panel.style.maxHeight = '200px';
+                panel.style.padding = '8px 16px';
+                panel.style.opacity = '1';
+              } else {
+                panel.style.maxHeight = '0';
+                panel.style.padding = '0 16px';
+                panel.style.opacity = '0';
+              }
+            });
 
             createEffect(() => {
               const bms = bookmarks();
@@ -1041,7 +1051,8 @@ export function DocsPage(props?: {
 
                 row.onclick = () => {
                   handleFileSelect(bm.file_path, bm.root);
-                  setShowBookmarks(false);
+                  // Smooth close after a brief pause so the transition feels natural
+                  setTimeout(() => setShowBookmarks(false), 150);
                   // Scroll to heading after content loads
                   setTimeout(() => {
                     const target = document.getElementById(bm.heading_id);
@@ -1060,62 +1071,8 @@ export function DocsPage(props?: {
             });
 
             return panel;
-          },
-          () => h('div', { style: 'display: none;' }),
-        ),
-        // Annotations panel (below breadcrumb, above content)
-        createShow(
-          () => annotations().length > 0 && !editMode(),
-          () => {
-            const panel = document.createElement('div');
-            panel.style.cssText = 'border-bottom: 1px solid var(--gruvbox-border); padding: 6px 16px; background: var(--gruvbox-bg-soft);';
+          })(),
 
-            createEffect(() => {
-              const anns = annotations();
-              panel.innerHTML = '';
-              if (anns.length === 0) return;
-
-              const label = document.createElement('div');
-              label.style.cssText = 'font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray); margin-bottom: 4px; font-family: var(--font-code);';
-              label.textContent = `${anns.length} annotation${anns.length === 1 ? '' : 's'}`;
-              panel.appendChild(label);
-
-              for (const ann of anns) {
-                const colorMap: Record<string, string> = {
-                  yellow: 'rgba(215, 153, 33, 0.15)',
-                  green: 'rgba(184, 187, 38, 0.15)',
-                  blue: 'rgba(131, 165, 152, 0.15)',
-                  pink: 'rgba(211, 134, 155, 0.15)',
-                };
-                const row = document.createElement('div');
-                row.style.cssText = `display: flex; align-items: flex-start; gap: 8px; padding: 4px 8px; border-radius: 4px; margin-bottom: 3px; background: ${colorMap[ann.color] || colorMap.yellow}; font-size: 12px;`;
-
-                const quote = document.createElement('span');
-                quote.style.cssText = 'color: var(--gruvbox-fg2); font-style: italic; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-                quote.textContent = `"${ann.highlight_text.slice(0, 60)}${ann.highlight_text.length > 60 ? '…' : ''}"`;
-                row.appendChild(quote);
-
-                if (ann.note) {
-                  const note = document.createElement('span');
-                  note.style.cssText = 'color: var(--gruvbox-fg); flex: 1;';
-                  note.textContent = ann.note;
-                  row.appendChild(note);
-                }
-
-                const removeBtn = document.createElement('button');
-                removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; flex-shrink: 0; padding: 0 2px;';
-                removeBtn.textContent = '×';
-                removeBtn.onclick = () => deleteAnnotation(ann.id);
-                row.appendChild(removeBtn);
-
-                panel.appendChild(row);
-              }
-            });
-
-            return panel;
-          },
-          () => h('div', { style: 'display: none;' }),
-        ),
         // Scrollable content area
         h('div', {
           style: 'flex: 1; overflow-y: auto; padding: var(--space-lg);',
@@ -1231,54 +1188,93 @@ export function DocsPage(props?: {
                 }, 'Copy path'),
               ),
               () => {
-                  // Floating annotation toolbar (appears on text selection)
-                  const toolbar = document.createElement('div');
-                  toolbar.style.cssText = 'position: absolute; display: none; z-index: 100; background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: 6px; padding: 4px 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); gap: 4px; align-items: center;';
+                  const COLOR_BG: Record<string, string> = {
+                    yellow: 'rgba(215, 153, 33, 0.25)',
+                    green: 'rgba(184, 187, 38, 0.25)',
+                    blue: 'rgba(131, 165, 152, 0.25)',
+                    pink: 'rgba(211, 134, 155, 0.25)',
+                  };
+                  const COLOR_BORDER: Record<string, string> = {
+                    yellow: '#d79921', green: '#b8bb26', blue: '#83a598', pink: '#d3869b',
+                  };
 
-                  const colorHexMap: Record<string, string> = { yellow: '#d79921', green: '#b8bb26', blue: '#83a598', pink: '#d3869b' };
-
-                  for (const color of ['yellow', 'green', 'blue', 'pink'] as const) {
-                    const btn = document.createElement('button');
-                    btn.style.cssText = `width: 20px; height: 20px; border-radius: 50%; border: 2px solid ${colorHexMap[color]}; background: ${colorHexMap[color]}30; cursor: pointer; padding: 0; transition: transform 0.1s;`;
-                    btn.title = `Highlight ${color}`;
-                    btn.addEventListener('mouseenter', () => { btn.style.transform = 'scale(1.2)'; });
-                    btn.addEventListener('mouseleave', () => { btn.style.transform = 'scale(1)'; });
-                    btn.addEventListener('mousedown', (e) => {
-                      e.preventDefault(); // Prevent losing selection
-                      const sel = window.getSelection();
-                      const selectedText = sel?.toString().trim();
-                      if (!selectedText) return;
-
-                      const note = prompt('Add a note (optional):') || '';
-                      createAnnotation(selectedText, note, color);
-                      toolbar.style.display = 'none';
-                      sel?.removeAllRanges();
-                    });
-                    toolbar.appendChild(btn);
-                  }
-
-                  // Add note-only button
-                  const noteBtn = document.createElement('button');
-                  noteBtn.style.cssText = 'background: none; border: 1px solid var(--gruvbox-border); border-radius: 4px; color: var(--gruvbox-fg2); cursor: pointer; padding: 2px 8px; font-size: 10px; font-family: var(--font-code); margin-left: 2px;';
-                  noteBtn.textContent = '+ Note';
-                  noteBtn.addEventListener('mousedown', (e) => {
-                    e.preventDefault();
-                    const sel = window.getSelection();
-                    const selectedText = sel?.toString().trim();
-                    if (!selectedText) return;
-
-                    const note = prompt('Add your note:');
-                    if (note === null) return; // cancelled
-                    createAnnotation(selectedText, note, 'yellow');
-                    toolbar.style.display = 'none';
-                    sel?.removeAllRanges();
-                  });
-                  toolbar.appendChild(noteBtn);
-
-                  // Container for markdown + toolbar
+                  // Container for everything
                   const wrapper = document.createElement('div');
                   wrapper.style.cssText = 'position: relative;';
 
+                  // --- Floating toolbar (color picker + inline note input) ---
+                  const toolbar = document.createElement('div');
+                  toolbar.style.cssText = 'position: absolute; display: none; z-index: 100; background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: 8px; padding: 6px 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); flex-direction: column; gap: 6px; min-width: 220px;';
+
+                  // Top row: color buttons
+                  const colorRow = document.createElement('div');
+                  colorRow.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+
+                  const colorLabel = document.createElement('span');
+                  colorLabel.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); font-family: var(--font-code);';
+                  colorLabel.textContent = 'Highlight';
+                  colorRow.appendChild(colorLabel);
+
+                  let pendingSelectedText = '';
+                  let pendingColor = 'yellow';
+
+                  for (const color of ['yellow', 'green', 'blue', 'pink'] as const) {
+                    const btn = document.createElement('button');
+                    btn.style.cssText = `width: 18px; height: 18px; border-radius: 50%; border: 2px solid ${COLOR_BORDER[color]}; background: ${COLOR_BG[color]}; cursor: pointer; padding: 0; transition: transform 0.1s ease, box-shadow 0.1s ease;`;
+                    btn.title = color;
+                    btn.addEventListener('mouseenter', () => { btn.style.transform = 'scale(1.2)'; });
+                    btn.addEventListener('mouseleave', () => { btn.style.transform = 'scale(1)'; });
+                    btn.addEventListener('mousedown', (e) => {
+                      e.preventDefault();
+                      if (!pendingSelectedText) return;
+                      pendingColor = color;
+                      // Highlight immediately (no note)
+                      createAnnotation(pendingSelectedText, '', color);
+                      hideToolbar();
+                    });
+                    colorRow.appendChild(btn);
+                  }
+                  toolbar.appendChild(colorRow);
+
+                  // Bottom row: note input + save
+                  const noteRow = document.createElement('div');
+                  noteRow.style.cssText = 'display: flex; align-items: center; gap: 4px;';
+
+                  const noteInput = document.createElement('input');
+                  noteInput.type = 'text';
+                  noteInput.placeholder = 'Add a note…';
+                  noteInput.style.cssText = 'flex: 1; background: var(--gruvbox-bg-hard); border: 1px solid var(--gruvbox-border); border-radius: 4px; padding: 4px 8px; font-size: 11px; font-family: var(--font-body); color: var(--gruvbox-fg); outline: none;';
+                  noteInput.addEventListener('focus', () => { noteInput.style.borderColor = 'var(--accent)'; });
+                  noteInput.addEventListener('blur', () => { noteInput.style.borderColor = 'var(--gruvbox-border)'; });
+                  noteInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && pendingSelectedText) {
+                      createAnnotation(pendingSelectedText, noteInput.value, pendingColor);
+                      hideToolbar();
+                    }
+                    if (e.key === 'Escape') hideToolbar();
+                  });
+                  noteRow.appendChild(noteInput);
+
+                  const saveNoteBtn = document.createElement('button');
+                  saveNoteBtn.style.cssText = 'background: var(--accent); color: var(--gruvbox-bg-hard); border: none; border-radius: 4px; padding: 4px 10px; font-size: 10px; font-weight: 600; cursor: pointer; white-space: nowrap;';
+                  saveNoteBtn.textContent = 'Save';
+                  saveNoteBtn.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    if (!pendingSelectedText) return;
+                    createAnnotation(pendingSelectedText, noteInput.value, pendingColor);
+                    hideToolbar();
+                  });
+                  noteRow.appendChild(saveNoteBtn);
+                  toolbar.appendChild(noteRow);
+
+                  function hideToolbar() {
+                    toolbar.style.display = 'none';
+                    noteInput.value = '';
+                    pendingSelectedText = '';
+                    window.getSelection()?.removeAllRanges();
+                  }
+
+                  // --- Markdown content ---
                   const markdownDiv = document.createElement('div');
                   markdownDiv.className = 'markdown-body fade-in';
 
@@ -1287,11 +1283,79 @@ export function DocsPage(props?: {
                     markdownDiv.style.margin = focusMode() ? '0 auto' : '';
                   });
 
+                  // Render HTML + apply inline highlights from annotations
                   createEffect(() => {
-                    markdownDiv.innerHTML = docHtml();
+                    let html = docHtml();
+                    const anns = annotations();
+
+                    // Apply highlights: find annotation text in HTML and wrap with <mark>
+                    for (const ann of anns) {
+                      const escapedText = ann.highlight_text
+                        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                      // Match the text but not inside HTML tags
+                      const regex = new RegExp(`(?<=>)([^<]*?)(${escapedText})([^<]*?)(?=<)`, 'gi');
+                      html = html.replace(regex, (_, before, match, after) => {
+                        const bg = COLOR_BG[ann.color] || COLOR_BG.yellow;
+                        const border = COLOR_BORDER[ann.color] || COLOR_BORDER.yellow;
+                        const noteAttr = ann.note ? ` data-note="${ann.note.replace(/"/g, '&quot;')}"` : '';
+                        const annIdAttr = ` data-ann-id="${ann.id}"`;
+                        return `${before}<mark style="background:${bg};border-bottom:2px solid ${border};border-radius:2px;padding:0 1px;cursor:pointer;position:relative;" class="kmd-highlight"${noteAttr}${annIdAttr}>${match}</mark>${after}`;
+                      });
+                    }
+
+                    markdownDiv.innerHTML = html;
+
+                    // Attach tooltip behavior to highlights
+                    requestAnimationFrame(() => {
+                      const highlights = markdownDiv.querySelectorAll('.kmd-highlight');
+                      highlights.forEach((el) => {
+                        const mark = el as HTMLElement;
+                        const note = mark.dataset.note;
+                        const annId = mark.dataset.annId;
+                        let tooltip: HTMLDivElement | null = null;
+
+                        mark.addEventListener('mouseenter', () => {
+                          if (!tooltip) {
+                            tooltip = document.createElement('div');
+                            tooltip.style.cssText = 'position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: 6px; padding: 6px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 50; font-size: 12px; max-width: 280px; white-space: normal; pointer-events: auto;';
+
+                            if (note) {
+                              const noteText = document.createElement('div');
+                              noteText.style.cssText = 'color: var(--gruvbox-fg); margin-bottom: 4px; line-height: 1.4;';
+                              noteText.textContent = note;
+                              tooltip.appendChild(noteText);
+                            }
+
+                            const removeBtn = document.createElement('button');
+                            removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-red); cursor: pointer; font-size: 10px; padding: 0; font-family: var(--font-code); opacity: 0.7;';
+                            removeBtn.textContent = 'Remove highlight';
+                            removeBtn.addEventListener('click', () => {
+                              if (annId) deleteAnnotation(Number(annId));
+                              if (tooltip) { tooltip.remove(); tooltip = null; }
+                            });
+                            removeBtn.addEventListener('mouseenter', () => { removeBtn.style.opacity = '1'; });
+                            removeBtn.addEventListener('mouseleave', () => { removeBtn.style.opacity = '0.7'; });
+                            tooltip.appendChild(removeBtn);
+
+                            mark.style.position = 'relative';
+                            mark.appendChild(tooltip);
+                          }
+                          if (tooltip) tooltip.style.display = 'block';
+                        });
+
+                        mark.addEventListener('mouseleave', (e) => {
+                          // Delay hide so user can interact with tooltip
+                          setTimeout(() => {
+                            if (tooltip && !mark.matches(':hover') && !tooltip.matches(':hover')) {
+                              tooltip.style.display = 'none';
+                            }
+                          }, 200);
+                        });
+                      });
+                    });
                   });
 
-                  // Show toolbar on text selection
+                  // Show toolbar on text selection in the markdown
                   markdownDiv.addEventListener('mouseup', () => {
                     setTimeout(() => {
                       const sel = window.getSelection();
@@ -1301,20 +1365,26 @@ export function DocsPage(props?: {
                         return;
                       }
 
+                      pendingSelectedText = selectedText;
+                      pendingColor = 'yellow';
+
                       const range = sel!.getRangeAt(0);
                       const rect = range.getBoundingClientRect();
                       const wrapperRect = wrapper.getBoundingClientRect();
 
                       toolbar.style.display = 'flex';
-                      toolbar.style.left = `${rect.left - wrapperRect.left + rect.width / 2 - 70}px`;
-                      toolbar.style.top = `${rect.top - wrapperRect.top - 40}px`;
+                      toolbar.style.left = `${Math.max(0, rect.left - wrapperRect.left + rect.width / 2 - 110)}px`;
+                      toolbar.style.top = `${rect.top - wrapperRect.top - 80}px`;
+
+                      // Focus the note input after a tick
+                      requestAnimationFrame(() => noteInput.focus());
                     }, 10);
                   });
 
-                  // Hide toolbar when clicking elsewhere
+                  // Hide toolbar on outside click
                   document.addEventListener('mousedown', (e) => {
-                    if (!toolbar.contains(e.target as Node)) {
-                      toolbar.style.display = 'none';
+                    if (!toolbar.contains(e.target as Node) && !markdownDiv.contains(e.target as Node)) {
+                      hideToolbar();
                     }
                   });
 
