@@ -1,6 +1,6 @@
 {
   "name": "@getforma/kmd-darwin-x64",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "kmd binary for macOS x64 (Intel)",
   "license": "MIT",
   "os": ["darwin"],
