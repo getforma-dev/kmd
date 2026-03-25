@@ -4,9 +4,6 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write
-
 jobs:
   build:
     strategy:
@@ -26,6 +23,9 @@ jobs:
             npm-pkg: kmd-win32-x64
 
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write  # Required for npm trusted publishing (OIDC)
 
     steps:
       - uses: actions/checkout@v4
@@ -38,8 +38,8 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 24
+          registry-url: https://registry.npmjs.org
 
       - name: Build client
         run: |
@@ -65,11 +65,22 @@ jobs:
           cp target/${{ matrix.target }}/release/kmd.exe \
              npm/${{ matrix.npm-pkg }}/bin/kmd.exe
 
+      - name: Verify version matches tag
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./npm/${{ matrix.npm-pkg }}/package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+
+      # Trusted publishing: uses OIDC for auth, no npm token needed.
+      # Provenance is generated automatically.
+      # Configure at: npmjs.com → package Settings → Trusted Publisher
       - name: Publish platform package
         working-directory: npm/${{ matrix.npm-pkg }}
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -80,19 +91,32 @@ jobs:
   publish-meta:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for GitHub Release
+      id-token: write  # Required for npm trusted publishing (OIDC)
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 24
+          registry-url: https://registry.npmjs.org
 
+      - name: Verify version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./npm/kmd/package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+
+      # Trusted publishing: uses OIDC for auth, no npm token needed.
+      # Provenance is generated automatically.
+      # Configure at: npmjs.com → package Settings → Trusted Publisher
       - name: Publish meta package
         working-directory: npm/kmd
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
