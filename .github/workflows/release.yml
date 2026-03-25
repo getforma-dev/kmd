@@ -14,16 +14,16 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            npm-pkg: getforma-dev-darwin-arm64
+            npm-pkg: kmd-darwin-arm64
           - target: x86_64-apple-darwin
             os: macos-latest
-            npm-pkg: getforma-dev-darwin-x64
+            npm-pkg: kmd-darwin-x64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            npm-pkg: getforma-dev-linux-x64
+            npm-pkg: kmd-linux-x64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            npm-pkg: getforma-dev-win32-x64
+            npm-pkg: kmd-win32-x64
 
     runs-on: ${{ matrix.os }}
 
@@ -42,33 +42,31 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Build client
-        working-directory: forma-dev
         run: |
           npm install
           bash build-client.sh
 
       - name: Build binary
-        working-directory: forma-dev
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          mkdir -p forma-dev/npm/${{ matrix.npm-pkg }}/bin
-          cp forma-dev/target/${{ matrix.target }}/release/kmd \
-             forma-dev/npm/${{ matrix.npm-pkg }}/bin/kmd
-          chmod +x forma-dev/npm/${{ matrix.npm-pkg }}/bin/kmd
+          mkdir -p npm/${{ matrix.npm-pkg }}/bin
+          cp target/${{ matrix.target }}/release/kmd \
+             npm/${{ matrix.npm-pkg }}/bin/kmd
+          chmod +x npm/${{ matrix.npm-pkg }}/bin/kmd
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          mkdir -p forma-dev/npm/${{ matrix.npm-pkg }}/bin
-          cp forma-dev/target/${{ matrix.target }}/release/kmd.exe \
-             forma-dev/npm/${{ matrix.npm-pkg }}/bin/kmd.exe
+          mkdir -p npm/${{ matrix.npm-pkg }}/bin
+          cp target/${{ matrix.target }}/release/kmd.exe \
+             npm/${{ matrix.npm-pkg }}/bin/kmd.exe
 
       - name: Publish platform package
-        working-directory: forma-dev/npm/${{ matrix.npm-pkg }}
+        working-directory: npm/${{ matrix.npm-pkg }}
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -77,7 +75,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.npm-pkg }}
-          path: forma-dev/npm/${{ matrix.npm-pkg }}/bin/
+          path: npm/${{ matrix.npm-pkg }}/bin/
 
   publish-meta:
     needs: build
@@ -91,7 +89,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Publish meta package
-        working-directory: forma-dev/npm/getforma-dev
+        working-directory: npm/kmd
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

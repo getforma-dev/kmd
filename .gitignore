@@ -3,7 +3,13 @@
 /dist/client
 .kmd/
 *.db
-# Platform binary placeholders (only built in CI)
-npm/getforma-dev-*/bin/kmd
-npm/getforma-dev-*/bin/kmd.exe
 test-results/
+
+# Platform binary placeholders (only built in CI)
+npm/kmd-*/bin/kmd
+npm/kmd-*/bin/kmd.exe
+
+# Internal docs (not for public repo)
+docs/superpowers/
+docs/SECURITY-AUDIT-CHECKLIST.md
+KMD-BRAND-GUIDE.md

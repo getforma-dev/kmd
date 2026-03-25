@@ -1,5 +1,5 @@
 import { h, createSignal, createEffect, createShow, onCleanup } from '@getforma/core';
-import { MultiRootFileTree, type TreeNode, type RootTreeData } from '../components/FileTree';
+import { MultiRootFileTree, type TreeNode, type RootTreeData, getStarredPaths, toggleStar } from '../components/FileTree';
 import { SearchBar } from '../components/SearchBar';
 import { renderMermaidDiagrams } from '../lib/mermaid';
 import { sanitizeHtml, sanitizeSnippet, kmdFetch, isValidDocPath } from '../lib/security';
@@ -93,6 +93,23 @@ function slugify(text: string): string {
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .trim();
+}
+
+// Assign unique IDs to headings in a container, returns TocEntry-compatible data
+function assignHeadingIds(container: Element): Array<{id: string; text: string; level: number}> {
+  const headings = container.querySelectorAll('h1, h2, h3, h4');
+  const entries: Array<{id: string; text: string; level: number}> = [];
+  const idCounts: Record<string, number> = {};
+  headings.forEach((heading) => {
+    const text = heading.textContent?.trim() || '';
+    if (!text) return;
+    let id = slugify(text);
+    if (idCounts[id] !== undefined) { idCounts[id]++; id = `${id}-${idCounts[id]}`; }
+    else { idCounts[id] = 0; }
+    heading.id = id;
+    entries.push({ id, text, level: parseInt(heading.tagName.charAt(1), 10) });
+  });
+  return entries;
 }
 
 // ---------------------------------------------------------------------------
@@ -360,28 +377,7 @@ export function DocsPage(props?: {
       if (!markdownBody) return;
 
       // --- Feature 4: Build TOC from headings ---
-      const headings = markdownBody.querySelectorAll('h1, h2, h3, h4');
-      const entries: TocEntry[] = [];
-      const idCounts: Record<string, number> = {};
-
-      headings.forEach((heading) => {
-        const text = heading.textContent?.trim() || '';
-        if (!text) return;
-
-        let baseId = slugify(text);
-        // Ensure unique IDs
-        if (idCounts[baseId] !== undefined) {
-          idCounts[baseId]++;
-          baseId = `${baseId}-${idCounts[baseId]}`;
-        } else {
-          idCounts[baseId] = 0;
-        }
-
-        heading.id = baseId;
-        const level = parseInt(heading.tagName.charAt(1), 10);
-        entries.push({ id: baseId, text, level });
-      });
-
+      const entries = assignHeadingIds(markdownBody);
       setTocEntries(entries);
 
       // Track active heading via scroll position (simpler + more reliable than IntersectionObserver)
@@ -589,16 +585,46 @@ export function DocsPage(props?: {
       .catch(() => {});
   }
 
+  let annotationLock = false;
   function createAnnotation(highlightText: string, note: string, color: string) {
+    if (annotationLock) return;
+    annotationLock = true;
     const path = selectedPath();
     const root = selectedRoot();
-    kmdFetch('/api/docs/annotations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ root, file_path: path, highlight_text: highlightText, note, color }),
-    })
-      .then(() => fetchAnnotations())
-      .catch(() => {});
+    // Find annotations to replace: exact match OR overlapping marks in the DOM
+    const idsToDelete = new Set<number>();
+    // Check exact text match
+    for (const a of annotations()) {
+      if (a.highlight_text === highlightText) idsToDelete.add(a.id);
+    }
+    // Check DOM for marks that overlap with the new highlight text
+    const marks = document.querySelectorAll('.kmd-highlight[data-ann-id]');
+    marks.forEach(mark => {
+      const annId = Number(mark.dataset.annId);
+      if (!annId) return;
+      const markText = mark.textContent || '';
+      // If the new highlight contains this mark's text or vice versa, it overlaps
+      if (highlightText.includes(markText) || markText.includes(highlightText)) {
+        idsToDelete.add(annId);
+      }
+    });
+
+    const doCreate = () =>
+      kmdFetch('/api/docs/annotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root, file_path: path, highlight_text: highlightText, note, color }),
+      })
+        .then(() => fetchAnnotations())
+        .catch(() => {})
+        .finally(() => { annotationLock = false; });
+    if (idsToDelete.size > 0) {
+      Promise.all([...idsToDelete].map(id =>
+        kmdFetch(`/api/docs/annotations/${id}`, { method: 'DELETE' }).catch(() => {})
+      )).then(doCreate).catch(doCreate);
+    } else {
+      doCreate();
+    }
   }
 
   function deleteAnnotation(id: number) {
@@ -952,7 +978,7 @@ export function DocsPage(props?: {
             style: 'padding: 2px 8px; font-size: 10px; flex-shrink: 0;',
             onClick: () => setShowBookmarks(!showBookmarks()),
             title: 'Bookmarks',
-          }, () => `Bookmarks${bookmarks().length > 0 ? ` (${bookmarks().length})` : ''}`),
+          }, () => { const total = bookmarks().length + getStarredPaths().length; return `Bookmarks${total > 0 ? ` (${total})` : ''}`; }),
           // Edit button
           createShow(
             () => !!selectedPath() && !editMode(),
@@ -1019,56 +1045,104 @@ export function DocsPage(props?: {
 
             createEffect(() => {
               const bms = bookmarks();
+              const starred = getStarredPaths();
               panel.innerHTML = '';
 
-              if (bms.length === 0) {
-                panel.innerHTML = '<div style="color: var(--gruvbox-gray); font-size: 12px; padding: 4px 0;">No bookmarks yet. Click the bookmark icon next to headings to save them.</div>';
+              if (bms.length === 0 && starred.length === 0) {
+                panel.innerHTML = '<div style="color: var(--gruvbox-gray); font-size: 12px; padding: 4px 0;">No bookmarks yet. Star files in the tree or bookmark headings in the TOC.</div>';
                 return;
               }
 
-              const title = document.createElement('div');
-              title.style.cssText = 'font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray); margin-bottom: 6px; font-family: var(--font-code);';
-              title.textContent = 'Bookmarks';
-              panel.appendChild(title);
+              // --- Starred files section ---
+              if (starred.length > 0) {
+                const starTitle = document.createElement('div');
+                starTitle.style.cssText = 'font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray); margin-bottom: 4px; font-family: var(--font-code);';
+                starTitle.textContent = 'Starred files';
+                panel.appendChild(starTitle);
 
-              for (const bm of bms) {
-                const row = document.createElement('div');
-                row.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; font-size: 12px;';
+                for (const filePath of starred) {
+                  const row = document.createElement('div');
+                  row.style.cssText = 'display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; font-size: 12px; transition: color 0.1s ease;';
 
-                const fileLabel = document.createElement('span');
-                fileLabel.style.cssText = 'color: var(--gruvbox-gray); font-family: var(--font-code); font-size: 10px; flex-shrink: 0;';
-                fileLabel.textContent = bm.file_path.split('/').pop() || bm.file_path;
-                row.appendChild(fileLabel);
+                  const star = document.createElement('span');
+                  star.style.cssText = 'color: var(--accent); font-size: 10px; flex-shrink: 0;';
+                  star.textContent = '★';
+                  row.appendChild(star);
 
-                const headingLabel = document.createElement('span');
-                headingLabel.style.cssText = 'color: var(--gruvbox-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-                headingLabel.textContent = bm.heading_text;
-                row.appendChild(headingLabel);
+                  const name = document.createElement('span');
+                  name.style.cssText = 'color: var(--gruvbox-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                  name.textContent = filePath.split('/').pop() || filePath;
+                  name.title = filePath;
+                  row.appendChild(name);
 
-                const removeBtn = document.createElement('button');
-                removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; margin-left: auto; flex-shrink: 0; padding: 0 4px;';
-                removeBtn.textContent = '×';
-                removeBtn.onclick = (e) => { e.stopPropagation(); deleteBookmark(bm.id); };
-                row.appendChild(removeBtn);
+                  const unstarBtn = document.createElement('button');
+                  unstarBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; margin-left: auto; flex-shrink: 0; padding: 0 4px; opacity: 0; transition: opacity 0.1s ease;';
+                  unstarBtn.textContent = '×';
+                  unstarBtn.onclick = (e) => { e.stopPropagation(); toggleStar(filePath); };
+                  row.appendChild(unstarBtn);
 
-                row.onclick = () => {
-                  handleFileSelect(bm.file_path, bm.root);
-                  // Smooth close after a brief pause so the transition feels natural
-                  setTimeout(() => setShowBookmarks(false), 150);
-                  // Scroll to heading after content loads
-                  setTimeout(() => {
-                    const target = document.getElementById(bm.heading_id);
-                    if (target) {
-                      const scrollContainer = target.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
-                      if (scrollContainer) {
-                        const offsetTop = target.offsetTop - scrollContainer.offsetTop;
-                        scrollContainer.scrollTo({ top: offsetTop - 16, behavior: 'smooth' });
+                  row.addEventListener('mouseenter', () => { unstarBtn.style.opacity = '1'; });
+                  row.addEventListener('mouseleave', () => { unstarBtn.style.opacity = '0'; });
+                  row.onclick = () => {
+                    // Resolve the correct root for this starred file
+                    const matchedRoot = roots().find(r =>
+                      r.children.some(function findPath(n: TreeNode): boolean {
+                        return n.path === filePath || (n.children?.some(findPath) ?? false);
+                      })
+                    );
+                    handleFileSelect(filePath, matchedRoot?.root || selectedRoot());
+                    setTimeout(() => setShowBookmarks(false), 150);
+                  };
+                  panel.appendChild(row);
+                }
+              }
+
+              // --- Heading bookmarks section ---
+              if (bms.length > 0) {
+                const bmTitle = document.createElement('div');
+                bmTitle.style.cssText = `font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gruvbox-gray); margin-bottom: 4px; font-family: var(--font-code);${starred.length > 0 ? ' margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--gruvbox-border);' : ''}`;
+                bmTitle.textContent = 'Heading bookmarks';
+                panel.appendChild(bmTitle);
+
+                for (const bm of bms) {
+                  const row = document.createElement('div');
+                  row.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 2px 0; cursor: pointer; font-size: 12px;';
+
+                  const fileLabel = document.createElement('span');
+                  fileLabel.style.cssText = 'color: var(--gruvbox-gray); font-family: var(--font-code); font-size: 10px; flex-shrink: 0;';
+                  fileLabel.textContent = bm.file_path.split('/').pop() || bm.file_path;
+                  row.appendChild(fileLabel);
+
+                  const headingLabel = document.createElement('span');
+                  headingLabel.style.cssText = 'color: var(--gruvbox-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                  headingLabel.textContent = bm.heading_text;
+                  row.appendChild(headingLabel);
+
+                  const removeBtn = document.createElement('button');
+                  removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; margin-left: auto; flex-shrink: 0; padding: 0 4px; opacity: 0; transition: opacity 0.1s ease;';
+                  removeBtn.textContent = '×';
+                  removeBtn.onclick = (e) => { e.stopPropagation(); deleteBookmark(bm.id); };
+                  row.appendChild(removeBtn);
+
+                  row.addEventListener('mouseenter', () => { removeBtn.style.opacity = '1'; });
+                  row.addEventListener('mouseleave', () => { removeBtn.style.opacity = '0'; });
+                  row.onclick = () => {
+                    handleFileSelect(bm.file_path, bm.root);
+                    setTimeout(() => setShowBookmarks(false), 150);
+                    setTimeout(() => {
+                      const target = document.getElementById(bm.heading_id);
+                      if (target) {
+                        const scrollContainer = target.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
+                        if (scrollContainer) {
+                          const offsetTop = target.offsetTop - scrollContainer.offsetTop;
+                          scrollContainer.scrollTo({ top: offsetTop - 16, behavior: 'smooth' });
+                        }
                       }
-                    }
-                  }, 500);
-                };
+                    }, 500);
+                  };
 
-                panel.appendChild(row);
+                  panel.appendChild(row);
+                }
               }
             });
 
@@ -1204,76 +1278,158 @@ export function DocsPage(props?: {
                   const wrapper = document.createElement('div');
                   wrapper.style.cssText = 'position: relative;';
 
-                  // --- Floating toolbar (color picker + inline note input) ---
-                  const toolbar = document.createElement('div');
-                  toolbar.style.cssText = 'position: absolute; display: none; z-index: 100; background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: 8px; padding: 6px 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); flex-direction: column; gap: 6px; min-width: 220px;';
-
-                  // Top row: color buttons
-                  const colorRow = document.createElement('div');
-                  colorRow.style.cssText = 'display: flex; align-items: center; gap: 6px;';
-
-                  const colorLabel = document.createElement('span');
-                  colorLabel.style.cssText = 'font-size: 10px; color: var(--gruvbox-gray); font-family: var(--font-code);';
-                  colorLabel.textContent = 'Highlight';
-                  colorRow.appendChild(colorLabel);
-
+                  // --- Floating highlight toolbar (Medium/Notion-inspired) ---
                   let pendingSelectedText = '';
                   let pendingColor = 'yellow';
+                  let hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
+                  const toolbar = document.createElement('div');
+                  toolbar.setAttribute('role', 'toolbar');
+                  toolbar.setAttribute('aria-label', 'Highlight toolbar');
+                  toolbar.style.cssText = 'position:absolute; display:none; z-index:100; background:var(--gruvbox-bg-soft); border:1px solid var(--gruvbox-border); border-radius:8px; padding:5px 10px; box-shadow:0 4px 20px rgba(0,0,0,0.35); align-items:center; gap:6px; opacity:0; transition:opacity 0.15s ease, transform 0.15s ease; transform:translateY(4px); pointer-events:none;';
+
+                  // Arrow pointing down toward the selection
+                  const toolbarArrow = document.createElement('div');
+                  toolbarArrow.style.cssText = 'position:absolute; bottom:-6px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:6px solid transparent; border-right:6px solid transparent; border-top:6px solid var(--gruvbox-border);';
+                  const toolbarArrowInner = document.createElement('div');
+                  toolbarArrowInner.style.cssText = 'position:absolute; bottom:1px; left:-5px; width:0; height:0; border-left:5px solid transparent; border-right:5px solid transparent; border-top:5px solid var(--gruvbox-bg-soft);';
+                  toolbarArrow.appendChild(toolbarArrowInner);
+                  toolbar.appendChild(toolbarArrow);
+
+                  // Color buttons (compact inline row)
                   for (const color of ['yellow', 'green', 'blue', 'pink'] as const) {
                     const btn = document.createElement('button');
-                    btn.style.cssText = `width: 18px; height: 18px; border-radius: 50%; border: 2px solid ${COLOR_BORDER[color]}; background: ${COLOR_BG[color]}; cursor: pointer; padding: 0; transition: transform 0.1s ease, box-shadow 0.1s ease;`;
-                    btn.title = color;
-                    btn.addEventListener('mouseenter', () => { btn.style.transform = 'scale(1.2)'; });
-                    btn.addEventListener('mouseleave', () => { btn.style.transform = 'scale(1)'; });
+                    btn.style.cssText = `width:22px; height:22px; border-radius:50%; border:2px solid ${COLOR_BORDER[color]}; background:${COLOR_BG[color]}; cursor:pointer; padding:0; transition:transform 0.12s ease, box-shadow 0.12s ease; flex-shrink:0;`;
+                    btn.title = `Highlight ${color}`;
+                    btn.addEventListener('mouseenter', () => { btn.style.transform = 'scale(1.15)'; btn.style.boxShadow = `0 0 0 3px ${COLOR_BORDER[color]}30`; });
+                    btn.addEventListener('mouseleave', () => { btn.style.transform = 'scale(1)'; btn.style.boxShadow = 'none'; });
                     btn.addEventListener('mousedown', (e) => {
                       e.preventDefault();
+                      e.stopPropagation();
                       if (!pendingSelectedText) return;
                       pendingColor = color;
-                      // Highlight immediately (no note)
-                      createAnnotation(pendingSelectedText, '', color);
+                      createAnnotation(pendingSelectedText, noteInput.value.trim(), color);
                       hideToolbar();
                     });
-                    colorRow.appendChild(btn);
+                    toolbar.appendChild(btn);
                   }
-                  toolbar.appendChild(colorRow);
 
-                  // Bottom row: note input + save
-                  const noteRow = document.createElement('div');
-                  noteRow.style.cssText = 'display: flex; align-items: center; gap: 4px;';
+                  // Divider between colors and note
+                  const toolbarDivider = document.createElement('div');
+                  toolbarDivider.style.cssText = 'width:1px; height:16px; background:var(--gruvbox-border); flex-shrink:0;';
+                  toolbar.appendChild(toolbarDivider);
 
+                  // Note input (inline, expands on focus — Notion-style)
                   const noteInput = document.createElement('input');
                   noteInput.type = 'text';
-                  noteInput.placeholder = 'Add a note…';
-                  noteInput.style.cssText = 'flex: 1; background: var(--gruvbox-bg-hard); border: 1px solid var(--gruvbox-border); border-radius: 4px; padding: 4px 8px; font-size: 11px; font-family: var(--font-body); color: var(--gruvbox-fg); outline: none;';
-                  noteInput.addEventListener('focus', () => { noteInput.style.borderColor = 'var(--accent)'; });
-                  noteInput.addEventListener('blur', () => { noteInput.style.borderColor = 'var(--gruvbox-border)'; });
+                  noteInput.placeholder = 'Note…';
+                  noteInput.maxLength = 200;
+                  noteInput.style.cssText = 'width:100px; background:var(--gruvbox-bg-hard); border:1px solid var(--gruvbox-border); border-radius:4px; padding:3px 8px; font-size:11px; font-family:var(--font-body); color:var(--gruvbox-fg); outline:none; transition:border-color 0.15s ease, width 0.2s ease;';
+                  noteInput.addEventListener('focus', () => {
+                    noteInput.style.borderColor = 'var(--accent)';
+                    noteInput.style.width = '160px';
+                    // Apply temp visual highlight so user sees what they selected
+                    applyTempHighlight();
+                  });
+                  noteInput.addEventListener('blur', () => { noteInput.style.borderColor = 'var(--gruvbox-border)'; if (!noteInput.value) noteInput.style.width = '100px'; });
                   noteInput.addEventListener('keydown', (e) => {
+                    e.stopPropagation();
                     if (e.key === 'Enter' && pendingSelectedText) {
-                      createAnnotation(pendingSelectedText, noteInput.value, pendingColor);
+                      createAnnotation(pendingSelectedText, noteInput.value.trim(), pendingColor);
                       hideToolbar();
                     }
                     if (e.key === 'Escape') hideToolbar();
                   });
-                  noteRow.appendChild(noteInput);
+                  toolbar.appendChild(noteInput);
 
-                  const saveNoteBtn = document.createElement('button');
-                  saveNoteBtn.style.cssText = 'background: var(--accent); color: var(--gruvbox-bg-hard); border: none; border-radius: 4px; padding: 4px 10px; font-size: 10px; font-weight: 600; cursor: pointer; white-space: nowrap;';
-                  saveNoteBtn.textContent = 'Save';
-                  saveNoteBtn.addEventListener('mousedown', (e) => {
-                    e.preventDefault();
+                  // Enter-key hint
+                  const enterHint = document.createElement('span');
+                  enterHint.style.cssText = 'font-size:9px; color:var(--gruvbox-gray); font-family:var(--font-code); opacity:0.5; flex-shrink:0; line-height:1;';
+                  enterHint.textContent = '⏎';
+                  enterHint.title = 'Press Enter to save with note';
+                  toolbar.appendChild(enterHint);
+
+                  // Temporary visual highlight while note input has focus
+                  let tempMarks: HTMLElement[] = [];
+
+                  function applyTempHighlight() {
+                    removeTempHighlight();
                     if (!pendingSelectedText) return;
-                    createAnnotation(pendingSelectedText, noteInput.value, pendingColor);
-                    hideToolbar();
-                  });
-                  noteRow.appendChild(saveNoteBtn);
-                  toolbar.appendChild(noteRow);
+                    const textNodes = collectTextNodes(markdownDiv);
+                    let fullText = '';
+                    const nodeMap: Array<{node: Text; start: number; end: number}> = [];
+                    for (const tn of textNodes) {
+                      const c = tn.textContent || '';
+                      nodeMap.push({node: tn, start: fullText.length, end: fullText.length + c.length});
+                      fullText += c;
+                    }
+                    const idx = fullText.indexOf(pendingSelectedText);
+                    if (idx === -1) return;
+                    const endIdx = idx + pendingSelectedText.length;
+                    const affected = nodeMap.filter(nm => nm.end > idx && nm.start < endIdx);
+                    for (const tn of affected) {
+                      const txt = tn.node.textContent || '';
+                      const ls = Math.max(0, idx - tn.start);
+                      const le = Math.min(txt.length, endIdx - tn.start);
+                      const before = txt.substring(0, ls);
+                      const matched = txt.substring(ls, le);
+                      const after = txt.substring(le);
+                      const span = document.createElement('span');
+                      span.className = 'kmd-temp-highlight';
+                      span.style.cssText = `background:${COLOR_BG[pendingColor] || COLOR_BG.yellow}; border-radius:2px; padding:0 1px;`;
+                      span.textContent = matched;
+                      const parent = tn.node.parentNode;
+                      if (!parent) continue;
+                      tempMarks.push(span);
+                      if (before) parent.insertBefore(document.createTextNode(before), tn.node);
+                      parent.insertBefore(span, tn.node);
+                      if (after) parent.insertBefore(document.createTextNode(after), tn.node);
+                      parent.removeChild(tn.node);
+                    }
+                  }
+
+                  function removeTempHighlight() {
+                    let changed = false;
+                    for (const m of tempMarks) {
+                      if (m.parentNode) {
+                        m.parentNode.replaceChild(document.createTextNode(m.textContent || ''), m);
+                        changed = true;
+                      }
+                    }
+                    tempMarks = [];
+                    if (changed) markdownDiv.normalize();
+                  }
+
+                  function showToolbar(rect: DOMRect) {
+                    if (hideTimeoutId) { clearTimeout(hideTimeoutId); hideTimeoutId = null; }
+                    const wrapperRect = wrapper.getBoundingClientRect();
+                    let left = rect.left - wrapperRect.left + rect.width / 2 - 150;
+                    let top = rect.top - wrapperRect.top - 46;
+                    left = Math.max(8, Math.min(left, wrapper.clientWidth - 320));
+                    top = Math.max(8, top);
+                    toolbar.style.display = 'flex';
+                    toolbar.style.left = `${left}px`;
+                    toolbar.style.top = `${top}px`;
+                    requestAnimationFrame(() => {
+                      toolbar.style.opacity = '1';
+                      toolbar.style.transform = 'translateY(0)';
+                      toolbar.style.pointerEvents = 'auto';
+                    });
+                  }
 
                   function hideToolbar() {
-                    toolbar.style.display = 'none';
-                    noteInput.value = '';
-                    pendingSelectedText = '';
-                    window.getSelection()?.removeAllRanges();
+                    removeTempHighlight();
+                    toolbar.style.opacity = '0';
+                    toolbar.style.transform = 'translateY(4px)';
+                    toolbar.style.pointerEvents = 'none';
+                    hideTimeoutId = setTimeout(() => {
+                      hideTimeoutId = null;
+                      toolbar.style.display = 'none';
+                      noteInput.value = '';
+                      noteInput.style.width = '100px';
+                      pendingSelectedText = '';
+                      window.getSelection()?.removeAllRanges();
+                    }, 160);
                   }
 
                   // --- Markdown content ---
@@ -1285,13 +1441,23 @@ export function DocsPage(props?: {
                     markdownDiv.style.margin = focusMode() ? '0 auto' : '';
                   });
 
+                  // Tooltip timer cleanup registry — cleared before each DOM rebuild
+                  let tooltipCleanups: Array<() => void> = [];
+
                   // Render HTML, then apply highlights via DOM (not regex on raw HTML)
                   createEffect(() => {
                     const html = docHtml();
                     const anns = annotations();
 
+                    // Clear tooltip timers before DOM rebuild
+                    tooltipCleanups.forEach(fn => fn());
+                    tooltipCleanups = [];
+
                     // Defense-in-depth: sanitize server-rendered HTML before DOM injection
                     markdownDiv.innerHTML = sanitizeHtml(html);
+
+                    // Re-assign heading IDs (lost when innerHTML was reset) so TOC navigation works
+                    assignHeadingIds(markdownDiv);
 
                     // Apply highlights by walking text nodes (skips pre, code, mark)
                     if (anns.length > 0) {
@@ -1320,15 +1486,25 @@ export function DocsPage(props?: {
                     });
                   }
 
-                  function highlightTextInDOM(
-                    container: HTMLElement,
+                  function createHighlightMark(
                     ann: {id: number; highlight_text: string; note: string; color: string},
                     bgMap: Record<string, string>,
                     borderMap: Record<string, string>,
-                  ) {
+                    borderRadius?: string,
+                  ): HTMLElement {
+                    const mark = document.createElement('mark');
+                    const bg = bgMap[ann.color] || bgMap.yellow;
+                    const border = borderMap[ann.color] || borderMap.yellow;
+                    mark.style.cssText = `background:${bg};border-bottom:2px solid ${border};border-radius:${borderRadius || '2px'};padding:0 1px;cursor:pointer;position:relative;`;
+                    mark.className = 'kmd-highlight';
+                    mark.dataset.annId = String(ann.id);
+                    if (ann.note) mark.dataset.note = ann.note;
+                    return mark;
+                  }
+
+                  function collectTextNodes(container: HTMLElement): Text[] {
                     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
                       acceptNode: (node) => {
-                        // Skip text inside pre, code, mark, and mermaid elements
                         let parent = node.parentElement;
                         while (parent && parent !== container) {
                           const tag = parent.tagName.toLowerCase();
@@ -1343,82 +1519,187 @@ export function DocsPage(props?: {
                         return NodeFilter.FILTER_ACCEPT;
                       },
                     });
+                    const nodes: Text[] = [];
+                    let n: Node | null;
+                    while ((n = walker.nextNode())) nodes.push(n as Text);
+                    return nodes;
+                  }
 
-                    const textNodes: Text[] = [];
-                    let node: Node | null;
-                    while ((node = walker.nextNode())) {
-                      textNodes.push(node as Text);
+                  const BLOCK_TAGS = new Set(['P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'DIV', 'TD', 'TH', 'TR', 'SECTION', 'ARTICLE']);
+
+                  function getBlockParent(node: Node, container: HTMLElement): Element {
+                    let el = node.parentElement;
+                    while (el && el !== container) {
+                      if (BLOCK_TAGS.has(el.tagName)) return el;
+                      el = el.parentElement;
+                    }
+                    return container;
+                  }
+
+                  function highlightTextInDOM(
+                    container: HTMLElement,
+                    ann: {id: number; highlight_text: string; note: string; color: string},
+                    bgMap: Record<string, string>,
+                    borderMap: Record<string, string>,
+                  ) {
+                    const textNodes = collectTextNodes(container);
+
+                    // Build concatenated text with \0 sentinels at block boundaries
+                    // Prevents false matches across paragraphs/headings/list items
+                    let fullText = '';
+                    const nodeMap: Array<{node: Text; start: number; end: number}> = [];
+                    let prevBlock: Element | null = null;
+                    for (const tn of textNodes) {
+                      const block = getBlockParent(tn, container);
+                      if (prevBlock && block !== prevBlock) fullText += '\0';
+                      prevBlock = block;
+                      const content = tn.textContent || '';
+                      nodeMap.push({node: tn, start: fullText.length, end: fullText.length + content.length});
+                      fullText += content;
                     }
 
-                    for (const textNode of textNodes) {
-                      const idx = textNode.textContent?.indexOf(ann.highlight_text) ?? -1;
-                      if (idx === -1) continue;
+                    const idx = fullText.indexOf(ann.highlight_text);
+                    if (idx === -1) return;
 
-                      // Split the text node and wrap the matched part in <mark>
-                      const before = textNode.textContent!.substring(0, idx);
-                      const matched = ann.highlight_text;
-                      const after = textNode.textContent!.substring(idx + matched.length);
+                    const endIdx = idx + ann.highlight_text.length;
+                    const affected = nodeMap.filter(nm => nm.end > idx && nm.start < endIdx);
+                    if (affected.length === 0) return;
 
-                      const mark = document.createElement('mark');
-                      const bg = bgMap[ann.color] || bgMap.yellow;
-                      const border = borderMap[ann.color] || borderMap.yellow;
-                      mark.style.cssText = `background:${bg};border-bottom:2px solid ${border};border-radius:2px;padding:0 1px;cursor:pointer;position:relative;`;
-                      mark.className = 'kmd-highlight';
-                      mark.dataset.annId = String(ann.id);
-                      if (ann.note) mark.dataset.note = ann.note;
-                      mark.textContent = matched;
+                    // Single text node — fast path
+                    if (affected.length === 1) {
+                      const tn = affected[0];
+                      const parent = tn.node.parentNode;
+                      if (!parent) return;
+                      const localIdx = idx - tn.start;
+                      const before = (tn.node.textContent || '').substring(0, localIdx);
+                      const after = (tn.node.textContent || '').substring(localIdx + ann.highlight_text.length);
 
-                      // Attach tooltip
+                      const mark = createHighlightMark(ann, bgMap, borderMap);
+                      mark.textContent = ann.highlight_text;
                       attachHighlightTooltip(mark, ann);
 
-                      const parent = textNode.parentNode!;
-                      if (before) parent.insertBefore(document.createTextNode(before), textNode);
-                      parent.insertBefore(mark, textNode);
-                      if (after) parent.insertBefore(document.createTextNode(after), textNode);
-                      parent.removeChild(textNode);
+                      if (before) parent.insertBefore(document.createTextNode(before), tn.node);
+                      parent.insertBefore(mark, tn.node);
+                      if (after) parent.insertBefore(document.createTextNode(after), tn.node);
+                      parent.removeChild(tn.node);
+                      return;
+                    }
 
-                      break; // Only highlight first occurrence per annotation
+                    // Multi-node — wrap each affected portion
+                    for (let i = 0; i < affected.length; i++) {
+                      const tn = affected[i];
+                      const parent = tn.node.parentNode;
+                      if (!parent) continue;
+                      const nodeText = tn.node.textContent || '';
+                      const localStart = Math.max(0, idx - tn.start);
+                      const localEnd = Math.min(nodeText.length, endIdx - tn.start);
+
+                      const before = nodeText.substring(0, localStart);
+                      const matched = nodeText.substring(localStart, localEnd);
+                      const after = nodeText.substring(localEnd);
+
+                      // Rounded corners only on the ends
+                      let radius = '0';
+                      if (i === 0) radius = '2px 0 0 2px';
+                      else if (i === affected.length - 1) radius = '0 2px 2px 0';
+
+                      const mark = createHighlightMark(ann, bgMap, borderMap, radius);
+                      mark.textContent = matched;
+
+                      // Tooltip on the last segment (× appears at end of highlighted text)
+                      if (i === affected.length - 1) attachHighlightTooltip(mark, ann);
+
+                      if (before) parent.insertBefore(document.createTextNode(before), tn.node);
+                      parent.insertBefore(mark, tn.node);
+                      if (after) parent.insertBefore(document.createTextNode(after), tn.node);
+                      parent.removeChild(tn.node);
                     }
                   }
 
                   function attachHighlightTooltip(mark: HTMLElement, ann: {id: number; note: string}) {
-                    let tooltip: HTMLDivElement | null = null;
+                    let floater: HTMLElement | null = null;
+                    let showTimer: ReturnType<typeof setTimeout> | null = null;
+                    let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
-                    mark.addEventListener('mouseenter', () => {
-                      if (!tooltip) {
-                        tooltip = document.createElement('div');
-                        tooltip.style.cssText = 'position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: 6px; padding: 6px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 50; font-size: 12px; max-width: 280px; white-space: normal; pointer-events: auto;';
-
-                        if (ann.note) {
-                          const noteText = document.createElement('div');
-                          noteText.style.cssText = 'color: var(--gruvbox-fg); margin-bottom: 4px; line-height: 1.4;';
-                          noteText.textContent = ann.note;
-                          tooltip.appendChild(noteText);
-                        }
-
-                        const removeBtn = document.createElement('button');
-                        removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-red); cursor: pointer; font-size: 10px; padding: 0; font-family: var(--font-code); opacity: 0.7;';
-                        removeBtn.textContent = 'Remove highlight';
-                        removeBtn.addEventListener('click', () => {
-                          deleteAnnotation(ann.id);
-                          if (tooltip) { tooltip.remove(); tooltip = null; }
-                        });
-                        removeBtn.addEventListener('mouseenter', () => { removeBtn.style.opacity = '1'; });
-                        removeBtn.addEventListener('mouseleave', () => { removeBtn.style.opacity = '0.7'; });
-                        tooltip.appendChild(removeBtn);
-
-                        mark.appendChild(tooltip);
-                      }
-                      if (tooltip) tooltip.style.display = 'block';
+                    // Register cleanup so timers are cleared before DOM rebuild
+                    tooltipCleanups.push(() => {
+                      if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+                      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
                     });
 
-                    mark.addEventListener('mouseleave', () => {
-                      setTimeout(() => {
-                        if (tooltip && !mark.matches(':hover')) {
-                          tooltip.style.display = 'none';
-                        }
-                      }, 200);
-                    });
+                    if (ann.note) {
+                      // --- WITH NOTE: full tooltip + note indicator dot ---
+                      const dot = document.createElement('span');
+                      dot.style.cssText = 'position:absolute; top:-3px; right:-3px; width:6px; height:6px; border-radius:50%; background:var(--accent); pointer-events:none; box-shadow:0 0 0 1px var(--gruvbox-bg);';
+                      mark.appendChild(dot);
+
+                      mark.addEventListener('mouseenter', () => {
+                        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+                        showTimer = setTimeout(() => {
+                          if (!floater) {
+                            floater = document.createElement('div');
+                            floater.style.cssText = 'position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%); background:var(--gruvbox-bg-soft); border:1px solid var(--gruvbox-border); border-radius:6px; padding:8px 12px; box-shadow:0 4px 16px rgba(0,0,0,0.35); z-index:150; font-size:12px; max-width:280px; min-width:100px; white-space:normal; pointer-events:auto; opacity:0; transition:opacity 0.15s ease; line-height:1.4;';
+                            const tipArrow = document.createElement('div');
+                            tipArrow.style.cssText = 'position:absolute; bottom:-5px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:5px solid transparent; border-right:5px solid transparent; border-top:5px solid var(--gruvbox-bg-soft);';
+                            floater.appendChild(tipArrow);
+                            const noteEl = document.createElement('div');
+                            noteEl.style.cssText = 'color:var(--gruvbox-fg); padding-right:16px; word-break:break-word;';
+                            noteEl.textContent = ann.note.length > 200 ? ann.note.substring(0, 200) + '…' : ann.note;
+                            floater.appendChild(noteEl);
+                            const trashBtn = document.createElement('button');
+                            trashBtn.style.cssText = 'position:absolute; top:4px; right:4px; background:none; border:none; cursor:pointer; padding:2px; opacity:0.35; transition:opacity 0.12s ease, color 0.12s ease; line-height:0; border-radius:3px;';
+                            trashBtn.title = 'Remove highlight';
+                            trashBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="2" y1="3" x2="10" y2="3"/><path d="M4 3V2a1 1 0 011-1h2a1 1 0 011 1v1"/><path d="M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3"/></svg>';
+                            trashBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteAnnotation(ann.id); });
+                            trashBtn.addEventListener('mouseenter', () => { trashBtn.style.opacity = '1'; trashBtn.style.color = 'var(--gruvbox-red)'; });
+                            trashBtn.addEventListener('mouseleave', () => { trashBtn.style.opacity = '0.35'; trashBtn.style.color = ''; });
+                            floater.appendChild(trashBtn);
+                            mark.appendChild(floater);
+                          }
+                          floater.style.display = 'block';
+                          requestAnimationFrame(() => { if (floater) floater.style.opacity = '1'; });
+                        }, 250);
+                      });
+
+                      mark.addEventListener('mouseleave', () => {
+                        if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+                        hideTimer = setTimeout(() => {
+                          if (floater && !mark.matches(':hover')) {
+                            floater.style.opacity = '0';
+                            setTimeout(() => { if (floater && floater.style.opacity === '0') floater.style.display = 'none'; }, 150);
+                          }
+                        }, 300);
+                      });
+                    } else {
+                      // --- NO NOTE: minimal × pill in top-right corner ---
+                      mark.addEventListener('mouseenter', () => {
+                        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+                        showTimer = setTimeout(() => {
+                          if (!floater) {
+                            floater = document.createElement('button');
+                            floater.style.cssText = 'position:absolute; top:-7px; right:-7px; width:16px; height:16px; border-radius:50%; background:var(--gruvbox-bg-soft); border:1px solid var(--gruvbox-border); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; opacity:0; transition:opacity 0.12s ease, border-color 0.12s ease; box-shadow:0 1px 4px rgba(0,0,0,0.3); line-height:0; z-index:50;';
+                            floater.title = 'Remove highlight';
+                            floater.innerHTML = '<svg width="7" height="7" viewBox="0 0 8 8" fill="none" stroke="var(--gruvbox-gray)" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="6" y2="6"/><line x1="6" y1="2" x2="2" y2="6"/></svg>';
+                            floater.addEventListener('click', (e) => { e.stopPropagation(); deleteAnnotation(ann.id); });
+                            floater.addEventListener('mouseenter', () => { floater!.style.borderColor = 'var(--gruvbox-red)'; floater!.querySelector('svg')?.setAttribute('stroke', 'var(--gruvbox-red)'); });
+                            floater.addEventListener('mouseleave', () => { floater!.style.borderColor = 'var(--gruvbox-border)'; floater!.querySelector('svg')?.setAttribute('stroke', 'var(--gruvbox-gray)'); });
+                            mark.appendChild(floater);
+                          }
+                          floater.style.display = 'flex';
+                          requestAnimationFrame(() => { if (floater) floater.style.opacity = '1'; });
+                        }, 200);
+                      });
+
+                      mark.addEventListener('mouseleave', () => {
+                        if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+                        hideTimer = setTimeout(() => {
+                          if (floater && !mark.matches(':hover')) {
+                            floater.style.opacity = '0';
+                            setTimeout(() => { if (floater && floater.style.opacity === '0') floater.style.display = 'none'; }, 120);
+                          }
+                        }, 200);
+                      });
+                    }
                   }
 
                   // Show toolbar on text selection in the markdown
@@ -1427,32 +1708,38 @@ export function DocsPage(props?: {
                       const sel = window.getSelection();
                       const selectedText = sel?.toString().trim();
                       if (!selectedText || selectedText.length < 2) {
-                        toolbar.style.display = 'none';
+                        if (pendingSelectedText) hideToolbar();
                         return;
                       }
-
                       pendingSelectedText = selectedText;
-                      pendingColor = 'yellow';
-
-                      const range = sel!.getRangeAt(0);
-                      const rect = range.getBoundingClientRect();
-                      const wrapperRect = wrapper.getBoundingClientRect();
-
-                      toolbar.style.display = 'flex';
-                      toolbar.style.left = `${Math.max(0, rect.left - wrapperRect.left + rect.width / 2 - 110)}px`;
-                      toolbar.style.top = `${rect.top - wrapperRect.top - 80}px`;
-
-                      // Focus the note input after a tick
-                      requestAnimationFrame(() => noteInput.focus());
+                      showToolbar(sel!.getRangeAt(0).getBoundingClientRect());
                     }, 10);
                   });
 
+                  // Document-level listeners with AbortController for cleanup
+                  const listenerAC = new AbortController();
+                  onCleanup(() => listenerAC.abort());
+
                   // Hide toolbar on outside click
                   document.addEventListener('mousedown', (e) => {
-                    if (!toolbar.contains(e.target as Node) && !markdownDiv.contains(e.target as Node)) {
+                    if (pendingSelectedText && !toolbar.contains(e.target as Node) && !markdownDiv.contains(e.target as Node)) {
                       hideToolbar();
                     }
-                  });
+                  }, { signal: listenerAC.signal });
+
+                  // Keyboard shortcut: Cmd/Ctrl+Shift+H = instant highlight with last-used color
+                  document.addEventListener('keydown', (e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'H' || e.key === 'h')) {
+                      e.preventDefault();
+                      const sel = window.getSelection();
+                      const text = sel?.toString().trim();
+                      if (text && text.length >= 2) {
+                        createAnnotation(text, '', pendingColor);
+                        sel?.removeAllRanges();
+                        if (pendingSelectedText) hideToolbar();
+                      }
+                    }
+                  }, { signal: listenerAC.signal });
 
                   wrapper.appendChild(toolbar);
                   wrapper.appendChild(markdownDiv);

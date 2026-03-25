@@ -871,6 +871,15 @@ code, pre, kbd {
   animation: slideIn 0.2s ease-out;
 }
 
+/* --- Highlight Marks --- */
+.kmd-highlight {
+  transition: background 0.15s ease, filter 0.15s ease;
+}
+
+.kmd-highlight:hover {
+  filter: brightness(1.2);
+}
+
 /* Loading dots indicator (Bug 3) */
 .loading-dots::after {
   content: '...';
