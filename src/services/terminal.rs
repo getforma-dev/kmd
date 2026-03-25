@@ -30,16 +30,58 @@ pub fn manager() -> &'static TerminalManager {
     })
 }
 
-/// Detect the user's default shell from `$SHELL`, falling back to /bin/zsh (macOS)
-/// or /bin/bash (Linux).
-fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| {
-        if cfg!(target_os = "macos") {
-            "/bin/zsh".to_string()
+/// Detect the user's default shell.
+///
+/// - Windows: `pwsh` (PowerShell 7) → `%COMSPEC%` → `cmd.exe`
+/// - macOS:   `$SHELL` → `/bin/zsh`
+/// - Linux:   `$SHELL` → `/bin/bash`
+/// - Other:   returns an error message asking users to open an issue
+fn default_shell() -> Result<String, String> {
+    if cfg!(target_os = "windows") {
+        // Prefer PowerShell 7+ (pwsh) if available, then COMSPEC, then cmd.exe
+        if which_exists("pwsh") {
+            Ok("pwsh".to_string())
         } else {
-            "/bin/bash".to_string()
+            Ok(std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()))
         }
-    })
+    } else if cfg!(target_os = "macos") {
+        Ok(std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string()))
+    } else if cfg!(target_os = "linux") || cfg!(target_os = "freebsd") {
+        Ok(std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()))
+    } else {
+        Err(format!(
+            "Unsupported platform: {} {}. \
+             Terminal sessions are not yet supported on this OS. \
+             Please open an issue at https://github.com/getforma-dev/kmd/issues \
+             so we can add support.",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        ))
+    }
+}
+
+/// Check if a command exists on PATH.
+fn which_exists(cmd: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("where")
+            .arg(cmd)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("which")
+            .arg(cmd)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 }
 
 impl TerminalManager {
@@ -74,10 +116,12 @@ impl TerminalManager {
             })
             .map_err(|e| format!("Failed to open PTY: {e}"))?;
 
-        let shell = default_shell();
+        let shell = default_shell()?;
         let mut cmd = CommandBuilder::new(&shell);
-        // Start an interactive login shell
-        cmd.arg("-l");
+        // Start an interactive login shell (Unix only — Windows shells don't use -l)
+        if !cfg!(target_os = "windows") {
+            cmd.arg("-l");
+        }
         cmd.cwd(cwd);
 
         // Spawn the child on the slave side

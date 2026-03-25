@@ -1,10 +1,10 @@
 {
-  "name": "@getforma/kmd-darwin-x64",
+  "name": "@getforma/kmd-linux-arm64",
   "version": "0.1.5",
-  "description": "kmd binary for macOS x64 (Intel)",
+  "description": "kmd binary for Linux ARM64 (aarch64)",
   "license": "MIT",
-  "os": ["darwin"],
-  "cpu": ["x64"],
+  "os": ["linux"],
+  "cpu": ["arm64"],
   "files": ["bin/"],
   "preferUnpacked": true,
   "repository": {

@@ -9,6 +9,7 @@ const { join } = require('path');
 const PLATFORMS = {
   'darwin-arm64': '@getforma/kmd-darwin-arm64',
   'darwin-x64': '@getforma/kmd-darwin-x64',
+  'linux-arm64': '@getforma/kmd-linux-arm64',
   'linux-x64': '@getforma/kmd-linux-x64',
   'win32-x64': '@getforma/kmd-win32-x64',
 };
@@ -19,7 +20,9 @@ const pkg = PLATFORMS[platformKey];
 if (!pkg) {
   console.error(
     `kmd does not have a prebuilt binary for ${process.platform}-${process.arch}.\n` +
-    `Supported platforms: ${Object.keys(PLATFORMS).join(', ')}`
+    `Supported platforms: ${Object.keys(PLATFORMS).join(', ')}\n\n` +
+    `If you'd like support for this platform, please open an issue:\n` +
+    `https://github.com/getforma-dev/kmd/issues`
   );
   process.exit(1);
 }
