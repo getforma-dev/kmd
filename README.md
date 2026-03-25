@@ -1,5 +1,10 @@
 # K.md
 
+[![npm](https://img.shields.io/npm/v/@getforma/kmd)](https://www.npmjs.com/package/@getforma/kmd)
+[![CI](https://github.com/getforma-dev/kmd/actions/workflows/release.yml/badge.svg)](https://github.com/getforma-dev/kmd/actions/workflows/release.yml)
+[![Socket Badge](https://socket.dev/api/badge/npm/package/@getforma/kmd)](https://socket.dev/npm/package/@getforma/kmd)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Kausing Much Damage** to dev workflow chaos.
 
 K.md is a local-first developer dashboard for navigating, searching, and annotating markdown documentation across your monorepo. It bundles a Rust server with a reactive TypeScript frontend into a single binary — no config, no cloud, just `kmd`.
