@@ -112,6 +112,9 @@ jobs:
             exit 1
           fi
 
+      - name: Copy README into npm package
+        run: cp README.md npm/kmd/README.md
+
       # Trusted publishing: uses OIDC for auth, no npm token needed.
       # Provenance is generated automatically.
       # Configure at: npmjs.com → package Settings → Trusted Publisher
