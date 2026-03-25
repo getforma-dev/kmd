@@ -1,16 +1,16 @@
 {
   "name": "@getforma/kmd",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "K.md — kausing much damage to dev workflow chaos",
   "license": "MIT",
   "bin": {
     "kmd": "bin/kmd.js"
   },
   "optionalDependencies": {
-    "@getforma/kmd-darwin-arm64": "0.1.2",
-    "@getforma/kmd-darwin-x64": "0.1.2",
-    "@getforma/kmd-linux-x64": "0.1.2",
-    "@getforma/kmd-win32-x64": "0.1.2"
+    "@getforma/kmd-darwin-arm64": "0.1.3",
+    "@getforma/kmd-darwin-x64": "0.1.3",
+    "@getforma/kmd-linux-x64": "0.1.3",
+    "@getforma/kmd-win32-x64": "0.1.3"
   },
   "engines": {
     "node": ">=16"

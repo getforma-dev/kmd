@@ -655,11 +655,23 @@ fn is_workspace_running(name: &str) -> bool {
     false
 }
 
-/// Check if a process is alive (Unix: kill(pid, 0)).
+/// Check if a process with the given PID is alive.
 fn is_pid_alive(pid: u32) -> bool {
-    // SAFETY: kill(pid, 0) doesn't send a signal — it only checks whether the
-    // process exists and we have permission to signal it. No side effects.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    #[cfg(unix)]
+    {
+        // SAFETY: kill(pid, 0) doesn't send a signal — it only checks whether the
+        // process exists and we have permission to signal it. No side effects.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+            .unwrap_or(false)
+    }
 }
 
 // ---------------------------------------------------------------------------
