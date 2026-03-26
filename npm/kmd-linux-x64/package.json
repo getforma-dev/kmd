@@ -1,6 +1,6 @@
 {
   "name": "@getforma/kmd-linux-x64",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "kmd binary for Linux x64",
   "license": "MIT",
   "os": ["linux"],

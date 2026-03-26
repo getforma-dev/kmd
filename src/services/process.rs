@@ -243,9 +243,20 @@ pub fn run_script(
     }
 
     // --- Build command ---
-    let mut cmd = Command::new("npm");
-    cmd.args(["run", script_name])
-        .current_dir(&cwd)
+    // On Windows, npm is a .cmd batch script — must invoke via cmd /C.
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "npm", "run", script_name]);
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = Command::new("npm");
+        c.args(["run", script_name]);
+        c
+    };
+    cmd.current_dir(&cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -394,9 +405,27 @@ pub fn run_shell_command(
 
     let process_id = Uuid::new_v4().to_string();
 
-    let mut cmd = Command::new("sh");
-    cmd.args(["-c", command])
-        .current_dir(cwd)
+    #[cfg(unix)]
+    let mut cmd = {
+        let mut c = Command::new("sh");
+        c.args(["-c", command]);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = Command::new("cmd");
+        c.args(["/C", command]);
+        c
+    };
+    #[cfg(not(any(unix, target_os = "windows")))]
+    let mut cmd = {
+        // Best-effort: try sh, which may exist on some exotic platforms
+        let mut c = Command::new("sh");
+        c.args(["-c", command]);
+        c
+    };
+
+    cmd.current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 

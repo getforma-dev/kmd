@@ -1201,7 +1201,14 @@ async fn api_ports_handler(State(state): State<AppState>) -> impl IntoResponse {
         })
         .collect();
 
-    Json(serde_json::json!({ "ports": enriched }))
+    let mut response = serde_json::json!({ "ports": enriched });
+    if let Some(warning) = ports::platform_warning() {
+        response.as_object_mut().unwrap().insert(
+            "platform_warning".to_string(),
+            serde_json::json!(warning),
+        );
+    }
+    Json(response)
 }
 
 /// `GET /api/ports/allocations` — List all active port allocations.

@@ -88,6 +88,7 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
 
   // Feature 9: managed processes for PID matching
   const [managedProcesses, setManagedProcesses] = createSignal<ManagedProcess[]>([]);
+  const [platformWarning, setPlatformWarning] = createSignal<string | null>(null);
 
   // -------------------------------------------------------------------------
   // WS + initial fetch
@@ -97,7 +98,10 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
   function fetchPorts() {
     fetch('/api/ports')
       .then((r) => r.json())
-      .then((data: { ports: PortInfo[] }) => setPorts(data.ports))
+      .then((data: { ports: PortInfo[]; platform_warning?: string }) => {
+        setPorts(data.ports);
+        if (data.platform_warning) setPlatformWarning(data.platform_warning);
+      })
       .catch(() => {});
   }
 
@@ -247,7 +251,16 @@ export function PortsPage(props?: { onWsMessage?: (handler: (msg: WSMessage) => 
     if (visible.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'color: var(--gruvbox-gray); font-size: 13px; padding: var(--space-xl) var(--space-md); text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);';
-      empty.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width: 36px; height: 36px; opacity: 0.35;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg><span style="font-size: 14px;">No active dev ports</span><span style="font-size: 11px; color: var(--gruvbox-disabled);">Services will appear here when running</span>`;
+      const warning = platformWarning();
+      if (warning) {
+        empty.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width: 36px; height: 36px; opacity: 0.5; color: var(--gruvbox-yellow);"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span style="font-size: 14px;">Port monitoring unavailable</span>`;
+        const warningText = document.createElement('span');
+        warningText.style.cssText = 'font-size: 11px; color: var(--gruvbox-disabled); max-width: 360px;';
+        warningText.textContent = warning;
+        empty.appendChild(warningText);
+      } else {
+        empty.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width: 36px; height: 36px; opacity: 0.35;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg><span style="font-size: 14px;">No active dev ports</span><span style="font-size: 11px; color: var(--gruvbox-disabled);">Services will appear here when running</span>`;
+      }
       mainContainer.appendChild(empty);
     }
 

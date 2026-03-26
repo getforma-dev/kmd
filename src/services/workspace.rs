@@ -663,7 +663,7 @@ fn is_pid_alive(pid: u32) -> bool {
         // process exists and we have permission to signal it. No side effects.
         unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
     }
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     {
         use std::process::Command;
         Command::new("tasklist")
@@ -671,6 +671,11 @@ fn is_pid_alive(pid: u32) -> bool {
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
             .unwrap_or(false)
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        let _ = pid;
+        false // Cannot check — assume dead so stale locks get cleaned up
     }
 }
 
