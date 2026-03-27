@@ -1894,3 +1894,202 @@ async fn api_tunnel_verify_handler(
         (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false }))).into_response()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests: tunnel security
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tunnel_security_tests {
+    use super::*;
+    use axum::http::Method;
+
+    // ── is_blocked_for_tunnel ────────────────────────────────────────
+
+    #[test]
+    fn blocks_shell_exec() {
+        assert!(is_blocked_for_tunnel("/api/shell/exec", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_terminal_websocket() {
+        assert!(is_blocked_for_tunnel("/ws/terminal", &Method::GET));
+        assert!(is_blocked_for_tunnel("/ws/terminal?session=abc", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_terminal_api() {
+        assert!(is_blocked_for_tunnel("/api/terminal/sessions", &Method::GET));
+        assert!(is_blocked_for_tunnel("/api/terminal/sessions/abc/kill", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_env_file_reading() {
+        assert!(is_blocked_for_tunnel("/api/env/file", &Method::GET));
+        assert!(is_blocked_for_tunnel("/api/env/compare", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_script_execution() {
+        assert!(is_blocked_for_tunnel("/api/scripts/run", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_process_killing() {
+        assert!(is_blocked_for_tunnel("/api/processes/abc/kill", &Method::POST));
+        assert!(is_blocked_for_tunnel("/api/ports/3000/kill", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_doc_writes() {
+        assert!(is_blocked_for_tunnel("/api/docs/README.md", &Method::PUT));
+        assert!(is_blocked_for_tunnel("/api/docs/README.md", &Method::DELETE));
+        assert!(is_blocked_for_tunnel("/api/docs/README.md", &Method::PATCH));
+    }
+
+    #[test]
+    fn blocks_chain_mutations() {
+        assert!(is_blocked_for_tunnel("/api/chains", &Method::POST));
+        assert!(is_blocked_for_tunnel("/api/chains/abc", &Method::DELETE));
+        assert!(is_blocked_for_tunnel("/api/chains/abc/toggle", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_workspace_modification() {
+        assert!(is_blocked_for_tunnel("/api/workspace/add", &Method::POST));
+        assert!(is_blocked_for_tunnel("/api/workspace/remove", &Method::POST));
+    }
+
+    // ── Allowed read-only endpoints ──────────────────────────────────
+
+    #[test]
+    fn allows_doc_reads() {
+        assert!(!is_blocked_for_tunnel("/api/docs/README.md", &Method::GET));
+        assert!(!is_blocked_for_tunnel("/api/docs/search", &Method::GET));
+        assert!(!is_blocked_for_tunnel("/api/docs", &Method::GET));
+    }
+
+    #[test]
+    fn allows_script_listing() {
+        assert!(!is_blocked_for_tunnel("/api/scripts", &Method::GET));
+    }
+
+    #[test]
+    fn allows_process_listing() {
+        assert!(!is_blocked_for_tunnel("/api/processes", &Method::GET));
+    }
+
+    #[test]
+    fn allows_port_listing() {
+        assert!(!is_blocked_for_tunnel("/api/ports", &Method::GET));
+        assert!(!is_blocked_for_tunnel("/api/ports/scan", &Method::POST));
+    }
+
+    #[test]
+    fn allows_workspace_read() {
+        assert!(!is_blocked_for_tunnel("/api/workspace", &Method::GET));
+    }
+
+    #[test]
+    fn allows_git_status() {
+        assert!(!is_blocked_for_tunnel("/api/git/status", &Method::GET));
+    }
+
+    #[test]
+    fn allows_health_check() {
+        assert!(!is_blocked_for_tunnel("/api/health", &Method::GET));
+    }
+
+    #[test]
+    fn allows_chain_listing() {
+        assert!(!is_blocked_for_tunnel("/api/chains", &Method::GET));
+    }
+
+    #[test]
+    fn allows_env_listing() {
+        // Listing env files (masked values) is OK — reading specific files is blocked
+        assert!(!is_blocked_for_tunnel("/api/env", &Method::GET));
+    }
+
+    // ── extract_tunnel_token ─────────────────────────────────────────
+
+    #[test]
+    fn extracts_token_from_cookie() {
+        let req = Request::builder()
+            .header(header::COOKIE, "kmd_tunnel_token=abc123; other=value")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_tunnel_token(&req), Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn extracts_token_from_query_param() {
+        let req = Request::builder()
+            .uri("/?token=xyz789&other=value")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_tunnel_token(&req), Some("xyz789".to_string()));
+    }
+
+    #[test]
+    fn cookie_takes_precedence_over_query() {
+        let req = Request::builder()
+            .uri("/?token=fromquery")
+            .header(header::COOKIE, "kmd_tunnel_token=fromcookie")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_tunnel_token(&req), Some("fromcookie".to_string()));
+    }
+
+    #[test]
+    fn returns_none_when_no_token() {
+        let req = Request::builder()
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_tunnel_token(&req), None);
+    }
+
+    #[test]
+    fn returns_none_for_wrong_cookie_name() {
+        let req = Request::builder()
+            .header(header::COOKIE, "other_cookie=abc123")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_tunnel_token(&req), None);
+    }
+
+    #[test]
+    fn returns_none_for_wrong_query_param() {
+        let req = Request::builder()
+            .uri("/?auth=abc123")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_tunnel_token(&req), None);
+    }
+
+    // ── Edge cases: ensure no bypass paths ───────────────────────────
+
+    #[test]
+    fn blocks_kill_in_any_path_position() {
+        // Ensure someone can't craft a URL to bypass the /kill check
+        assert!(is_blocked_for_tunnel("/api/processes/../../kill", &Method::POST));
+        assert!(is_blocked_for_tunnel("/api/anything/kill", &Method::POST));
+    }
+
+    #[test]
+    fn kill_not_blocked_for_get() {
+        // GET requests to /kill paths should not be blocked (they don't exist, but shouldn't 403)
+        assert!(!is_blocked_for_tunnel("/api/processes/abc/kill", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_doc_annotation_writes_through_tunnel() {
+        // Annotations are under /api/docs/ — POST should be blocked
+        assert!(is_blocked_for_tunnel("/api/docs/annotations", &Method::POST));
+    }
+
+    #[test]
+    fn allows_annotation_reads_through_tunnel() {
+        assert!(!is_blocked_for_tunnel("/api/docs/annotations", &Method::GET));
+    }
+}
