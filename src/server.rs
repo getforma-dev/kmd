@@ -379,9 +379,10 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     // Content Security Policy — only set if not already present (gate page sets its own)
     if !headers.contains_key("content-security-policy") {
-        // Tunnel: allow external images (shields.io badges, GitHub avatars in rendered docs)
-        // Localhost: strict self-only images
-        let img_src = if is_tunnel { "img-src 'self' data: https:" } else { "img-src 'self' data:" };
+        // Allow external images everywhere — docs often have shields.io badges,
+        // GitHub avatars, diagrams from external sources. This is safe because
+        // images can't execute code or exfiltrate data via CSP.
+        let img_src = "img-src 'self' data: https:";
         let csp = format!(
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; {img_src}; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
         );
