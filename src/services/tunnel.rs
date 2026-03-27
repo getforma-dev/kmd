@@ -23,7 +23,9 @@ fn cloudflared_bin_path() -> PathBuf {
         .or_else(|_| std::env::var("USERPROFILE")) // Windows fallback
         .unwrap_or_else(|_| ".".to_string());
     let base = PathBuf::from(home).join(".kmd").join("bin");
-    std::fs::create_dir_all(&base).ok();
+    if let Err(e) = std::fs::create_dir_all(&base) {
+        tracing::warn!("Failed to create ~/.kmd/bin/: {e}");
+    }
 
     if cfg!(target_os = "windows") {
         base.join("cloudflared.exe")

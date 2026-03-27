@@ -1119,7 +1119,6 @@ version = "0.1.7"
 dependencies = [
  "ammonia",
  "axum",
- "base64",
  "clap",
  "futures",
  "ignore",
@@ -1133,7 +1132,6 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
- "sha2",
  "syntect",
  "sysinfo",
  "tempfile",

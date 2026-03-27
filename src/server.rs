@@ -7,10 +7,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rust_embed::Embed;
 use serde::Deserialize;
-use sha2::{Sha256, Digest};
 use std::sync::{LazyLock, Mutex as StdMutex};
 use std::time::Instant;
 use tower_http::compression::CompressionLayer;
@@ -82,17 +80,14 @@ fn is_allowed_for_tunnel(path: &str, method: &axum::http::Method) -> bool {
     if path == "/api/docs/search" && matches!(*method, axum::http::Method::GET) { return true; }
     if path.starts_with("/api/docs/") && matches!(*method, axum::http::Method::GET) { return true; }
 
-    // Bookmarks: read-only (needed for docs page UI)
-    if path == "/api/docs/bookmarks" && matches!(*method, axum::http::Method::GET) { return true; }
-
     // Workspace info: needed for docs page to resolve roots
     if path == "/api/workspace" && matches!(*method, axum::http::Method::GET) { return true; }
 
     // Git status: shown in sidebar
     if path == "/api/git/status" && matches!(*method, axum::http::Method::GET) { return true; }
 
-    // Tunnel API: status checks
-    if path.starts_with("/api/tunnel") { return true; }
+    // Tunnel status: read-only. Start/stop are localhost-only (not in allowlist).
+    if path == "/api/tunnel" && matches!(*method, axum::http::Method::GET) { return true; }
 
     // Health check
     if path == "/api/health" { return true; }
@@ -103,11 +98,7 @@ fn is_allowed_for_tunnel(path: &str, method: &axum::http::Method) -> bool {
     false
 }
 
-async fn validate_host(
-    State(state): State<AppState>,
-    req: Request<Body>,
-    next: Next,
-) -> Response {
+async fn validate_host(req: Request<Body>, next: Next) -> Response {
     // WebSocket upgrade requests also go through this middleware
     let host = req
         .headers()
@@ -228,16 +219,7 @@ async fn validate_host(
 // ---------------------------------------------------------------------------
 
 /// Add security headers to all responses.
-/// CSP adapts based on context: localhost gets strict img-src, tunnel gets
-/// relaxed img-src to allow external badge images in rendered markdown.
 async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
-    // Detect tunnel vs localhost before consuming the request
-    let host = req.headers()
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let is_tunnel = host.contains(".trycloudflare.com");
-
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
 
@@ -245,16 +227,14 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     // Prevent MIME-type sniffing
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-    // Content Security Policy — only set if not already present (gate page sets its own)
+    // Content Security Policy — only set if handler didn't set one already
     if !headers.contains_key("content-security-policy") {
-        // Allow external images everywhere — docs often have shields.io badges,
-        // GitHub avatars, diagrams from external sources. This is safe because
-        // images can't execute code or exfiltrate data via CSP.
-        let img_src = "img-src 'self' data: https:";
-        let csp = format!(
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; {img_src}; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
+        headers.insert(
+            "content-security-policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
+                .parse()
+                .unwrap(),
         );
-        headers.insert("content-security-policy", csp.parse().unwrap());
     }
 
     response
@@ -323,8 +303,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ws/terminal", get(terminal_ws::terminal_ws_handler))
         .merge(api)
         .fallback(static_handler)
-        // Security: validate Host header, tunnel token gate, endpoint blocking
-        .layer(middleware::from_fn_with_state(state.clone(), validate_host))
+        // Security: validate Host header, tunnel docs-only allowlist
+        .layer(middleware::from_fn(validate_host))
         // Security: add protective response headers
         .layer(middleware::from_fn(add_security_headers))
         // Compression: gzip/brotli/deflate/zstd (critical for tunnel performance)
@@ -1768,8 +1748,11 @@ mod tunnel_security_tests {
     }
 
     #[test]
-    fn allows_docs_bookmarks_read() {
+    fn allows_docs_sub_endpoints_read() {
+        // Bookmarks, annotations, raw — all under /api/docs/ GET wildcard
         assert!(is_allowed_for_tunnel("/api/docs/bookmarks", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/docs/annotations", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/docs/raw/README.md", &Method::GET));
     }
 
     #[test]
@@ -1795,9 +1778,15 @@ mod tunnel_security_tests {
     }
 
     #[test]
-    fn allows_tunnel_api() {
+    fn allows_tunnel_status_read() {
         assert!(is_allowed_for_tunnel("/api/tunnel", &Method::GET));
-        assert!(is_allowed_for_tunnel("/api/tunnel/start", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_tunnel_start_stop_from_tunnel() {
+        // Tunnel management is localhost-only — remote users can't start/stop
+        assert!(!is_allowed_for_tunnel("/api/tunnel/start", &Method::POST));
+        assert!(!is_allowed_for_tunnel("/api/tunnel/stop", &Method::POST));
     }
 
     #[test]

@@ -126,6 +126,6 @@ When exposing a local server through cloudflare tunnel:
 
 | Project | File | Pattern |
 |---------|------|---------|
-| kmd | `src/server.rs` | Hash-based CSP for gate page, middleware don't-overwrite |
+| kmd | `src/server.rs` | Middleware don't-overwrite, allowlist-based tunnel security |
 | gatewasm | `crates/server/src/middleware/csp.rs` | Nonce-based CSP for SSR pages |
 | gatewasm | `crates/server/src/html_template.rs` | Nonce injection into rendered HTML |
