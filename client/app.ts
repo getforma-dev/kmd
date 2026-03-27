@@ -424,6 +424,39 @@ function App() {
     terminal: 'Terminal',
   };
 
+  // Detect if this is a tunnel visitor (not localhost owner)
+  const isTunnelVisitor = location.hostname.endsWith('.trycloudflare.com');
+
+  // Banner shown to tunnel visitors on non-docs tabs
+  function TunnelRestrictedBanner() {
+    return h('div', {
+      style: 'display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 24px; text-align: center; max-width: 420px; margin: 0 auto;',
+    },
+      h('svg', {
+        viewBox: '0 0 24 24', fill: 'none', stroke: 'var(--gruvbox-gray)',
+        'stroke-width': '1', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+        style: 'width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.5;',
+      },
+        h('rect', { x: '3', y: '11', width: '18', height: '11', rx: '2', ry: '2' }),
+        h('path', { d: 'M7 11V7a5 5 0 0 1 10 0v4' }),
+      ),
+      h('div', { style: 'font-size: 15px; color: var(--gruvbox-fg); font-weight: 600; margin-bottom: 8px;' },
+        'This feature requires authentication',
+      ),
+      h('div', { style: 'font-size: 13px; color: var(--gruvbox-fg2); line-height: 1.5; margin-bottom: 20px;' },
+        'This workspace is shared as documentation only. Scripts, terminal, and ports are available to the workspace owner.',
+      ),
+      h('div', { style: 'font-size: 11px; color: var(--gruvbox-gray);' },
+        'Powered by ',
+        h('span', { style: 'font-weight: 700;' },
+          'K',
+          h('span', { style: 'color: var(--gruvbox-orange);' }, '.'),
+          h('span', { style: 'color: var(--gruvbox-aqua);' }, 'md'),
+        ),
+      ),
+    );
+  }
+
   // Page switching via createSwitch
   const pageContent = createSwitch(route, [
     {
@@ -436,14 +469,14 @@ function App() {
     },
     {
       match: 'scripts' as Route,
-      render: () => ScriptsPage({
+      render: () => isTunnelVisitor ? TunnelRestrictedBanner() : ScriptsPage({
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
         intentionalKills,
       }),
     },
     {
       match: 'ports' as Route,
-      render: () => PortsPage({
+      render: () => isTunnelVisitor ? TunnelRestrictedBanner() : PortsPage({
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
         intentionalKills,
       }),
@@ -452,7 +485,8 @@ function App() {
 
   // Terminal page is mounted OUTSIDE createSwitch so it survives tab switches.
   // We show/hide it based on route instead of letting createSwitch destroy it.
-  const terminalPageEl = TerminalPage({ terminalToken });
+  // Tunnel visitors get the restricted banner instead of the terminal.
+  const terminalPageEl = isTunnelVisitor ? TunnelRestrictedBanner() : TerminalPage({ terminalToken });
   const terminalWrapper = h('div', {
     style: () => route() === 'terminal'
       ? 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;'

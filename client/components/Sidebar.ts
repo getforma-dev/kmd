@@ -287,10 +287,20 @@ export function Sidebar(props: {
               style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
             }, 'Copied!'),
           ),
-          // Docs-only notice
+          // Docs-only notice + upgrade CTA
           h('div', {
-            style: 'margin-top: 6px; padding: 4px 8px; font-size: 9px; color: var(--gruvbox-fg2); line-height: 1.4;',
-          }, 'Sharing docs only. Scripts, terminal, and exec require GateWASM auth.'),
+            style: 'margin-top: 6px; padding: 6px 8px; background: rgba(131,165,152,0.08); border: 1px solid rgba(131,165,152,0.15); border-radius: 4px; font-size: 9px; line-height: 1.5;',
+          },
+            h('div', { style: 'color: var(--gruvbox-fg2);' }, 'Sharing docs only.'),
+            h('div', { style: 'color: var(--gruvbox-aqua); margin-top: 3px;' },
+              'Unlock terminal, scripts & full remote access with ',
+              h('a', {
+                href: 'https://auth.getforma.dev/platform/onboarding',
+                target: '_blank',
+                style: 'color: var(--gruvbox-aqua); text-decoration: underline;',
+              }, 'GateWASM'),
+            ),
+          ),
         ),
       ),
     );
