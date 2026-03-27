@@ -7,8 +7,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rust_embed::Embed;
 use serde::Deserialize;
+use sha2::{Sha256, Digest};
 use std::sync::{LazyLock, Mutex as StdMutex};
 use std::time::Instant;
 use tower_http::compression::CompressionLayer;
@@ -132,13 +134,27 @@ fn extract_tunnel_token(req: &Request<Body>) -> Option<String> {
     None
 }
 
-/// HTML page shown to tunnel visitors who haven't entered the access token.
-/// This page has its own CSP with 'unsafe-inline' for the login script.
-/// This is safe because the page content is entirely server-controlled (no user input).
-fn tunnel_gate_page() -> Response {
-    let script = r#"document.getElementById('gate-form').addEventListener('submit',async function(e){e.preventDefault();var t=document.getElementById('token').value.trim().toLowerCase();if(!t)return;var r=await fetch('/api/tunnel/verify',{method:'POST',headers:{'Content-Type':'application/json','X-KMD-Client':'1'},body:JSON.stringify({token:t})});if(r.ok){document.cookie='kmd_tunnel_token='+t+';path=/;SameSite=Strict;Secure';window.location.href='/'}else{document.getElementById('error').style.display='block';document.getElementById('token').value='';document.getElementById('token').focus()}})"#;
+/// The exact inline script used on the tunnel gate page.
+/// Defined as a constant so the hash always stays in sync with the content.
+const GATE_INLINE_SCRIPT: &str = r#"document.getElementById('gate-form').addEventListener('submit',async function(e){e.preventDefault();var t=document.getElementById('token').value.trim().toLowerCase();if(!t)return;var r=await fetch('/api/tunnel/verify',{method:'POST',headers:{'Content-Type':'application/json','X-KMD-Client':'1'},body:JSON.stringify({token:t})});if(r.ok){document.cookie='kmd_tunnel_token='+t+';path=/;SameSite=Strict;Secure';window.location.href='/'}else{document.getElementById('error').style.display='block';document.getElementById('token').value='';document.getElementById('token').focus()}})"#;
 
-    let csp = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'";
+/// SHA-256 hash of GATE_INLINE_SCRIPT, computed once at startup.
+/// Format: 'sha256-XXXX' for use in Content-Security-Policy headers.
+static GATE_SCRIPT_CSP_HASH: LazyLock<String> = LazyLock::new(|| {
+    let hash = Sha256::digest(GATE_INLINE_SCRIPT.as_bytes());
+    let encoded = BASE64.encode(hash);
+    format!("'sha256-{encoded}'")
+});
+
+/// HTML page shown to tunnel visitors who haven't entered the access token.
+/// Uses hash-based CSP — zero 'unsafe-inline', the browser only executes
+/// the script if its SHA-256 matches the hash declared in the CSP header.
+fn tunnel_gate_page() -> Response {
+    let script = GATE_INLINE_SCRIPT;
+    let csp = format!(
+        "default-src 'none'; script-src {}; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
+        *GATE_SCRIPT_CSP_HASH
+    );
 
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
@@ -2088,5 +2104,29 @@ mod tunnel_security_tests {
     #[test]
     fn allows_annotation_reads_through_tunnel() {
         assert!(!is_blocked_for_tunnel("/api/docs/annotations", &Method::GET));
+    }
+
+    // ── CSP hash integrity ───────────────────────────────────────────
+
+    #[test]
+    fn gate_script_hash_matches_content() {
+        // Verify the LazyLock hash matches a fresh computation.
+        // If GATE_INLINE_SCRIPT changes, this test confirms the hash auto-updates.
+        let fresh_hash = {
+            let hash = Sha256::digest(GATE_INLINE_SCRIPT.as_bytes());
+            let encoded = BASE64.encode(hash);
+            format!("'sha256-{encoded}'")
+        };
+        assert_eq!(*GATE_SCRIPT_CSP_HASH, fresh_hash);
+    }
+
+    #[test]
+    fn gate_script_hash_is_sha256_format() {
+        let hash = &*GATE_SCRIPT_CSP_HASH;
+        assert!(hash.starts_with("'sha256-"), "CSP hash must start with 'sha256-");
+        assert!(hash.ends_with('\''), "CSP hash must end with single quote");
+        // Base64 content between the prefix and suffix
+        let b64 = &hash[8..hash.len() - 1];
+        assert_eq!(b64.len(), 44, "SHA-256 base64 is always 44 chars (including padding)");
     }
 }
