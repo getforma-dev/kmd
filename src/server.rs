@@ -225,11 +225,13 @@ async fn validate_host(
         let path = req.uri().path().to_string();
         let method = req.method().clone();
 
-        // Always allow: tunnel API, health check, and static assets (needed for gate page to render)
-        let is_static_asset = !path.starts_with("/api/") && !path.starts_with("/ws");
+        // Always allow: tunnel API, health check, and actual file assets (JS/CSS/fonts/images).
+        // The root "/" and SPA routes MUST go through the token gate.
+        let has_file_ext = path.rsplit('/').next().is_some_and(|seg| seg.contains('.'));
+        let is_actual_asset = has_file_ext && !path.starts_with("/api/");
         let is_tunnel_api = path.starts_with("/api/tunnel") || path == "/api/health";
 
-        if !is_tunnel_api && !is_static_asset {
+        if !is_tunnel_api && !is_actual_asset {
             // 1. Check for valid tunnel token
             let expected_token = state.tunnel_token();
             let provided_token = extract_tunnel_token(&req);
