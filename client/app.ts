@@ -164,6 +164,7 @@ function App() {
   const [theme, setTheme] = createSignal(getInitialTheme());
   const [terminalToken, setTerminalToken] = createSignal('');
   const [tunnelUrl, setTunnelUrl] = createSignal<string | null>(null);
+  const [tunnelToken, setTunnelToken] = createSignal<string | null>(null);
 
   // Persist sidebar and focus state
   createEffect(() => {
@@ -235,6 +236,7 @@ function App() {
       if (msg.type === 'tunnel_status' && msg.data && typeof msg.data === 'object') {
         const tunnelData = msg.data as { active: boolean; url?: string };
         setTunnelUrl(tunnelData.active && tunnelData.url ? tunnelData.url : null);
+        if (!tunnelData.active) setTunnelToken(null);
       }
 
       // Track crashes for badge
@@ -270,9 +272,12 @@ function App() {
   // Fetch initial tunnel status
   fetch('/api/tunnel')
     .then((r) => r.json())
-    .then((data: { active: boolean; url?: string }) => {
+    .then((data: { active: boolean; url?: string; token?: string }) => {
       if (data.active && data.url) {
         setTunnelUrl(data.url);
+      }
+      if (data.token) {
+        setTunnelToken(data.token);
       }
     })
     .catch(() => {});
@@ -475,7 +480,7 @@ function App() {
   }
 
   return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
-    Sidebar({ route, workspaceName, theme, crashCount, tunnelUrl, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
+    Sidebar({ route, workspaceName, theme, crashCount, tunnelUrl, tunnelToken, onTunnelToken: setTunnelToken, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         HamburgerButton(),

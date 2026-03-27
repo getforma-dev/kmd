@@ -13,6 +13,12 @@ use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+/// Generate a short, human-friendly access token (6 hex chars from a UUID).
+/// Used as a PIN to gate tunnel access. Short enough to share verbally.
+fn generate_tunnel_token() -> String {
+    uuid::Uuid::new_v4().to_string()[..6].to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Binary management — auto-download cloudflared on first use
 // ---------------------------------------------------------------------------
@@ -150,6 +156,11 @@ pub async fn start_tunnel(state: &AppState, port: u16) -> Result<String, String>
         }
     }
 
+    // Generate an access token for this tunnel session
+    let token = generate_tunnel_token();
+    state.set_tunnel_token(Some(token.clone()));
+    tracing::info!("Tunnel access token generated: {token}");
+
     // Ensure cloudflared is available (downloads on first use)
     let bin_path = ensure_cloudflared().await?;
 
@@ -201,6 +212,7 @@ pub async fn start_tunnel(state: &AppState, port: u16) -> Result<String, String>
         // cloudflared exited — clean up
         tracing::info!("cloudflared process exited");
         state_clone.set_tunnel_url(None);
+        state_clone.set_tunnel_token(None);
         state_clone.clear_tunnel_process();
         let _ = tx.send(ServerMessage::TunnelStatus {
             active: false,
@@ -229,6 +241,7 @@ pub async fn start_tunnel(state: &AppState, port: u16) -> Result<String, String>
 pub fn stop_tunnel(state: &AppState) -> Result<(), String> {
     state.clear_tunnel_process();
     state.set_tunnel_url(None);
+    state.set_tunnel_token(None);
     let _ = state.broadcast_tx().send(ServerMessage::TunnelStatus {
         active: false,
         url: None,

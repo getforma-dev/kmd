@@ -69,7 +69,140 @@ static MUTATING_RATE_LIMITER: LazyLock<RateLimiter> = LazyLock::new(|| {
 /// Without this check, any website can call our API (including /api/shell/exec)
 /// by simply rebinding its DNS. This middleware blocks that by requiring the
 /// Host header to be an explicit localhost value.
-async fn validate_host(req: Request<Body>, next: Next) -> Response {
+/// Check if a path + method combination is blocked for tunnel access.
+/// Blocked: shell exec, terminal, env secrets, file writes, process kills,
+/// script execution, chain rules, workspace modification.
+fn is_blocked_for_tunnel(path: &str, method: &axum::http::Method) -> bool {
+    // Always block shell exec and terminal
+    if path == "/api/shell/exec" { return true; }
+    if path.starts_with("/ws/terminal") { return true; }
+    if path.starts_with("/api/terminal/") { return true; }
+
+    // Block env file reading (contains secrets)
+    if path == "/api/env/file" || path == "/api/env/compare" { return true; }
+
+    // Block doc writes/deletes (allow GET reads)
+    if path.starts_with("/api/docs/") && !matches!(*method, axum::http::Method::GET) {
+        return true;
+    }
+
+    // Block process killing
+    if path.contains("/kill") && matches!(*method, axum::http::Method::POST) {
+        return true;
+    }
+
+    // Block script execution
+    if path == "/api/scripts/run" { return true; }
+
+    // Block chain rule creation/modification
+    if path.starts_with("/api/chains") && !matches!(*method, axum::http::Method::GET) {
+        return true;
+    }
+
+    // Block workspace modification
+    if path == "/api/workspace/add" || path == "/api/workspace/remove" {
+        return true;
+    }
+
+    false
+}
+
+/// Extract the tunnel token from a request (cookie or query param).
+fn extract_tunnel_token(req: &Request<Body>) -> Option<String> {
+    // Check cookie first
+    if let Some(cookie_header) = req.headers().get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        for pair in cookie_header.split(';') {
+            let pair = pair.trim();
+            if let Some(value) = pair.strip_prefix("kmd_tunnel_token=") {
+                return Some(value.to_string());
+            }
+        }
+    }
+
+    // Check query parameter
+    if let Some(query) = req.uri().query() {
+        for pair in query.split('&') {
+            if let Some(value) = pair.strip_prefix("token=") {
+                return Some(value.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// HTML page shown to tunnel visitors who haven't entered the access token.
+fn tunnel_gate_page() -> Response {
+    let html = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K.md — Access Required</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1d2021; color: #ebdbb2; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .gate { text-align: center; max-width: 360px; padding: 40px 24px; }
+  .logo { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
+  .logo .dot { color: #fe8019; }
+  .logo .md { color: #83a598; }
+  .subtitle { color: #a89984; font-size: 14px; margin-bottom: 32px; }
+  label { display: block; color: #a89984; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; text-align: left; }
+  input { width: 100%; padding: 12px 16px; background: #282828; border: 1px solid #3c3836; border-radius: 8px; color: #ebdbb2; font-size: 18px; letter-spacing: 4px; text-align: center; font-family: monospace; outline: none; }
+  input:focus { border-color: #83a598; }
+  button { width: 100%; margin-top: 16px; padding: 12px; background: #83a598; color: #1d2021; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  button:hover { background: #8ec07c; }
+  .error { color: #fb4934; font-size: 13px; margin-top: 12px; display: none; }
+  .hint { color: #665c54; font-size: 12px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="gate">
+  <div class="logo">K<span class="dot">.</span><span class="md">md</span></div>
+  <p class="subtitle">This workspace is shared via a secure tunnel</p>
+  <form id="gate-form">
+    <label for="token">Access Code</label>
+    <input id="token" type="text" maxlength="6" autocomplete="off" autofocus placeholder="······">
+    <button type="submit">Enter</button>
+    <p class="error" id="error">Invalid access code</p>
+  </form>
+  <p class="hint">Ask the workspace owner for the 6-character access code</p>
+</div>
+<script>
+document.getElementById('gate-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const token = document.getElementById('token').value.trim().toLowerCase();
+  if (!token) return;
+  const res = await fetch('/api/tunnel/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-KMD-Client': '1' },
+    body: JSON.stringify({ token }),
+  });
+  if (res.ok) {
+    document.cookie = 'kmd_tunnel_token=' + token + '; path=/; SameSite=Strict; Secure';
+    location.reload();
+  } else {
+    document.getElementById('error').style.display = 'block';
+    document.getElementById('token').value = '';
+    document.getElementById('token').focus();
+  }
+});
+</script>
+</body>
+</html>"#;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .unwrap()
+}
+
+async fn validate_host(
+    State(state): State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     // WebSocket upgrade requests also go through this middleware
     let host = req
         .headers()
@@ -86,8 +219,6 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
     );
 
     // When a cloudflared tunnel is active, also allow the tunnel domain.
-    // cloudflared proxies requests from its edge to localhost, so the Host header
-    // will be the tunnel domain (e.g. "abc.trycloudflare.com").
     let is_tunnel_host = !is_localhost && host_name.ends_with(".trycloudflare.com");
 
     if !is_localhost && !is_tunnel_host {
@@ -99,13 +230,64 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
             .into_response();
     }
 
-    // Check Origin header (CSRF protection)
+    // ── Tunnel security: token gate + endpoint blocking ──────────────
+    if is_tunnel_host {
+        let path = req.uri().path().to_string();
+        let method = req.method().clone();
+
+        // Always allow the tunnel API itself (status, verify) and health check
+        let is_tunnel_api = path.starts_with("/api/tunnel") || path == "/api/health";
+
+        if !is_tunnel_api {
+            // 1. Check for valid tunnel token
+            let expected_token = state.tunnel_token();
+            let provided_token = extract_tunnel_token(&req);
+
+            let token_valid = match (&expected_token, &provided_token) {
+                (Some(expected), Some(provided)) => {
+                    // Constant-time comparison to prevent timing attacks
+                    expected.len() == provided.len()
+                        && expected.as_bytes().iter().zip(provided.as_bytes().iter())
+                            .fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+                }
+                _ => false,
+            };
+
+            if !token_valid {
+                // No valid token — serve the gate page for browser requests,
+                // or 403 for API requests
+                let accepts_html = req.headers()
+                    .get(header::ACCEPT)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|v| v.contains("text/html"));
+
+                if accepts_html {
+                    return tunnel_gate_page();
+                } else {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        "Forbidden: tunnel access token required",
+                    ).into_response();
+                }
+            }
+
+            // 2. Block dangerous endpoints even with a valid token
+            if is_blocked_for_tunnel(&path, &method) {
+                tracing::warn!("Blocked dangerous tunnel request: {method} {path}");
+                return (
+                    StatusCode::FORBIDDEN,
+                    "Forbidden: this endpoint is not available through the tunnel",
+                ).into_response();
+            }
+        }
+    }
+
+    // ── Standard security checks (Origin, CSRF, rate limiting) ───────
     let is_websocket = req.headers().get(header::UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
 
     if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-        // Parse origin to extract host
         let origin_host = origin
             .strip_prefix("http://")
             .or_else(|| origin.strip_prefix("https://"))
@@ -129,7 +311,6 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
                 .into_response();
         }
     } else if is_websocket {
-        // WebSocket upgrades MUST include an Origin header — reject if absent
         tracing::warn!("Blocked WebSocket upgrade without Origin header");
         return (
             StatusCode::FORBIDDEN,
@@ -245,15 +426,16 @@ pub fn build_router(state: AppState) -> Router {
         // Tunnel (cloudflared quick tunnel)
         .route("/api/tunnel", get(api_tunnel_status_handler))
         .route("/api/tunnel/start", post(api_tunnel_start_handler))
-        .route("/api/tunnel/stop", post(api_tunnel_stop_handler));
+        .route("/api/tunnel/stop", post(api_tunnel_stop_handler))
+        .route("/api/tunnel/verify", post(api_tunnel_verify_handler));
 
     Router::new()
         .route("/ws", get(ws::ws_handler))
         .route("/ws/terminal", get(terminal_ws::terminal_ws_handler))
         .merge(api)
         .fallback(static_handler)
-        // Security: validate Host header to prevent DNS rebinding attacks
-        .layer(middleware::from_fn(validate_host))
+        // Security: validate Host header, tunnel token gate, endpoint blocking
+        .layer(middleware::from_fn_with_state(state.clone(), validate_host))
         // Security: add protective response headers
         .layer(middleware::from_fn(add_security_headers))
         .with_state(state)
@@ -1633,11 +1815,23 @@ async fn api_env_compare_handler(
 // ---------------------------------------------------------------------------
 
 /// `GET /api/tunnel` — Get current tunnel status.
-async fn api_tunnel_status_handler(State(state): State<AppState>) -> impl IntoResponse {
+/// Token is only included when accessed from localhost (the owner's machine).
+async fn api_tunnel_status_handler(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
     let url = state.tunnel_url();
+    let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let host_name = host.split(':').next().unwrap_or("");
+    let is_localhost = matches!(host_name, "localhost" | "127.0.0.1" | "[::1]");
+
+    // Only reveal the token to localhost (the workspace owner)
+    let token = if is_localhost { state.tunnel_token() } else { None };
+
     Json(serde_json::json!({
         "active": url.is_some(),
         "url": url,
+        "token": token,
     }))
 }
 
@@ -1645,10 +1839,13 @@ async fn api_tunnel_status_handler(State(state): State<AppState>) -> impl IntoRe
 async fn api_tunnel_start_handler(State(state): State<AppState>) -> impl IntoResponse {
     let port = state.server_port();
     match tunnel::start_tunnel(&state, port).await {
-        Ok(url) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "active": true, "url": url })),
-        ).into_response(),
+        Ok(url) => {
+            let token = state.tunnel_token();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "active": true, "url": url, "token": token })),
+            ).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),
@@ -1664,5 +1861,36 @@ async fn api_tunnel_stop_handler(State(state): State<AppState>) -> impl IntoResp
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),
         ).into_response(),
+    }
+}
+
+/// Body for token verification.
+#[derive(Deserialize)]
+struct TunnelVerifyBody {
+    token: String,
+}
+
+/// `POST /api/tunnel/verify` — Verify a tunnel access token.
+/// Returns 200 if valid, 403 if invalid. Used by the gate page.
+async fn api_tunnel_verify_handler(
+    State(state): State<AppState>,
+    Json(body): Json<TunnelVerifyBody>,
+) -> impl IntoResponse {
+    let expected = state.tunnel_token();
+    let provided = body.token.trim().to_lowercase();
+
+    let valid = match &expected {
+        Some(expected) => {
+            expected.len() == provided.len()
+                && expected.as_bytes().iter().zip(provided.as_bytes().iter())
+                    .fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+        }
+        None => false,
+    };
+
+    if valid {
+        Json(serde_json::json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false }))).into_response()
     }
 }

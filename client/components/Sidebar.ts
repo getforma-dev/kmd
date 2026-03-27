@@ -53,6 +53,8 @@ export function Sidebar(props: {
   theme?: () => string;
   crashCount?: () => number;
   tunnelUrl?: () => string | null;
+  tunnelToken?: () => string | null;
+  onTunnelToken?: (token: string | null) => void;
   onToggleTheme?: () => void;
   onHelp?: () => void;
   onWorkspaceSettings?: () => void;
@@ -217,9 +219,12 @@ export function Sidebar(props: {
       // Start tunnel
       kmdFetch('/api/tunnel/start', { method: 'POST' })
         .then(r => r.json())
-        .then((data: { error?: string }) => {
+        .then((data: { error?: string; token?: string }) => {
           if (data.error) {
             alert(data.error);
+          }
+          if (data.token) {
+            props.onTunnelToken?.(data.token);
           }
         })
         .catch(() => {})
@@ -274,19 +279,37 @@ export function Sidebar(props: {
       // URL display (when active)
       createShow(
         () => !!props.tunnelUrl?.(),
-        () => h('div', {
-          style: 'margin-top: 6px; padding: 5px 8px; background: var(--gruvbox-bg1); border-radius: 4px; font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-aqua); word-break: break-all; cursor: pointer; position: relative;',
-          onClick: copyTunnelUrl,
-          title: 'Click to copy',
-        },
-          h('span', null, () => {
-            const url = props.tunnelUrl?.() || '';
-            // Show just the domain part for brevity
-            return url.replace('https://', '');
-          }),
-          h('span', {
-            style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
-          }, 'Copied!'),
+        () => h('div', { style: 'margin-top: 6px;' },
+          // URL (click to copy)
+          h('div', {
+            style: 'padding: 5px 8px; background: var(--gruvbox-bg1); border-radius: 4px; font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-aqua); word-break: break-all; cursor: pointer; position: relative;',
+            onClick: copyTunnelUrl,
+            title: 'Click to copy URL',
+          },
+            h('span', null, () => {
+              const url = props.tunnelUrl?.() || '';
+              return url.replace('https://', '');
+            }),
+            h('span', {
+              style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
+            }, 'Copied!'),
+          ),
+          // Access code display
+          createShow(
+            () => !!props.tunnelToken?.(),
+            () => h('div', {
+              style: 'margin-top: 4px; padding: 4px 8px; background: var(--gruvbox-bg1); border-radius: 4px; display: flex; align-items: center; justify-content: space-between;',
+            },
+              h('span', { style: 'font-size: 10px; color: var(--gruvbox-fg2);' }, 'Code:'),
+              h('span', {
+                style: 'font-size: 13px; font-family: var(--font-code); color: var(--gruvbox-yellow); letter-spacing: 2px; font-weight: 700;',
+              }, () => props.tunnelToken?.() || ''),
+            ),
+          ),
+          // Warning
+          h('div', {
+            style: 'margin-top: 6px; padding: 4px 8px; font-size: 9px; color: var(--gruvbox-orange); line-height: 1.3;',
+          }, 'Share the URL + code with people you trust. Read-only access — no terminal or shell.'),
         ),
       ),
     );
