@@ -132,28 +132,34 @@ fn extract_tunnel_token(req: &Request<Body>) -> Option<String> {
 }
 
 /// HTML page shown to tunnel visitors who haven't entered the access token.
+/// This page has its own CSP with 'unsafe-inline' for the login script.
+/// This is safe because the page content is entirely server-controlled (no user input).
 fn tunnel_gate_page() -> Response {
-    let html = r#"<!DOCTYPE html>
+    let script = r#"document.getElementById('gate-form').addEventListener('submit',async function(e){e.preventDefault();var t=document.getElementById('token').value.trim().toLowerCase();if(!t)return;var r=await fetch('/api/tunnel/verify',{method:'POST',headers:{'Content-Type':'application/json','X-KMD-Client':'1'},body:JSON.stringify({token:t})});if(r.ok){document.cookie='kmd_tunnel_token='+t+';path=/;SameSite=Strict;Secure';window.location.href='/'}else{document.getElementById('error').style.display='block';document.getElementById('token').value='';document.getElementById('token').focus()}})"#;
+
+    let csp = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'";
+
+    let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>K.md — Access Required</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1d2021; color: #ebdbb2; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-  .gate { text-align: center; max-width: 360px; padding: 40px 24px; }
-  .logo { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
-  .logo .dot { color: #fe8019; }
-  .logo .md { color: #83a598; }
-  .subtitle { color: #a89984; font-size: 14px; margin-bottom: 32px; }
-  label { display: block; color: #a89984; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; text-align: left; }
-  input { width: 100%; padding: 12px 16px; background: #282828; border: 1px solid #3c3836; border-radius: 8px; color: #ebdbb2; font-size: 18px; letter-spacing: 4px; text-align: center; font-family: monospace; outline: none; }
-  input:focus { border-color: #83a598; }
-  button { width: 100%; margin-top: 16px; padding: 12px; background: #83a598; color: #1d2021; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
-  button:hover { background: #8ec07c; }
-  .error { color: #fb4934; font-size: 13px; margin-top: 12px; display: none; }
-  .hint { color: #665c54; font-size: 12px; margin-top: 24px; }
+  *{{margin:0;padding:0;box-sizing:border-box}}
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1d2021;color:#ebdbb2;display:flex;align-items:center;justify-content:center;min-height:100vh}}
+  .gate{{text-align:center;max-width:360px;padding:40px 24px}}
+  .logo{{font-size:32px;font-weight:700;margin-bottom:8px}}
+  .logo .dot{{color:#fe8019}}
+  .logo .md{{color:#83a598}}
+  .subtitle{{color:#a89984;font-size:14px;margin-bottom:32px}}
+  label{{display:block;color:#a89984;font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;text-align:left}}
+  input{{width:100%;padding:12px 16px;background:#282828;border:1px solid #3c3836;border-radius:8px;color:#ebdbb2;font-size:18px;letter-spacing:4px;text-align:center;font-family:monospace;outline:none}}
+  input:focus{{border-color:#83a598}}
+  button{{width:100%;margin-top:16px;padding:12px;background:#83a598;color:#1d2021;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}}
+  button:hover{{background:#8ec07c}}
+  .error{{color:#fb4934;font-size:13px;margin-top:12px;display:none}}
+  .hint{{color:#665c54;font-size:12px;margin-top:24px}}
 </style>
 </head>
 <body>
@@ -168,32 +174,14 @@ fn tunnel_gate_page() -> Response {
   </form>
   <p class="hint">Ask the workspace owner for the 6-character access code</p>
 </div>
-<script>
-document.getElementById('gate-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const token = document.getElementById('token').value.trim().toLowerCase();
-  if (!token) return;
-  const res = await fetch('/api/tunnel/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-KMD-Client': '1' },
-    body: JSON.stringify({ token }),
-  });
-  if (res.ok) {
-    document.cookie = 'kmd_tunnel_token=' + token + '; path=/; SameSite=Strict; Secure';
-    location.reload();
-  } else {
-    document.getElementById('error').style.display = 'block';
-    document.getElementById('token').value = '';
-    document.getElementById('token').focus();
-  }
-});
-</script>
+<script>{script}</script>
 </body>
-</html>"#;
+</html>"#);
 
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header("content-security-policy", csp)
         .body(Body::from(html))
         .unwrap()
 }
@@ -235,10 +223,11 @@ async fn validate_host(
         let path = req.uri().path().to_string();
         let method = req.method().clone();
 
-        // Always allow the tunnel API itself (status, verify) and health check
+        // Always allow: tunnel API, health check, and static assets (needed for gate page to render)
+        let is_static_asset = !path.starts_with("/api/") && !path.starts_with("/ws");
         let is_tunnel_api = path.starts_with("/api/tunnel") || path == "/api/health";
 
-        if !is_tunnel_api {
+        if !is_tunnel_api && !is_static_asset {
             // 1. Check for valid tunnel token
             let expected_token = state.tunnel_token();
             let provided_token = extract_tunnel_token(&req);
