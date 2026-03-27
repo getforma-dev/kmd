@@ -360,7 +360,16 @@ async fn validate_host(
 // ---------------------------------------------------------------------------
 
 /// Add security headers to all responses.
+/// CSP adapts based on context: localhost gets strict img-src, tunnel gets
+/// relaxed img-src to allow external badge images in rendered markdown.
 async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
+    // Detect tunnel vs localhost before consuming the request
+    let host = req.headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let is_tunnel = host.contains(".trycloudflare.com");
+
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
 
@@ -370,12 +379,13 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     // Content Security Policy — only set if not already present (gate page sets its own)
     if !headers.contains_key("content-security-policy") {
-        headers.insert(
-            "content-security-policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
-                .parse()
-                .unwrap(),
+        // Tunnel: allow external images (shields.io badges, GitHub avatars in rendered docs)
+        // Localhost: strict self-only images
+        let img_src = if is_tunnel { "img-src 'self' data: https:" } else { "img-src 'self' data:" };
+        let csp = format!(
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; {img_src}; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
         );
+        headers.insert("content-security-policy", csp.parse().unwrap());
     }
 
     response
