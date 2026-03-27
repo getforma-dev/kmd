@@ -72,136 +72,35 @@ static MUTATING_RATE_LIMITER: LazyLock<RateLimiter> = LazyLock::new(|| {
 /// Without this check, any website can call our API (including /api/shell/exec)
 /// by simply rebinding its DNS. This middleware blocks that by requiring the
 /// Host header to be an explicit localhost value.
-/// Check if a path + method combination is blocked for tunnel access.
-/// Blocked: shell exec, terminal, env secrets, file writes, process kills,
-/// script execution, chain rules, workspace modification.
-fn is_blocked_for_tunnel(path: &str, method: &axum::http::Method) -> bool {
-    // Always block shell exec and terminal
-    if path == "/api/shell/exec" { return true; }
-    if path.starts_with("/ws/terminal") { return true; }
-    if path.starts_with("/api/terminal/") { return true; }
+/// Check if a path is allowed through the tunnel (docs-only mode).
+/// Allowlist approach: only explicitly permitted paths pass through.
+/// Everything else is blocked. This is the inverse of a blocklist —
+/// safer because new endpoints are blocked by default.
+fn is_allowed_for_tunnel(path: &str, method: &axum::http::Method) -> bool {
+    // Docs: read-only access to documentation
+    if path == "/api/docs" && matches!(*method, axum::http::Method::GET) { return true; }
+    if path == "/api/docs/search" && matches!(*method, axum::http::Method::GET) { return true; }
+    if path.starts_with("/api/docs/") && matches!(*method, axum::http::Method::GET) { return true; }
 
-    // Block env file reading (contains secrets)
-    if path == "/api/env/file" || path == "/api/env/compare" { return true; }
+    // Bookmarks: read-only (needed for docs page UI)
+    if path == "/api/docs/bookmarks" && matches!(*method, axum::http::Method::GET) { return true; }
 
-    // Block doc writes/deletes (allow GET reads)
-    if path.starts_with("/api/docs/") && !matches!(*method, axum::http::Method::GET) {
-        return true;
-    }
+    // Workspace info: needed for docs page to resolve roots
+    if path == "/api/workspace" && matches!(*method, axum::http::Method::GET) { return true; }
 
-    // Block process killing
-    if path.contains("/kill") && matches!(*method, axum::http::Method::POST) {
-        return true;
-    }
+    // Git status: shown in sidebar
+    if path == "/api/git/status" && matches!(*method, axum::http::Method::GET) { return true; }
 
-    // Block script execution
-    if path == "/api/scripts/run" { return true; }
+    // Tunnel API: status checks
+    if path.starts_with("/api/tunnel") { return true; }
 
-    // Block chain rule creation/modification
-    if path.starts_with("/api/chains") && !matches!(*method, axum::http::Method::GET) {
-        return true;
-    }
+    // Health check
+    if path == "/api/health" { return true; }
 
-    // Block workspace modification
-    if path == "/api/workspace/add" || path == "/api/workspace/remove" {
-        return true;
-    }
+    // Main WebSocket: broadcast-only (server→client), needed for live doc updates
+    if path == "/ws" { return true; }
 
     false
-}
-
-/// Extract the tunnel token from a request (cookie or query param).
-fn extract_tunnel_token(req: &Request<Body>) -> Option<String> {
-    // Check cookie first
-    if let Some(cookie_header) = req.headers().get(header::COOKIE).and_then(|v| v.to_str().ok()) {
-        for pair in cookie_header.split(';') {
-            let pair = pair.trim();
-            if let Some(value) = pair.strip_prefix("kmd_tunnel_token=") {
-                return Some(value.to_string());
-            }
-        }
-    }
-
-    // Check query parameter
-    if let Some(query) = req.uri().query() {
-        for pair in query.split('&') {
-            if let Some(value) = pair.strip_prefix("token=") {
-                return Some(value.to_string());
-            }
-        }
-    }
-
-    None
-}
-
-/// The exact inline script used on the tunnel gate page.
-/// Defined as a constant so the hash always stays in sync with the content.
-const GATE_INLINE_SCRIPT: &str = r#"document.getElementById('gate-form').addEventListener('submit',async function(e){e.preventDefault();var t=document.getElementById('token').value.trim().toLowerCase();if(!t)return;var r=await fetch('/api/tunnel/verify',{method:'POST',headers:{'Content-Type':'application/json','X-KMD-Client':'1'},body:JSON.stringify({token:t})});if(r.ok){document.cookie='kmd_tunnel_token='+t+';path=/;SameSite=Strict;Secure';window.location.href='/'}else{document.getElementById('error').style.display='block';document.getElementById('token').value='';document.getElementById('token').focus()}})"#;
-
-/// SHA-256 hash of GATE_INLINE_SCRIPT, computed once at startup.
-/// Format: 'sha256-XXXX' for use in Content-Security-Policy headers.
-static GATE_SCRIPT_CSP_HASH: LazyLock<String> = LazyLock::new(|| {
-    let hash = Sha256::digest(GATE_INLINE_SCRIPT.as_bytes());
-    let encoded = BASE64.encode(hash);
-    format!("'sha256-{encoded}'")
-});
-
-/// HTML page shown to tunnel visitors who haven't entered the access token.
-/// Uses hash-based CSP — zero 'unsafe-inline', the browser only executes
-/// the script if its SHA-256 matches the hash declared in the CSP header.
-fn tunnel_gate_page() -> Response {
-    let script = GATE_INLINE_SCRIPT;
-    let csp = format!(
-        "default-src 'none'; script-src {}; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
-        *GATE_SCRIPT_CSP_HASH
-    );
-
-    let html = format!(r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>K.md — Access Required</title>
-<style>
-  *{{margin:0;padding:0;box-sizing:border-box}}
-  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1d2021;color:#ebdbb2;display:flex;align-items:center;justify-content:center;min-height:100vh}}
-  .gate{{text-align:center;max-width:360px;padding:40px 24px}}
-  .logo{{font-size:32px;font-weight:700;margin-bottom:8px}}
-  .logo .dot{{color:#fe8019}}
-  .logo .md{{color:#83a598}}
-  .subtitle{{color:#a89984;font-size:14px;margin-bottom:32px}}
-  label{{display:block;color:#a89984;font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;text-align:left}}
-  input{{width:100%;padding:12px 16px;background:#282828;border:1px solid #3c3836;border-radius:8px;color:#ebdbb2;font-size:18px;letter-spacing:4px;text-align:center;font-family:monospace;outline:none}}
-  input:focus{{border-color:#83a598}}
-  button{{width:100%;margin-top:16px;padding:12px;background:#83a598;color:#1d2021;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}}
-  button:hover{{background:#8ec07c}}
-  .error{{color:#fb4934;font-size:13px;margin-top:12px;display:none}}
-  .hint{{color:#665c54;font-size:12px;margin-top:24px}}
-</style>
-</head>
-<body>
-<div class="gate">
-  <div class="logo">K<span class="dot">.</span><span class="md">md</span></div>
-  <p class="subtitle">This workspace is shared via a secure tunnel</p>
-  <form id="gate-form">
-    <label for="token">Access Code</label>
-    <input id="token" type="text" maxlength="6" autocomplete="off" autofocus placeholder="······">
-    <button type="submit">Enter</button>
-    <p class="error" id="error">Invalid access code</p>
-  </form>
-  <p class="hint">Ask the workspace owner for the 6-character access code</p>
-  <p class="hint" style="margin-top: 12px; color: #83a598;">If you are the owner, use your localhost URL instead.<br>This tunnel link is for sharing with others.</p>
-</div>
-<script>{script}</script>
-</body>
-</html>"#);
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-        .header("content-security-policy", csp)
-        .body(Body::from(html))
-        .unwrap()
 }
 
 async fn validate_host(
@@ -236,58 +135,27 @@ async fn validate_host(
             .into_response();
     }
 
-    // ── Tunnel security: token gate + endpoint blocking ──────────────
+    // ── Tunnel security: docs-only mode ─────────────────────────────
+    // Tunnel visitors can only view documentation. Everything else is blocked.
+    // Full access (terminal, scripts, exec) requires GateWASM auth (future).
     if is_tunnel_host {
         let path = req.uri().path().to_string();
         let method = req.method().clone();
 
-        // Always allow: tunnel API, health check, and actual file assets (JS/CSS/fonts/images).
-        // The root "/" and SPA routes MUST go through the token gate.
+        // Static assets (JS, CSS, fonts, images) always pass through —
+        // needed for the docs page to render.
         let has_file_ext = path.rsplit('/').next().is_some_and(|seg| seg.contains('.'));
-        let is_actual_asset = has_file_ext && !path.starts_with("/api/");
-        let is_tunnel_api = path.starts_with("/api/tunnel") || path == "/api/health";
+        let is_static_asset = has_file_ext && !path.starts_with("/api/");
 
-        if !is_tunnel_api && !is_actual_asset {
-            // 1. Check for valid tunnel token
-            let expected_token = state.tunnel_token();
-            let provided_token = extract_tunnel_token(&req);
+        // SPA root "/" passes through (serves index.html for the docs page)
+        let is_spa_root = path == "/";
 
-            let token_valid = match (&expected_token, &provided_token) {
-                (Some(expected), Some(provided)) => {
-                    // Constant-time comparison to prevent timing attacks
-                    expected.len() == provided.len()
-                        && expected.as_bytes().iter().zip(provided.as_bytes().iter())
-                            .fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
-                }
-                _ => false,
-            };
-
-            if !token_valid {
-                // No valid token — serve the gate page for browser requests,
-                // or 403 for API requests
-                let accepts_html = req.headers()
-                    .get(header::ACCEPT)
-                    .and_then(|v| v.to_str().ok())
-                    .is_some_and(|v| v.contains("text/html"));
-
-                if accepts_html {
-                    return tunnel_gate_page();
-                } else {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        "Forbidden: tunnel access token required",
-                    ).into_response();
-                }
-            }
-
-            // 2. Block dangerous endpoints even with a valid token
-            if is_blocked_for_tunnel(&path, &method) {
-                tracing::warn!("Blocked dangerous tunnel request: {method} {path}");
-                return (
-                    StatusCode::FORBIDDEN,
-                    "Forbidden: this endpoint is not available through the tunnel",
-                ).into_response();
-            }
+        if !is_static_asset && !is_spa_root && !is_allowed_for_tunnel(&path, &method) {
+            tracing::debug!("Tunnel blocked: {method} {path}");
+            return (
+                StatusCode::FORBIDDEN,
+                "This feature requires GateWASM authentication. Tunnel sharing is docs-only.",
+            ).into_response();
         }
     }
 
@@ -448,8 +316,7 @@ pub fn build_router(state: AppState) -> Router {
         // Tunnel (cloudflared quick tunnel)
         .route("/api/tunnel", get(api_tunnel_status_handler))
         .route("/api/tunnel/start", post(api_tunnel_start_handler))
-        .route("/api/tunnel/stop", post(api_tunnel_stop_handler))
-        .route("/api/tunnel/verify", post(api_tunnel_verify_handler));
+        .route("/api/tunnel/stop", post(api_tunnel_stop_handler));
 
     Router::new()
         .route("/ws", get(ws::ws_handler))
@@ -1839,23 +1706,11 @@ async fn api_env_compare_handler(
 // ---------------------------------------------------------------------------
 
 /// `GET /api/tunnel` — Get current tunnel status.
-/// Token is only included when accessed from localhost (the owner's machine).
-async fn api_tunnel_status_handler(
-    State(state): State<AppState>,
-    req: Request<Body>,
-) -> impl IntoResponse {
+async fn api_tunnel_status_handler(State(state): State<AppState>) -> impl IntoResponse {
     let url = state.tunnel_url();
-    let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
-    let host_name = host.split(':').next().unwrap_or("");
-    let is_localhost = matches!(host_name, "localhost" | "127.0.0.1" | "[::1]");
-
-    // Only reveal the token to localhost (the workspace owner)
-    let token = if is_localhost { state.tunnel_token() } else { None };
-
     Json(serde_json::json!({
         "active": url.is_some(),
         "url": url,
-        "token": token,
     }))
 }
 
@@ -1863,13 +1718,10 @@ async fn api_tunnel_status_handler(
 async fn api_tunnel_start_handler(State(state): State<AppState>) -> impl IntoResponse {
     let port = state.server_port();
     match tunnel::start_tunnel(&state, port).await {
-        Ok(url) => {
-            let token = state.tunnel_token();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({ "active": true, "url": url, "token": token })),
-            ).into_response()
-        }
+        Ok(url) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "active": true, "url": url })),
+        ).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),
@@ -1888,39 +1740,8 @@ async fn api_tunnel_stop_handler(State(state): State<AppState>) -> impl IntoResp
     }
 }
 
-/// Body for token verification.
-#[derive(Deserialize)]
-struct TunnelVerifyBody {
-    token: String,
-}
-
-/// `POST /api/tunnel/verify` — Verify a tunnel access token.
-/// Returns 200 if valid, 403 if invalid. Used by the gate page.
-async fn api_tunnel_verify_handler(
-    State(state): State<AppState>,
-    Json(body): Json<TunnelVerifyBody>,
-) -> impl IntoResponse {
-    let expected = state.tunnel_token();
-    let provided = body.token.trim().to_lowercase();
-
-    let valid = match &expected {
-        Some(expected) => {
-            expected.len() == provided.len()
-                && expected.as_bytes().iter().zip(provided.as_bytes().iter())
-                    .fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
-        }
-        None => false,
-    };
-
-    if valid {
-        Json(serde_json::json!({ "ok": true })).into_response()
-    } else {
-        (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false }))).into_response()
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Tests: tunnel security
+// Tests: tunnel security (docs-only allowlist)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1928,216 +1749,160 @@ mod tunnel_security_tests {
     use super::*;
     use axum::http::Method;
 
-    // ── is_blocked_for_tunnel ────────────────────────────────────────
+    // ── Allowed: docs endpoints ──────────────────────────────────────
 
     #[test]
-    fn blocks_shell_exec() {
-        assert!(is_blocked_for_tunnel("/api/shell/exec", &Method::POST));
+    fn allows_docs_tree() {
+        assert!(is_allowed_for_tunnel("/api/docs", &Method::GET));
     }
 
     #[test]
-    fn blocks_terminal_websocket() {
-        assert!(is_blocked_for_tunnel("/ws/terminal", &Method::GET));
-        assert!(is_blocked_for_tunnel("/ws/terminal?session=abc", &Method::GET));
+    fn allows_docs_search() {
+        assert!(is_allowed_for_tunnel("/api/docs/search", &Method::GET));
     }
 
     #[test]
-    fn blocks_terminal_api() {
-        assert!(is_blocked_for_tunnel("/api/terminal/sessions", &Method::GET));
-        assert!(is_blocked_for_tunnel("/api/terminal/sessions/abc/kill", &Method::POST));
+    fn allows_docs_read() {
+        assert!(is_allowed_for_tunnel("/api/docs/README.md", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/docs/deep/nested/file.md", &Method::GET));
     }
 
     #[test]
-    fn blocks_env_file_reading() {
-        assert!(is_blocked_for_tunnel("/api/env/file", &Method::GET));
-        assert!(is_blocked_for_tunnel("/api/env/compare", &Method::GET));
+    fn allows_docs_bookmarks_read() {
+        assert!(is_allowed_for_tunnel("/api/docs/bookmarks", &Method::GET));
     }
 
     #[test]
-    fn blocks_script_execution() {
-        assert!(is_blocked_for_tunnel("/api/scripts/run", &Method::POST));
+    fn allows_docs_annotations_read() {
+        assert!(is_allowed_for_tunnel("/api/docs/annotations", &Method::GET));
     }
 
-    #[test]
-    fn blocks_process_killing() {
-        assert!(is_blocked_for_tunnel("/api/processes/abc/kill", &Method::POST));
-        assert!(is_blocked_for_tunnel("/api/ports/3000/kill", &Method::POST));
-    }
-
-    #[test]
-    fn blocks_doc_writes() {
-        assert!(is_blocked_for_tunnel("/api/docs/README.md", &Method::PUT));
-        assert!(is_blocked_for_tunnel("/api/docs/README.md", &Method::DELETE));
-        assert!(is_blocked_for_tunnel("/api/docs/README.md", &Method::PATCH));
-    }
-
-    #[test]
-    fn blocks_chain_mutations() {
-        assert!(is_blocked_for_tunnel("/api/chains", &Method::POST));
-        assert!(is_blocked_for_tunnel("/api/chains/abc", &Method::DELETE));
-        assert!(is_blocked_for_tunnel("/api/chains/abc/toggle", &Method::POST));
-    }
-
-    #[test]
-    fn blocks_workspace_modification() {
-        assert!(is_blocked_for_tunnel("/api/workspace/add", &Method::POST));
-        assert!(is_blocked_for_tunnel("/api/workspace/remove", &Method::POST));
-    }
-
-    // ── Allowed read-only endpoints ──────────────────────────────────
-
-    #[test]
-    fn allows_doc_reads() {
-        assert!(!is_blocked_for_tunnel("/api/docs/README.md", &Method::GET));
-        assert!(!is_blocked_for_tunnel("/api/docs/search", &Method::GET));
-        assert!(!is_blocked_for_tunnel("/api/docs", &Method::GET));
-    }
-
-    #[test]
-    fn allows_script_listing() {
-        assert!(!is_blocked_for_tunnel("/api/scripts", &Method::GET));
-    }
-
-    #[test]
-    fn allows_process_listing() {
-        assert!(!is_blocked_for_tunnel("/api/processes", &Method::GET));
-    }
-
-    #[test]
-    fn allows_port_listing() {
-        assert!(!is_blocked_for_tunnel("/api/ports", &Method::GET));
-        assert!(!is_blocked_for_tunnel("/api/ports/scan", &Method::POST));
-    }
+    // ── Allowed: infrastructure ──────────────────────────────────────
 
     #[test]
     fn allows_workspace_read() {
-        assert!(!is_blocked_for_tunnel("/api/workspace", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/workspace", &Method::GET));
     }
 
     #[test]
     fn allows_git_status() {
-        assert!(!is_blocked_for_tunnel("/api/git/status", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/git/status", &Method::GET));
     }
 
     #[test]
-    fn allows_health_check() {
-        assert!(!is_blocked_for_tunnel("/api/health", &Method::GET));
+    fn allows_health() {
+        assert!(is_allowed_for_tunnel("/api/health", &Method::GET));
     }
 
     #[test]
-    fn allows_chain_listing() {
-        assert!(!is_blocked_for_tunnel("/api/chains", &Method::GET));
+    fn allows_tunnel_api() {
+        assert!(is_allowed_for_tunnel("/api/tunnel", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/tunnel/start", &Method::POST));
     }
 
     #[test]
-    fn allows_env_listing() {
-        // Listing env files (masked values) is OK — reading specific files is blocked
-        assert!(!is_blocked_for_tunnel("/api/env", &Method::GET));
+    fn allows_main_websocket() {
+        assert!(is_allowed_for_tunnel("/ws", &Method::GET));
     }
 
-    // ── extract_tunnel_token ─────────────────────────────────────────
+    // ── Blocked: everything else ─────────────────────────────────────
 
     #[test]
-    fn extracts_token_from_cookie() {
-        let req = Request::builder()
-            .header(header::COOKIE, "kmd_tunnel_token=abc123; other=value")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(extract_tunnel_token(&req), Some("abc123".to_string()));
+    fn blocks_shell_exec() {
+        assert!(!is_allowed_for_tunnel("/api/shell/exec", &Method::POST));
     }
 
     #[test]
-    fn extracts_token_from_query_param() {
-        let req = Request::builder()
-            .uri("/?token=xyz789&other=value")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(extract_tunnel_token(&req), Some("xyz789".to_string()));
+    fn blocks_terminal_websocket() {
+        assert!(!is_allowed_for_tunnel("/ws/terminal", &Method::GET));
     }
 
     #[test]
-    fn cookie_takes_precedence_over_query() {
-        let req = Request::builder()
-            .uri("/?token=fromquery")
-            .header(header::COOKIE, "kmd_tunnel_token=fromcookie")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(extract_tunnel_token(&req), Some("fromcookie".to_string()));
+    fn blocks_terminal_api() {
+        assert!(!is_allowed_for_tunnel("/api/terminal/sessions", &Method::GET));
     }
 
     #[test]
-    fn returns_none_when_no_token() {
-        let req = Request::builder()
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(extract_tunnel_token(&req), None);
+    fn blocks_script_execution() {
+        assert!(!is_allowed_for_tunnel("/api/scripts/run", &Method::POST));
     }
 
     #[test]
-    fn returns_none_for_wrong_cookie_name() {
-        let req = Request::builder()
-            .header(header::COOKIE, "other_cookie=abc123")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(extract_tunnel_token(&req), None);
+    fn blocks_script_listing() {
+        assert!(!is_allowed_for_tunnel("/api/scripts", &Method::GET));
     }
 
     #[test]
-    fn returns_none_for_wrong_query_param() {
-        let req = Request::builder()
-            .uri("/?auth=abc123")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(extract_tunnel_token(&req), None);
-    }
-
-    // ── Edge cases: ensure no bypass paths ───────────────────────────
-
-    #[test]
-    fn blocks_kill_in_any_path_position() {
-        // Ensure someone can't craft a URL to bypass the /kill check
-        assert!(is_blocked_for_tunnel("/api/processes/../../kill", &Method::POST));
-        assert!(is_blocked_for_tunnel("/api/anything/kill", &Method::POST));
+    fn blocks_process_listing() {
+        assert!(!is_allowed_for_tunnel("/api/processes", &Method::GET));
     }
 
     #[test]
-    fn kill_not_blocked_for_get() {
-        // GET requests to /kill paths should not be blocked (they don't exist, but shouldn't 403)
-        assert!(!is_blocked_for_tunnel("/api/processes/abc/kill", &Method::GET));
+    fn blocks_process_kill() {
+        assert!(!is_allowed_for_tunnel("/api/processes/abc/kill", &Method::POST));
     }
 
     #[test]
-    fn blocks_doc_annotation_writes_through_tunnel() {
-        // Annotations are under /api/docs/ — POST should be blocked
-        assert!(is_blocked_for_tunnel("/api/docs/annotations", &Method::POST));
+    fn blocks_port_listing() {
+        assert!(!is_allowed_for_tunnel("/api/ports", &Method::GET));
     }
 
     #[test]
-    fn allows_annotation_reads_through_tunnel() {
-        assert!(!is_blocked_for_tunnel("/api/docs/annotations", &Method::GET));
-    }
-
-    // ── CSP hash integrity ───────────────────────────────────────────
-
-    #[test]
-    fn gate_script_hash_matches_content() {
-        // Verify the LazyLock hash matches a fresh computation.
-        // If GATE_INLINE_SCRIPT changes, this test confirms the hash auto-updates.
-        let fresh_hash = {
-            let hash = Sha256::digest(GATE_INLINE_SCRIPT.as_bytes());
-            let encoded = BASE64.encode(hash);
-            format!("'sha256-{encoded}'")
-        };
-        assert_eq!(*GATE_SCRIPT_CSP_HASH, fresh_hash);
+    fn blocks_port_scan() {
+        assert!(!is_allowed_for_tunnel("/api/ports/scan", &Method::POST));
     }
 
     #[test]
-    fn gate_script_hash_is_sha256_format() {
-        let hash = &*GATE_SCRIPT_CSP_HASH;
-        assert!(hash.starts_with("'sha256-"), "CSP hash must start with 'sha256-");
-        assert!(hash.ends_with('\''), "CSP hash must end with single quote");
-        // Base64 content between the prefix and suffix
-        let b64 = &hash[8..hash.len() - 1];
-        assert_eq!(b64.len(), 44, "SHA-256 base64 is always 44 chars (including padding)");
+    fn blocks_port_kill() {
+        assert!(!is_allowed_for_tunnel("/api/ports/3000/kill", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_env_listing() {
+        assert!(!is_allowed_for_tunnel("/api/env", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_env_file() {
+        assert!(!is_allowed_for_tunnel("/api/env/file", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_chains() {
+        assert!(!is_allowed_for_tunnel("/api/chains", &Method::GET));
+        assert!(!is_allowed_for_tunnel("/api/chains", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_workspace_modification() {
+        assert!(!is_allowed_for_tunnel("/api/workspace/add", &Method::POST));
+        assert!(!is_allowed_for_tunnel("/api/workspace/remove", &Method::POST));
+    }
+
+    // ── Blocked: doc mutations ───────────────────────────────────────
+
+    #[test]
+    fn blocks_doc_writes() {
+        assert!(!is_allowed_for_tunnel("/api/docs/README.md", &Method::PUT));
+        assert!(!is_allowed_for_tunnel("/api/docs/README.md", &Method::DELETE));
+        assert!(!is_allowed_for_tunnel("/api/docs/README.md", &Method::PATCH));
+    }
+
+    #[test]
+    fn blocks_annotation_writes() {
+        assert!(!is_allowed_for_tunnel("/api/docs/annotations", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_bookmark_writes() {
+        assert!(!is_allowed_for_tunnel("/api/docs/bookmarks", &Method::POST));
+    }
+
+    // ── Default deny: unknown endpoints are blocked ──────────────────
+
+    #[test]
+    fn blocks_unknown_api_paths() {
+        assert!(!is_allowed_for_tunnel("/api/something/new", &Method::GET));
+        assert!(!is_allowed_for_tunnel("/api/future/feature", &Method::POST));
     }
 }

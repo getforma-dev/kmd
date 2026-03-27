@@ -95,8 +95,6 @@ pub struct AppStateInner {
     pub auth_token: String,
     /// Active tunnel URL (e.g. "https://abc.trycloudflare.com").
     pub tunnel_url: Mutex<Option<String>>,
-    /// Access token required for tunnel requests (generated on tunnel start).
-    pub tunnel_token: Mutex<Option<String>>,
     /// The cloudflared child process (so we can kill it on stop).
     pub tunnel_process: Mutex<Option<tokio::process::Child>>,
 }
@@ -123,7 +121,6 @@ impl AppState {
                 chain_rules: Mutex::new(Vec::new()),
                 auth_token,
                 tunnel_url: Mutex::new(None),
-                tunnel_token: Mutex::new(None),
                 tunnel_process: Mutex::new(None),
             }),
         }
@@ -155,7 +152,6 @@ impl AppState {
                 chain_rules: Mutex::new(Vec::new()),
                 auth_token,
                 tunnel_url: Mutex::new(None),
-                tunnel_token: Mutex::new(None),
                 tunnel_process: Mutex::new(None),
             }),
         }
@@ -230,16 +226,6 @@ impl AppState {
     /// Set the tunnel URL.
     pub fn set_tunnel_url(&self, url: Option<String>) {
         *self.inner.tunnel_url.lock().expect("Tunnel URL mutex poisoned") = url;
-    }
-
-    /// Get the current tunnel access token.
-    pub fn tunnel_token(&self) -> Option<String> {
-        self.inner.tunnel_token.lock().expect("Tunnel token mutex poisoned").clone()
-    }
-
-    /// Set the tunnel access token.
-    pub fn set_tunnel_token(&self, token: Option<String>) {
-        *self.inner.tunnel_token.lock().expect("Tunnel token mutex poisoned") = token;
     }
 
     /// Check if a tunnel process is running.

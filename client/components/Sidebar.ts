@@ -53,8 +53,6 @@ export function Sidebar(props: {
   theme?: () => string;
   crashCount?: () => number;
   tunnelUrl?: () => string | null;
-  tunnelToken?: () => string | null;
-  onTunnelToken?: (token: string | null) => void;
   onToggleTheme?: () => void;
   onHelp?: () => void;
   onWorkspaceSettings?: () => void;
@@ -219,13 +217,8 @@ export function Sidebar(props: {
       // Start tunnel
       kmdFetch('/api/tunnel/start', { method: 'POST' })
         .then(r => r.json())
-        .then((data: { error?: string; token?: string }) => {
-          if (data.error) {
-            alert(data.error);
-          }
-          if (data.token) {
-            props.onTunnelToken?.(data.token);
-          }
+        .then((data: { error?: string }) => {
+          if (data.error) alert(data.error);
         })
         .catch(() => {})
         .finally(() => setTunnelLoading(false));
@@ -294,22 +287,10 @@ export function Sidebar(props: {
               style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
             }, 'Copied!'),
           ),
-          // Access code display
-          createShow(
-            () => !!props.tunnelToken?.(),
-            () => h('div', {
-              style: 'margin-top: 4px; padding: 4px 8px; background: var(--gruvbox-bg1); border-radius: 4px; display: flex; align-items: center; justify-content: space-between;',
-            },
-              h('span', { style: 'font-size: 10px; color: var(--gruvbox-fg2);' }, 'Code:'),
-              h('span', {
-                style: 'font-size: 13px; font-family: var(--font-code); color: var(--gruvbox-yellow); letter-spacing: 2px; font-weight: 700;',
-              }, () => props.tunnelToken?.() || ''),
-            ),
-          ),
-          // Warning
+          // Docs-only notice
           h('div', {
-            style: 'margin-top: 6px; padding: 4px 8px; font-size: 9px; color: var(--gruvbox-orange); line-height: 1.3;',
-          }, 'Share the URL + code with people you trust. Read-only access — no terminal or shell.'),
+            style: 'margin-top: 6px; padding: 4px 8px; font-size: 9px; color: var(--gruvbox-fg2); line-height: 1.4;',
+          }, 'Sharing docs only. Scripts, terminal, and exec require GateWASM auth.'),
         ),
       ),
     );
