@@ -1,5 +1,6 @@
-import { h, createSignal, createEffect, onCleanup } from '@getforma/core';
+import { h, createSignal, createEffect, createShow, onCleanup } from '@getforma/core';
 import { iconDocs, iconScripts, iconPorts, iconTerminal } from './icons';
+import { kmdFetch } from '../lib/security';
 
 export type Route = 'docs' | 'scripts' | 'ports' | 'terminal';
 
@@ -51,11 +52,20 @@ export function Sidebar(props: {
   workspaceName?: () => string;
   theme?: () => string;
   crashCount?: () => number;
+  tunnelUrl?: () => string | null;
+  isTunnelVisitor?: boolean;
   onToggleTheme?: () => void;
   onHelp?: () => void;
   onWorkspaceSettings?: () => void;
 }) {
-  const navItems = (['docs', 'scripts', 'ports', 'terminal'] as const).map((key) =>
+  const isTunnel = props.isTunnelVisitor ?? false;
+
+  // Tunnel visitors only see the Docs tab
+  const visibleTabs = isTunnel
+    ? (['docs'] as const)
+    : (['docs', 'scripts', 'ports', 'terminal'] as const);
+
+  const navItems = visibleTabs.map((key) =>
     h('a', {
       class: () => `nav-item${props.route() === key ? ' active' : ''}`,
       href: `#${key}`,
@@ -196,6 +206,120 @@ export function Sidebar(props: {
     return container;
   }
 
+  // ---------------------------------------------------------------------------
+  // Tunnel share button & status
+  // ---------------------------------------------------------------------------
+
+  const [tunnelLoading, setTunnelLoading] = createSignal(false);
+  const [tunnelCopied, setTunnelCopied] = createSignal(false);
+
+  function toggleTunnel() {
+    const url = props.tunnelUrl?.();
+    setTunnelLoading(true);
+
+    if (url) {
+      // Stop tunnel
+      kmdFetch('/api/tunnel/stop', { method: 'POST' })
+        .finally(() => setTunnelLoading(false));
+    } else {
+      // Start tunnel
+      kmdFetch('/api/tunnel/start', { method: 'POST' })
+        .then(r => r.json())
+        .then((data: { error?: string }) => {
+          if (data.error) alert(data.error);
+        })
+        .catch(() => {})
+        .finally(() => setTunnelLoading(false));
+    }
+  }
+
+  function copyTunnelUrl() {
+    const url = props.tunnelUrl?.();
+    if (url) {
+      navigator.clipboard.writeText(url).then(() => {
+        setTunnelCopied(true);
+        setTimeout(() => setTunnelCopied(false), 2000);
+      });
+    }
+  }
+
+  function TunnelSection() {
+    return h('div', { style: 'padding: 0 12px 8px;' },
+      // Share button (toggle)
+      h('button', {
+        style: () => {
+          const active = !!props.tunnelUrl?.();
+          const loading = tunnelLoading();
+          return `
+            width: 100%; padding: 6px 10px; border: 1px solid ${active ? 'var(--gruvbox-green)' : 'var(--gruvbox-gray)'};
+            border-radius: 6px; background: ${active ? 'rgba(142,192,124,0.1)' : 'transparent'};
+            color: ${active ? 'var(--gruvbox-green)' : 'var(--gruvbox-fg2)'};
+            font-size: 11px; font-family: var(--font-code); cursor: ${loading ? 'wait' : 'pointer'};
+            display: flex; align-items: center; gap: 6px; transition: all 0.15s;
+            opacity: ${loading ? '0.6' : '1'};
+          `;
+        },
+        onClick: () => !tunnelLoading() && toggleTunnel(),
+        title: () => props.tunnelUrl?.() ? 'Stop sharing' : 'Share via public URL',
+      },
+        // Globe icon
+        h('svg', {
+          viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+          'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+          style: 'width: 14px; height: 14px; flex-shrink: 0;',
+        },
+          h('circle', { cx: '12', cy: '12', r: '10' }),
+          h('line', { x1: '2', y1: '12', x2: '22', y2: '12' }),
+          h('path', { d: 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' }),
+        ),
+        // Green pulsing dot when live
+        h('span', {
+          style: () => props.tunnelUrl?.()
+            ? 'width: 6px; height: 6px; border-radius: 50%; background: var(--gruvbox-green); flex-shrink: 0; animation: pulse 2s ease-in-out infinite;'
+            : 'display: none;',
+        }),
+        h('span', null, () => {
+          if (tunnelLoading()) return 'Connecting...';
+          return props.tunnelUrl?.() ? 'Live' : 'Share';
+        }),
+      ),
+      // URL display (when active)
+      createShow(
+        () => !!props.tunnelUrl?.(),
+        () => h('div', { style: 'margin-top: 6px;' },
+          // URL (click to copy)
+          h('div', {
+            style: 'padding: 5px 8px; background: var(--gruvbox-bg1); border-radius: 4px; font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-aqua); word-break: break-all; cursor: pointer; position: relative;',
+            onClick: copyTunnelUrl,
+            title: 'Click to copy URL',
+          },
+            h('span', null, () => {
+              const url = props.tunnelUrl?.() || '';
+              return url.replace('https://', '');
+            }),
+            h('span', {
+              style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
+            }, 'Copied!'),
+          ),
+          // Docs-only warning + upgrade CTA
+          h('div', {
+            style: 'margin-top: 6px; padding: 6px 8px; background: rgba(250,189,47,0.08); border: 1px solid rgba(250,189,47,0.2); border-radius: 4px; font-size: 9px; line-height: 1.5;',
+          },
+            h('div', { style: 'color: var(--gruvbox-yellow); font-weight: 600;' }, 'Docs only — not authenticated'),
+            h('div', { style: 'color: var(--gruvbox-fg2); margin-top: 3px;' },
+              'Unlock terminal, scripts & full remote access with ',
+              h('a', {
+                href: 'https://auth.getforma.dev/platform/onboarding',
+                target: '_blank',
+                style: 'color: var(--gruvbox-yellow); text-decoration: underline; font-weight: 600;',
+              }, 'GateWASM'),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   return h('aside', { class: 'sidebar' },
     h('div', { class: 'sidebar-header' },
       h('span', { class: 'sidebar-logo' },
@@ -212,18 +336,41 @@ export function Sidebar(props: {
     ),
     GitStatusIndicator(),
     h('nav', { class: 'sidebar-nav' }, ...navItems),
+    // Tunnel section: share controls for owner, branding for visitor
+    isTunnel
+      ? h('div', { style: 'padding: 12px 16px; margin-top: auto;' },
+          h('div', { style: 'font-size: 9px; color: var(--gruvbox-gray); line-height: 1.4; text-align: center;' },
+            'Shared workspace — docs only',
+          ),
+          h('div', { style: 'font-size: 10px; text-align: center; margin-top: 8px;' },
+            'Powered by ',
+            h('span', { style: 'font-weight: 700;' },
+              'K',
+              h('span', { style: 'color: var(--gruvbox-orange);' }, '.'),
+              h('span', { style: 'color: var(--gruvbox-aqua);' }, 'md'),
+            ),
+          ),
+        )
+      : TunnelSection(),
     h('div', { class: 'sidebar-footer' },
-      h('button', {
-        class: 'theme-toggle-btn',
-        onClick: () => props.onHelp?.(),
-        title: 'Help & shortcuts (?)',
-        style: 'font-size: 12px;',
-      }, '?'),
-      h('button', {
-        class: 'theme-toggle-btn',
-        onClick: () => props.onWorkspaceSettings?.(),
-        title: 'Workspace settings',
-      },
+      // Help and settings: only for owner (localhost)
+      createShow(
+        () => !isTunnel,
+        () => h('button', {
+          class: 'theme-toggle-btn',
+          onClick: () => props.onHelp?.(),
+          title: 'Help & shortcuts (?)',
+          style: 'font-size: 12px;',
+        }, '?'),
+        () => h('span', { style: 'display: none;' }),
+      ),
+      createShow(
+        () => !isTunnel,
+        () => h('button', {
+          class: 'theme-toggle-btn',
+          onClick: () => props.onWorkspaceSettings?.(),
+          title: 'Workspace settings',
+        },
         h('svg', {
           viewBox: '0 0 24 24',
           fill: 'none',
@@ -237,6 +384,9 @@ export function Sidebar(props: {
           h('path', { d: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z' }),
         ),
       ),
+        () => h('span', { style: 'display: none;' }),
+      ),
+      // Theme toggle: available to everyone (only affects their browser)
       ThemeToggle(),
     ),
   );

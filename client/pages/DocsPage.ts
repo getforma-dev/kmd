@@ -120,7 +120,9 @@ export function DocsPage(props?: {
   onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void);
   focusMode?: () => boolean;
   setFocusMode?: (v: boolean) => void;
+  readOnly?: boolean;
 }) {
+  const readOnly = props?.readOnly ?? false;
   // State signals
   const [roots, setRoots] = createSignal<RootTreeData[]>([]);
   const [selectedPath, setSelectedPath] = createSignal('');
@@ -587,7 +589,7 @@ export function DocsPage(props?: {
 
   let annotationLock = false;
   function createAnnotation(highlightText: string, note: string, color: string) {
-    if (annotationLock) return;
+    if (readOnly || annotationLock) return;
     annotationLock = true;
     const path = selectedPath();
     const root = selectedRoot();
@@ -628,6 +630,7 @@ export function DocsPage(props?: {
   }
 
   function deleteAnnotation(id: number) {
+    if (readOnly) return;
     kmdFetch(`/api/docs/annotations/${id}`, { method: 'DELETE' })
       .then(() => fetchAnnotations())
       .catch(() => {});
@@ -645,6 +648,7 @@ export function DocsPage(props?: {
   }
 
   function createBookmark(headingId: string, headingText: string) {
+    if (readOnly) return;
     const path = selectedPath();
     const root = selectedRoot();
     kmdFetch('/api/docs/bookmarks', {
@@ -657,6 +661,7 @@ export function DocsPage(props?: {
   }
 
   function deleteBookmark(id: number) {
+    if (readOnly) return;
     kmdFetch(`/api/docs/bookmarks/${id}`, { method: 'DELETE' })
       .then(() => fetchBookmarks())
       .catch(() => {});
@@ -979,9 +984,9 @@ export function DocsPage(props?: {
             onClick: () => setShowBookmarks(!showBookmarks()),
             title: 'Bookmarks',
           }, () => { const total = bookmarks().length + getStarredPaths().length; return `Bookmarks${total > 0 ? ` (${total})` : ''}`; }),
-          // Edit button
+          // Edit button (readOnly check added to condition)
           createShow(
-            () => !!selectedPath() && !editMode(),
+            () => !readOnly && !!selectedPath() && !editMode(),
             () => h('button', {
               class: 'btn btn-ghost',
               style: 'padding: 2px 8px; font-size: 10px; flex-shrink: 0;',
@@ -991,7 +996,7 @@ export function DocsPage(props?: {
           ),
           // Save / Cancel (edit mode)
           createShow(
-            () => editMode(),
+            () => !readOnly && editMode(),
             () => h('div', { style: 'display: flex; gap: 4px;' },
               h('button', {
                 class: 'btn btn-primary',
@@ -1009,7 +1014,7 @@ export function DocsPage(props?: {
           ),
           // Delete button
           createShow(
-            () => !!selectedPath(),
+            () => !readOnly && !!selectedPath(),
             () => h('button', {
               class: 'btn btn-ghost',
               style: 'padding: 2px 8px; font-size: 10px; color: var(--gruvbox-red); flex-shrink: 0;',
@@ -1049,7 +1054,9 @@ export function DocsPage(props?: {
               panel.innerHTML = '';
 
               if (bms.length === 0 && starred.length === 0) {
-                panel.innerHTML = '<div style="color: var(--gruvbox-gray); font-size: 12px; padding: 4px 0;">No bookmarks yet. Star files in the tree or bookmark headings in the TOC.</div>';
+                panel.innerHTML = readOnly
+                  ? '<div style="color: var(--gruvbox-gray); font-size: 12px; padding: 4px 0;">No bookmarks in this workspace.</div>'
+                  : '<div style="color: var(--gruvbox-gray); font-size: 12px; padding: 4px 0;">No bookmarks yet. Star files in the tree or bookmark headings in the TOC.</div>';
                 return;
               }
 
@@ -1075,14 +1082,16 @@ export function DocsPage(props?: {
                   name.title = filePath;
                   row.appendChild(name);
 
-                  const unstarBtn = document.createElement('button');
-                  unstarBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; margin-left: auto; flex-shrink: 0; padding: 0 4px; opacity: 0; transition: opacity 0.1s ease;';
-                  unstarBtn.textContent = '×';
-                  unstarBtn.onclick = (e) => { e.stopPropagation(); toggleStar(filePath); };
-                  row.appendChild(unstarBtn);
+                  if (!readOnly) {
+                    const unstarBtn = document.createElement('button');
+                    unstarBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; margin-left: auto; flex-shrink: 0; padding: 0 4px; opacity: 0; transition: opacity 0.1s ease;';
+                    unstarBtn.textContent = '×';
+                    unstarBtn.onclick = (e) => { e.stopPropagation(); toggleStar(filePath); };
+                    row.appendChild(unstarBtn);
 
-                  row.addEventListener('mouseenter', () => { unstarBtn.style.opacity = '1'; });
-                  row.addEventListener('mouseleave', () => { unstarBtn.style.opacity = '0'; });
+                    row.addEventListener('mouseenter', () => { unstarBtn.style.opacity = '1'; });
+                    row.addEventListener('mouseleave', () => { unstarBtn.style.opacity = '0'; });
+                  }
                   row.onclick = () => {
                     // Resolve the correct root for this starred file
                     const matchedRoot = roots().find(r =>
@@ -1118,14 +1127,16 @@ export function DocsPage(props?: {
                   headingLabel.textContent = bm.heading_text;
                   row.appendChild(headingLabel);
 
-                  const removeBtn = document.createElement('button');
-                  removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; margin-left: auto; flex-shrink: 0; padding: 0 4px; opacity: 0; transition: opacity 0.1s ease;';
-                  removeBtn.textContent = '×';
-                  removeBtn.onclick = (e) => { e.stopPropagation(); deleteBookmark(bm.id); };
-                  row.appendChild(removeBtn);
+                  if (!readOnly) {
+                    const removeBtn = document.createElement('button');
+                    removeBtn.style.cssText = 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; margin-left: auto; flex-shrink: 0; padding: 0 4px; opacity: 0; transition: opacity 0.1s ease;';
+                    removeBtn.textContent = '×';
+                    removeBtn.onclick = (e) => { e.stopPropagation(); deleteBookmark(bm.id); };
+                    row.appendChild(removeBtn);
 
-                  row.addEventListener('mouseenter', () => { removeBtn.style.opacity = '1'; });
-                  row.addEventListener('mouseleave', () => { removeBtn.style.opacity = '0'; });
+                    row.addEventListener('mouseenter', () => { removeBtn.style.opacity = '1'; });
+                    row.addEventListener('mouseleave', () => { removeBtn.style.opacity = '0'; });
+                  }
                   row.onclick = () => {
                     handleFileSelect(bm.file_path, bm.root);
                     setTimeout(() => setShowBookmarks(false), 150);
@@ -1646,14 +1657,16 @@ export function DocsPage(props?: {
                             noteEl.style.cssText = 'color:var(--gruvbox-fg); padding-right:16px; word-break:break-word;';
                             noteEl.textContent = ann.note.length > 200 ? ann.note.substring(0, 200) + '…' : ann.note;
                             floater.appendChild(noteEl);
-                            const trashBtn = document.createElement('button');
-                            trashBtn.style.cssText = 'position:absolute; top:4px; right:4px; background:none; border:none; cursor:pointer; padding:2px; opacity:0.35; transition:opacity 0.12s ease, color 0.12s ease; line-height:0; border-radius:3px;';
-                            trashBtn.title = 'Remove highlight';
-                            trashBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="2" y1="3" x2="10" y2="3"/><path d="M4 3V2a1 1 0 011-1h2a1 1 0 011 1v1"/><path d="M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3"/></svg>';
-                            trashBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteAnnotation(ann.id); });
-                            trashBtn.addEventListener('mouseenter', () => { trashBtn.style.opacity = '1'; trashBtn.style.color = 'var(--gruvbox-red)'; });
-                            trashBtn.addEventListener('mouseleave', () => { trashBtn.style.opacity = '0.35'; trashBtn.style.color = ''; });
-                            floater.appendChild(trashBtn);
+                            if (!readOnly) {
+                              const trashBtn = document.createElement('button');
+                              trashBtn.style.cssText = 'position:absolute; top:4px; right:4px; background:none; border:none; cursor:pointer; padding:2px; opacity:0.35; transition:opacity 0.12s ease, color 0.12s ease; line-height:0; border-radius:3px;';
+                              trashBtn.title = 'Remove highlight';
+                              trashBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="2" y1="3" x2="10" y2="3"/><path d="M4 3V2a1 1 0 011-1h2a1 1 0 011 1v1"/><path d="M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3"/></svg>';
+                              trashBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteAnnotation(ann.id); });
+                              trashBtn.addEventListener('mouseenter', () => { trashBtn.style.opacity = '1'; trashBtn.style.color = 'var(--gruvbox-red)'; });
+                              trashBtn.addEventListener('mouseleave', () => { trashBtn.style.opacity = '0.35'; trashBtn.style.color = ''; });
+                              floater.appendChild(trashBtn);
+                            }
                             mark.appendChild(floater);
                           }
                           floater.style.display = 'block';

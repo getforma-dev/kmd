@@ -8,6 +8,7 @@ pub mod process;
 pub mod scripts;
 pub mod terminal;
 pub mod terminal_ws;
+pub mod tunnel;
 pub mod watcher;
 pub mod workspace;
 

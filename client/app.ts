@@ -163,6 +163,11 @@ function App() {
   const [focusMode, setFocusMode] = createSignal(localStorage.getItem('kmd:focusMode') === 'true');
   const [theme, setTheme] = createSignal(getInitialTheme());
   const [terminalToken, setTerminalToken] = createSignal('');
+  const [tunnelUrl, setTunnelUrl] = createSignal<string | null>(null);
+
+  // Detect if this is a tunnel visitor (not localhost owner) — must be
+  // declared early because it's used in effects, handlers, and rendering below.
+  const isTunnelVisitor = location.hostname.endsWith('.trycloudflare.com');
 
   // Persist sidebar and focus state
   createEffect(() => {
@@ -183,13 +188,19 @@ function App() {
     setTheme((t) => t === 'dark' ? 'light' : 'dark');
   }
 
-  // Listen to hash changes
-  const onHashChange = () => setRoute(parseRoute(location.hash));
+  // Listen to hash changes (tunnel visitors are locked to #docs)
+  const onHashChange = () => {
+    if (isTunnelVisitor && parseRoute(location.hash) !== 'docs') {
+      location.hash = '#docs';
+      return;
+    }
+    setRoute(parseRoute(location.hash));
+  };
   window.addEventListener('hashchange', onHashChange);
   onCleanup(() => window.removeEventListener('hashchange', onHashChange));
 
   // Set default hash if none
-  if (!location.hash) {
+  if (!location.hash || isTunnelVisitor) {
     location.hash = '#docs';
   }
 
@@ -230,6 +241,12 @@ function App() {
         }
       }
 
+      // Tunnel status updates
+      if (msg.type === 'tunnel_status' && msg.data && typeof msg.data === 'object') {
+        const tunnelData = msg.data as { active: boolean; url?: string };
+        setTunnelUrl(tunnelData.active && tunnelData.url ? tunnelData.url : null);
+      }
+
       // Track crashes for badge
       if (msg.type === 'exit' && msg.data?.process_id) {
         const pid = msg.data.process_id;
@@ -260,10 +277,21 @@ function App() {
       // Non-critical, keep default
     });
 
+  // Fetch initial tunnel status
+  fetch('/api/tunnel')
+    .then((r) => r.json())
+    .then((data: { active: boolean; url?: string }) => {
+      if (data.active && data.url) {
+        setTunnelUrl(data.url);
+      }
+    })
+    .catch(() => {});
+
   // Bug 6 fix: Dynamically update window title with workspace name
   createEffect(() => {
     const name = workspaceName();
-    document.title = name && name !== 'K.md' ? `K.md \u2014 ${name}` : 'K.md';
+    const base = name && name !== 'K.md' ? `K.md \u2014 ${name}` : 'K.md';
+    document.title = isTunnelVisitor ? `${base} (shared)` : base;
   });
 
   // -------------------------------------------------------------------------
@@ -275,8 +303,8 @@ function App() {
   function handleGlobalKeydown(e: KeyboardEvent) {
     const mod = isMac ? e.metaKey : e.ctrlKey;
 
-    // Cmd+K / Ctrl+K — Toggle command palette
-    if (mod && e.key === 'k') {
+    // Cmd+K / Ctrl+K — Toggle command palette (owner only)
+    if (mod && e.key === 'k' && !isTunnelVisitor) {
       e.preventDefault();
       setPaletteOpen((open) => !open);
       return;
@@ -289,25 +317,23 @@ function App() {
       return;
     }
 
-    // Cmd+2 — Scripts
-    if (mod && e.key === '2') {
-      e.preventDefault();
-      location.hash = '#scripts';
-      return;
-    }
-
-    // Cmd+3 — Ports
-    if (mod && e.key === '3') {
-      e.preventDefault();
-      location.hash = '#ports';
-      return;
-    }
-
-    // Cmd+4 — Terminal
-    if (mod && e.key === '4') {
-      e.preventDefault();
-      location.hash = '#terminal';
-      return;
+    // Cmd+2/3/4 — Scripts/Ports/Terminal (owner only)
+    if (!isTunnelVisitor) {
+      if (mod && e.key === '2') {
+        e.preventDefault();
+        location.hash = '#scripts';
+        return;
+      }
+      if (mod && e.key === '3') {
+        e.preventDefault();
+        location.hash = '#ports';
+        return;
+      }
+      if (mod && e.key === '4') {
+        e.preventDefault();
+        location.hash = '#terminal';
+        return;
+      }
     }
 
     // Escape — close help/palette/workspace panel if open, otherwise clear search
@@ -407,6 +433,36 @@ function App() {
     terminal: 'Terminal',
   };
 
+  // Banner shown to tunnel visitors on non-docs tabs
+  function TunnelRestrictedBanner() {
+    return h('div', {
+      style: 'display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 24px; text-align: center; max-width: 420px; margin: 0 auto;',
+    },
+      h('svg', {
+        viewBox: '0 0 24 24', fill: 'none', stroke: 'var(--gruvbox-gray)',
+        'stroke-width': '1', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+        style: 'width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.5;',
+      },
+        h('rect', { x: '3', y: '11', width: '18', height: '11', rx: '2', ry: '2' }),
+        h('path', { d: 'M7 11V7a5 5 0 0 1 10 0v4' }),
+      ),
+      h('div', { style: 'font-size: 15px; color: var(--gruvbox-fg); font-weight: 600; margin-bottom: 8px;' },
+        'This feature requires authentication',
+      ),
+      h('div', { style: 'font-size: 13px; color: var(--gruvbox-fg2); line-height: 1.5; margin-bottom: 20px;' },
+        'This workspace is shared as documentation only. Scripts, terminal, and ports are available to the workspace owner.',
+      ),
+      h('div', { style: 'font-size: 11px; color: var(--gruvbox-gray);' },
+        'Powered by ',
+        h('span', { style: 'font-weight: 700;' },
+          'K',
+          h('span', { style: 'color: var(--gruvbox-orange);' }, '.'),
+          h('span', { style: 'color: var(--gruvbox-aqua);' }, 'md'),
+        ),
+      ),
+    );
+  }
+
   // Page switching via createSwitch
   const pageContent = createSwitch(route, [
     {
@@ -415,18 +471,19 @@ function App() {
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
         focusMode,
         setFocusMode,
+        readOnly: isTunnelVisitor,
       }),
     },
     {
       match: 'scripts' as Route,
-      render: () => ScriptsPage({
+      render: () => isTunnelVisitor ? TunnelRestrictedBanner() : ScriptsPage({
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
         intentionalKills,
       }),
     },
     {
       match: 'ports' as Route,
-      render: () => PortsPage({
+      render: () => isTunnelVisitor ? TunnelRestrictedBanner() : PortsPage({
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
         intentionalKills,
       }),
@@ -435,7 +492,8 @@ function App() {
 
   // Terminal page is mounted OUTSIDE createSwitch so it survives tab switches.
   // We show/hide it based on route instead of letting createSwitch destroy it.
-  const terminalPageEl = TerminalPage({ terminalToken });
+  // Tunnel visitors get the restricted banner instead of the terminal.
+  const terminalPageEl = isTunnelVisitor ? TunnelRestrictedBanner() : TerminalPage({ terminalToken });
   const terminalWrapper = h('div', {
     style: () => route() === 'terminal'
       ? 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;'
@@ -458,18 +516,22 @@ function App() {
   }
 
   return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
-    Sidebar({ route, workspaceName, theme, crashCount, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
+    Sidebar({ route, workspaceName, theme, crashCount, tunnelUrl, isTunnelVisitor, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         HamburgerButton(),
         h('h1', null, () => PAGE_TITLES[route()]),
         h('span', { style: 'margin-left: auto;' }),
-        h('button', {
-          class: 'kbd-hints palette-trigger',
-          onClick: () => setPaletteOpen(true),
-          title: 'Open command palette',
-        },
-          h('kbd', { class: 'kbd' }, () => isMac ? '\u2318K' : 'Ctrl+K'),
+        createShow(
+          () => !isTunnelVisitor,
+          () => h('button', {
+            class: 'kbd-hints palette-trigger',
+            onClick: () => setPaletteOpen(true),
+            title: 'Open command palette',
+          },
+            h('kbd', { class: 'kbd' }, () => isMac ? '\u2318K' : 'Ctrl+K'),
+          ),
+          () => h('span', { style: 'display: none;' }),
         ),
       ),
       h('div', {

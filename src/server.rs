@@ -11,7 +11,8 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use std::sync::{LazyLock, Mutex as StdMutex};
 use std::time::Instant;
-use crate::services::{env, git, markdown, ports, process, scripts, terminal_ws};
+use tower_http::compression::CompressionLayer;
+use crate::services::{env, git, markdown, ports, process, scripts, terminal_ws, tunnel};
 use crate::state::AppState;
 use crate::ws;
 
@@ -69,6 +70,34 @@ static MUTATING_RATE_LIMITER: LazyLock<RateLimiter> = LazyLock::new(|| {
 /// Without this check, any website can call our API (including /api/shell/exec)
 /// by simply rebinding its DNS. This middleware blocks that by requiring the
 /// Host header to be an explicit localhost value.
+/// Check if a path is allowed through the tunnel (docs-only mode).
+/// Allowlist approach: only explicitly permitted paths pass through.
+/// Everything else is blocked. This is the inverse of a blocklist —
+/// safer because new endpoints are blocked by default.
+fn is_allowed_for_tunnel(path: &str, method: &axum::http::Method) -> bool {
+    // Docs: read-only access to documentation
+    if path == "/api/docs" && matches!(*method, axum::http::Method::GET) { return true; }
+    if path == "/api/docs/search" && matches!(*method, axum::http::Method::GET) { return true; }
+    if path.starts_with("/api/docs/") && matches!(*method, axum::http::Method::GET) { return true; }
+
+    // Workspace info: needed for docs page to resolve roots
+    if path == "/api/workspace" && matches!(*method, axum::http::Method::GET) { return true; }
+
+    // Git status: shown in sidebar
+    if path == "/api/git/status" && matches!(*method, axum::http::Method::GET) { return true; }
+
+    // Tunnel status: read-only. Start/stop are localhost-only (not in allowlist).
+    if path == "/api/tunnel" && matches!(*method, axum::http::Method::GET) { return true; }
+
+    // Health check
+    if path == "/api/health" { return true; }
+
+    // Main WebSocket: broadcast-only (server→client), needed for live doc updates
+    if path == "/ws" { return true; }
+
+    false
+}
+
 async fn validate_host(req: Request<Body>, next: Next) -> Response {
     // WebSocket upgrade requests also go through this middleware
     let host = req
@@ -85,7 +114,10 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
         "localhost" | "127.0.0.1" | "[::1]"
     );
 
-    if !is_localhost {
+    // When a cloudflared tunnel is active, also allow the tunnel domain.
+    let is_tunnel_host = !is_localhost && host_name.ends_with(".trycloudflare.com");
+
+    if !is_localhost && !is_tunnel_host {
         tracing::warn!("Blocked request with non-localhost Host header: {host}");
         return (
             StatusCode::FORBIDDEN,
@@ -94,13 +126,36 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
             .into_response();
     }
 
-    // Check Origin header (CSRF protection)
+    // ── Tunnel security: docs-only mode ─────────────────────────────
+    // Tunnel visitors can only view documentation. Everything else is blocked.
+    // Full access (terminal, scripts, exec) requires GateWASM auth (future).
+    if is_tunnel_host {
+        let path = req.uri().path().to_string();
+        let method = req.method().clone();
+
+        // Static assets (JS, CSS, fonts, images) always pass through —
+        // needed for the docs page to render.
+        let has_file_ext = path.rsplit('/').next().is_some_and(|seg| seg.contains('.'));
+        let is_static_asset = has_file_ext && !path.starts_with("/api/");
+
+        // SPA root "/" passes through (serves index.html for the docs page)
+        let is_spa_root = path == "/";
+
+        if !is_static_asset && !is_spa_root && !is_allowed_for_tunnel(&path, &method) {
+            tracing::debug!("Tunnel blocked: {method} {path}");
+            return (
+                StatusCode::FORBIDDEN,
+                "This feature requires GateWASM authentication. Tunnel sharing is docs-only.",
+            ).into_response();
+        }
+    }
+
+    // ── Standard security checks (Origin, CSRF, rate limiting) ───────
     let is_websocket = req.headers().get(header::UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
 
     if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-        // Parse origin to extract host
         let origin_host = origin
             .strip_prefix("http://")
             .or_else(|| origin.strip_prefix("https://"))
@@ -113,8 +168,9 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
             origin_host,
             "localhost" | "127.0.0.1" | "[::1]"
         );
+        let origin_is_tunnel = origin_host.ends_with(".trycloudflare.com");
 
-        if !origin_is_localhost {
+        if !origin_is_localhost && !origin_is_tunnel {
             tracing::warn!("Blocked request with non-localhost Origin: {origin}");
             return (
                 StatusCode::FORBIDDEN,
@@ -123,7 +179,6 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
                 .into_response();
         }
     } else if is_websocket {
-        // WebSocket upgrades MUST include an Origin header — reject if absent
         tracing::warn!("Blocked WebSocket upgrade without Origin header");
         return (
             StatusCode::FORBIDDEN,
@@ -172,13 +227,15 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     // Prevent MIME-type sniffing
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-    // Content Security Policy: block inline scripts, allow inline styles (syntax highlighting)
-    headers.insert(
-        "content-security-policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:*; frame-ancestors 'none'"
-            .parse()
-            .unwrap(),
-    );
+    // Content Security Policy — only set if handler didn't set one already
+    if !headers.contains_key("content-security-policy") {
+        headers.insert(
+            "content-security-policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
+                .parse()
+                .unwrap(),
+        );
+    }
 
     response
 }
@@ -235,17 +292,23 @@ pub fn build_router(state: AppState) -> Router {
         // Script chaining (feature 6)
         .route("/api/chains", get(api_chains_list).post(api_chains_create))
         .route("/api/chains/{id}", axum::routing::delete(api_chains_delete))
-        .route("/api/chains/{id}/toggle", post(api_chains_toggle));
+        .route("/api/chains/{id}/toggle", post(api_chains_toggle))
+        // Tunnel (cloudflared quick tunnel)
+        .route("/api/tunnel", get(api_tunnel_status_handler))
+        .route("/api/tunnel/start", post(api_tunnel_start_handler))
+        .route("/api/tunnel/stop", post(api_tunnel_stop_handler));
 
     Router::new()
         .route("/ws", get(ws::ws_handler))
         .route("/ws/terminal", get(terminal_ws::terminal_ws_handler))
         .merge(api)
         .fallback(static_handler)
-        // Security: validate Host header to prevent DNS rebinding attacks
+        // Security: validate Host header, tunnel docs-only allowlist
         .layer(middleware::from_fn(validate_host))
         // Security: add protective response headers
         .layer(middleware::from_fn(add_security_headers))
+        // Compression: gzip/brotli/deflate/zstd (critical for tunnel performance)
+        .layer(CompressionLayer::new())
         .with_state(state)
 }
 
@@ -1615,5 +1678,220 @@ async fn api_env_compare_handler(
     match env::compare_env_files_secure(&ra.absolute_path, &params.path_a, &rb.absolute_path, &params.path_b) {
         Some(diff) => Json(serde_json::json!({ "diff": diff })).into_response(),
         None => Json(serde_json::json!({ "error": "One or both files not found" })).into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tunnel handlers (cloudflared quick tunnel)
+// ---------------------------------------------------------------------------
+
+/// `GET /api/tunnel` — Get current tunnel status.
+async fn api_tunnel_status_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let url = state.tunnel_url();
+    Json(serde_json::json!({
+        "active": url.is_some(),
+        "url": url,
+    }))
+}
+
+/// `POST /api/tunnel/start` — Start a cloudflared quick tunnel.
+async fn api_tunnel_start_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let port = state.server_port();
+    match tunnel::start_tunnel(&state, port).await {
+        Ok(url) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "active": true, "url": url })),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        ).into_response(),
+    }
+}
+
+/// `POST /api/tunnel/stop` — Stop the running tunnel.
+async fn api_tunnel_stop_handler(State(state): State<AppState>) -> impl IntoResponse {
+    match tunnel::stop_tunnel(&state) {
+        Ok(()) => Json(serde_json::json!({ "active": false })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        ).into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: tunnel security (docs-only allowlist)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tunnel_security_tests {
+    use super::*;
+    use axum::http::Method;
+
+    // ── Allowed: docs endpoints ──────────────────────────────────────
+
+    #[test]
+    fn allows_docs_tree() {
+        assert!(is_allowed_for_tunnel("/api/docs", &Method::GET));
+    }
+
+    #[test]
+    fn allows_docs_search() {
+        assert!(is_allowed_for_tunnel("/api/docs/search", &Method::GET));
+    }
+
+    #[test]
+    fn allows_docs_read() {
+        assert!(is_allowed_for_tunnel("/api/docs/README.md", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/docs/deep/nested/file.md", &Method::GET));
+    }
+
+    #[test]
+    fn allows_docs_sub_endpoints_read() {
+        // Bookmarks, annotations, raw — all under /api/docs/ GET wildcard
+        assert!(is_allowed_for_tunnel("/api/docs/bookmarks", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/docs/annotations", &Method::GET));
+        assert!(is_allowed_for_tunnel("/api/docs/raw/README.md", &Method::GET));
+    }
+
+    #[test]
+    fn allows_docs_annotations_read() {
+        assert!(is_allowed_for_tunnel("/api/docs/annotations", &Method::GET));
+    }
+
+    // ── Allowed: infrastructure ──────────────────────────────────────
+
+    #[test]
+    fn allows_workspace_read() {
+        assert!(is_allowed_for_tunnel("/api/workspace", &Method::GET));
+    }
+
+    #[test]
+    fn allows_git_status() {
+        assert!(is_allowed_for_tunnel("/api/git/status", &Method::GET));
+    }
+
+    #[test]
+    fn allows_health() {
+        assert!(is_allowed_for_tunnel("/api/health", &Method::GET));
+    }
+
+    #[test]
+    fn allows_tunnel_status_read() {
+        assert!(is_allowed_for_tunnel("/api/tunnel", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_tunnel_start_stop_from_tunnel() {
+        // Tunnel management is localhost-only — remote users can't start/stop
+        assert!(!is_allowed_for_tunnel("/api/tunnel/start", &Method::POST));
+        assert!(!is_allowed_for_tunnel("/api/tunnel/stop", &Method::POST));
+    }
+
+    #[test]
+    fn allows_main_websocket() {
+        assert!(is_allowed_for_tunnel("/ws", &Method::GET));
+    }
+
+    // ── Blocked: everything else ─────────────────────────────────────
+
+    #[test]
+    fn blocks_shell_exec() {
+        assert!(!is_allowed_for_tunnel("/api/shell/exec", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_terminal_websocket() {
+        assert!(!is_allowed_for_tunnel("/ws/terminal", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_terminal_api() {
+        assert!(!is_allowed_for_tunnel("/api/terminal/sessions", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_script_execution() {
+        assert!(!is_allowed_for_tunnel("/api/scripts/run", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_script_listing() {
+        assert!(!is_allowed_for_tunnel("/api/scripts", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_process_listing() {
+        assert!(!is_allowed_for_tunnel("/api/processes", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_process_kill() {
+        assert!(!is_allowed_for_tunnel("/api/processes/abc/kill", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_port_listing() {
+        assert!(!is_allowed_for_tunnel("/api/ports", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_port_scan() {
+        assert!(!is_allowed_for_tunnel("/api/ports/scan", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_port_kill() {
+        assert!(!is_allowed_for_tunnel("/api/ports/3000/kill", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_env_listing() {
+        assert!(!is_allowed_for_tunnel("/api/env", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_env_file() {
+        assert!(!is_allowed_for_tunnel("/api/env/file", &Method::GET));
+    }
+
+    #[test]
+    fn blocks_chains() {
+        assert!(!is_allowed_for_tunnel("/api/chains", &Method::GET));
+        assert!(!is_allowed_for_tunnel("/api/chains", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_workspace_modification() {
+        assert!(!is_allowed_for_tunnel("/api/workspace/add", &Method::POST));
+        assert!(!is_allowed_for_tunnel("/api/workspace/remove", &Method::POST));
+    }
+
+    // ── Blocked: doc mutations ───────────────────────────────────────
+
+    #[test]
+    fn blocks_doc_writes() {
+        assert!(!is_allowed_for_tunnel("/api/docs/README.md", &Method::PUT));
+        assert!(!is_allowed_for_tunnel("/api/docs/README.md", &Method::DELETE));
+        assert!(!is_allowed_for_tunnel("/api/docs/README.md", &Method::PATCH));
+    }
+
+    #[test]
+    fn blocks_annotation_writes() {
+        assert!(!is_allowed_for_tunnel("/api/docs/annotations", &Method::POST));
+    }
+
+    #[test]
+    fn blocks_bookmark_writes() {
+        assert!(!is_allowed_for_tunnel("/api/docs/bookmarks", &Method::POST));
+    }
+
+    // ── Default deny: unknown endpoints are blocked ──────────────────
+
+    #[test]
+    fn blocks_unknown_api_paths() {
+        assert!(!is_allowed_for_tunnel("/api/something/new", &Method::GET));
+        assert!(!is_allowed_for_tunnel("/api/future/feature", &Method::POST));
     }
 }
