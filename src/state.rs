@@ -233,9 +233,14 @@ impl AppState {
         self.inner.tunnel_process.lock().expect("Tunnel process mutex poisoned")
     }
 
-    /// Store the tunnel child process.
-    pub fn set_tunnel_process(&self, child: tokio::process::Child) {
-        *self.inner.tunnel_process.lock().expect("Tunnel process mutex poisoned") = Some(child);
+    /// Store the tunnel child process. Returns Err if a tunnel is already running.
+    pub fn set_tunnel_process(&self, child: tokio::process::Child) -> Result<(), String> {
+        let mut proc = self.inner.tunnel_process.lock().expect("Tunnel process mutex poisoned");
+        if proc.is_some() {
+            return Err("Tunnel is already running".to_string());
+        }
+        *proc = Some(child);
+        Ok(())
     }
 
     /// Kill and remove the tunnel process.

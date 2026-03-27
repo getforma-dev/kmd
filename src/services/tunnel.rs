@@ -144,14 +144,6 @@ async fn ensure_cloudflared() -> Result<PathBuf, String> {
 ///
 /// Returns Ok(url) on success or Err(message) if something fails.
 pub async fn start_tunnel(state: &AppState, port: u16) -> Result<String, String> {
-    // Check if tunnel is already running
-    {
-        let tunnel = state.tunnel();
-        if tunnel.is_some() {
-            return Err("Tunnel is already running".to_string());
-        }
-    }
-
     // Ensure cloudflared is available (downloads on first use)
     let bin_path = ensure_cloudflared().await?;
 
@@ -170,8 +162,10 @@ pub async fn start_tunnel(state: &AppState, port: u16) -> Result<String, String>
 
     let stderr = child.stderr.take().ok_or("No stderr from cloudflared")?;
 
-    // Store the child process so we can kill it later
-    state.set_tunnel_process(child);
+    // Atomic check-and-set: store process or fail if one is already running.
+    // This prevents a race condition where two concurrent starts both pass
+    // the "is running?" check before either stores the process.
+    state.set_tunnel_process(child)?;
 
     // Spawn a task to read stderr and find the tunnel URL
     let state_clone = state.clone();

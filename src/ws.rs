@@ -72,20 +72,46 @@ pub struct PortInfo {
 
 /// Axum handler: upgrade an HTTP request to a WebSocket connection.
 pub async fn ws_handler(
+    headers: axum::http::HeaderMap,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    // Detect if this connection is from a tunnel visitor
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let is_tunnel = host.contains(".trycloudflare.com");
+
+    ws.on_upgrade(move |socket| handle_socket(socket, state, is_tunnel))
+}
+
+/// Messages safe to forward to tunnel visitors (docs-related only).
+/// Suppresses stdout, stderr, exit, ports, resources — these leak
+/// process output, port info, and resource usage to remote viewers.
+fn is_safe_for_tunnel(msg: &ServerMessage) -> bool {
+    matches!(
+        msg,
+        ServerMessage::FileChange { .. }
+            | ServerMessage::IndexReady { .. }
+            | ServerMessage::TunnelStatus { .. }
+            | ServerMessage::GitStatus { .. }
+    )
 }
 
 /// Handle an individual WebSocket connection.
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
+async fn handle_socket(mut socket: WebSocket, state: AppState, is_tunnel: bool) {
     let mut rx: broadcast::Receiver<ServerMessage> = state.broadcast_tx().subscribe();
 
     loop {
         tokio::select! {
             // Forward broadcast messages to this client
             Ok(msg) = rx.recv() => {
+                // Filter messages for tunnel visitors — only docs-related events
+                if is_tunnel && !is_safe_for_tunnel(&msg) {
+                    continue;
+                }
+
                 let json = match serde_json::to_string(&msg) {
                     Ok(j) => j,
                     Err(e) => {
@@ -113,5 +139,5 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
     }
 
-    tracing::debug!("WebSocket client disconnected");
+    tracing::debug!("WebSocket client disconnected (tunnel: {is_tunnel})");
 }
