@@ -165,6 +165,10 @@ function App() {
   const [terminalToken, setTerminalToken] = createSignal('');
   const [tunnelUrl, setTunnelUrl] = createSignal<string | null>(null);
 
+  // Detect if this is a tunnel visitor (not localhost owner) — must be
+  // declared early because it's used in effects, handlers, and rendering below.
+  const isTunnelVisitor = location.hostname.endsWith('.trycloudflare.com');
+
   // Persist sidebar and focus state
   createEffect(() => {
     localStorage.setItem('kmd:sidebar', sidebarOpen() ? 'open' : 'closed');
@@ -429,9 +433,6 @@ function App() {
     terminal: 'Terminal',
   };
 
-  // Detect if this is a tunnel visitor (not localhost owner)
-  const isTunnelVisitor = location.hostname.endsWith('.trycloudflare.com');
-
   // Banner shown to tunnel visitors on non-docs tabs
   function TunnelRestrictedBanner() {
     return h('div', {
@@ -521,12 +522,16 @@ function App() {
         HamburgerButton(),
         h('h1', null, () => PAGE_TITLES[route()]),
         h('span', { style: 'margin-left: auto;' }),
-        isTunnelVisitor ? null : h('button', {
-          class: 'kbd-hints palette-trigger',
-          onClick: () => setPaletteOpen(true),
-          title: 'Open command palette',
-        },
-          h('kbd', { class: 'kbd' }, () => isMac ? '\u2318K' : 'Ctrl+K'),
+        createShow(
+          () => !isTunnelVisitor,
+          () => h('button', {
+            class: 'kbd-hints palette-trigger',
+            onClick: () => setPaletteOpen(true),
+            title: 'Open command palette',
+          },
+            h('kbd', { class: 'kbd' }, () => isMac ? '\u2318K' : 'Ctrl+K'),
+          ),
+          () => h('span', { style: 'display: none;' }),
         ),
       ),
       h('div', {
