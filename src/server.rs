@@ -11,6 +11,7 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use std::sync::{LazyLock, Mutex as StdMutex};
 use std::time::Instant;
+use tower_http::compression::CompressionLayer;
 use crate::services::{env, git, markdown, ports, process, scripts, terminal_ws, tunnel};
 use crate::state::AppState;
 use crate::ws;
@@ -173,6 +174,7 @@ fn tunnel_gate_page() -> Response {
     <p class="error" id="error">Invalid access code</p>
   </form>
   <p class="hint">Ask the workspace owner for the 6-character access code</p>
+  <p class="hint" style="margin-top: 12px; color: #83a598;">If you are the owner, use your localhost URL instead.<br>This tunnel link is for sharing with others.</p>
 </div>
 <script>{script}</script>
 </body>
@@ -427,6 +429,8 @@ pub fn build_router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), validate_host))
         // Security: add protective response headers
         .layer(middleware::from_fn(add_security_headers))
+        // Compression: gzip/brotli/deflate/zstd (critical for tunnel performance)
+        .layer(CompressionLayer::new())
         .with_state(state)
 }
 
