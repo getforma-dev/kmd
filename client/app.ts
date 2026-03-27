@@ -163,6 +163,7 @@ function App() {
   const [focusMode, setFocusMode] = createSignal(localStorage.getItem('kmd:focusMode') === 'true');
   const [theme, setTheme] = createSignal(getInitialTheme());
   const [terminalToken, setTerminalToken] = createSignal('');
+  const [tunnelUrl, setTunnelUrl] = createSignal<string | null>(null);
 
   // Persist sidebar and focus state
   createEffect(() => {
@@ -230,6 +231,12 @@ function App() {
         }
       }
 
+      // Tunnel status updates
+      if (msg.type === 'tunnel_status' && msg.data && typeof msg.data === 'object') {
+        const tunnelData = msg.data as { active: boolean; url?: string };
+        setTunnelUrl(tunnelData.active && tunnelData.url ? tunnelData.url : null);
+      }
+
       // Track crashes for badge
       if (msg.type === 'exit' && msg.data?.process_id) {
         const pid = msg.data.process_id;
@@ -259,6 +266,16 @@ function App() {
     .catch(() => {
       // Non-critical, keep default
     });
+
+  // Fetch initial tunnel status
+  fetch('/api/tunnel')
+    .then((r) => r.json())
+    .then((data: { active: boolean; url?: string }) => {
+      if (data.active && data.url) {
+        setTunnelUrl(data.url);
+      }
+    })
+    .catch(() => {});
 
   // Bug 6 fix: Dynamically update window title with workspace name
   createEffect(() => {
@@ -458,7 +475,7 @@ function App() {
   }
 
   return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
-    Sidebar({ route, workspaceName, theme, crashCount, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
+    Sidebar({ route, workspaceName, theme, crashCount, tunnelUrl, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         HamburgerButton(),

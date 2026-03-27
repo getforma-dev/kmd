@@ -93,6 +93,10 @@ pub struct AppStateInner {
     pub chain_rules: Mutex<Vec<ChainRule>>,
     /// Auth token for gating sensitive endpoints (shell exec, terminal WS).
     pub auth_token: String,
+    /// Active tunnel URL (e.g. "https://abc.trycloudflare.com").
+    pub tunnel_url: Mutex<Option<String>>,
+    /// The cloudflared child process (so we can kill it on stop).
+    pub tunnel_process: Mutex<Option<tokio::process::Child>>,
 }
 
 impl AppState {
@@ -116,6 +120,8 @@ impl AppState {
                 server_port: Mutex::new(0),
                 chain_rules: Mutex::new(Vec::new()),
                 auth_token,
+                tunnel_url: Mutex::new(None),
+                tunnel_process: Mutex::new(None),
             }),
         }
     }
@@ -145,6 +151,8 @@ impl AppState {
                 server_port: Mutex::new(0),
                 chain_rules: Mutex::new(Vec::new()),
                 auth_token,
+                tunnel_url: Mutex::new(None),
+                tunnel_process: Mutex::new(None),
             }),
         }
     }
@@ -208,6 +216,35 @@ impl AppState {
     /// Get the auth token for gating sensitive endpoints.
     pub fn auth_token(&self) -> &str {
         &self.inner.auth_token
+    }
+
+    /// Get the current tunnel URL (if active).
+    pub fn tunnel_url(&self) -> Option<String> {
+        self.inner.tunnel_url.lock().expect("Tunnel URL mutex poisoned").clone()
+    }
+
+    /// Set the tunnel URL.
+    pub fn set_tunnel_url(&self, url: Option<String>) {
+        *self.inner.tunnel_url.lock().expect("Tunnel URL mutex poisoned") = url;
+    }
+
+    /// Check if a tunnel process is running.
+    pub fn tunnel(&self) -> std::sync::MutexGuard<'_, Option<tokio::process::Child>> {
+        self.inner.tunnel_process.lock().expect("Tunnel process mutex poisoned")
+    }
+
+    /// Store the tunnel child process.
+    pub fn set_tunnel_process(&self, child: tokio::process::Child) {
+        *self.inner.tunnel_process.lock().expect("Tunnel process mutex poisoned") = Some(child);
+    }
+
+    /// Kill and remove the tunnel process.
+    pub fn clear_tunnel_process(&self) {
+        let mut proc = self.inner.tunnel_process.lock().expect("Tunnel process mutex poisoned");
+        if let Some(ref mut child) = *proc {
+            let _ = child.start_kill();
+        }
+        *proc = None;
     }
 
     /// Resolve a workspace config's folders into WorkspaceRoot structs.

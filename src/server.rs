@@ -11,7 +11,7 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use std::sync::{LazyLock, Mutex as StdMutex};
 use std::time::Instant;
-use crate::services::{env, git, markdown, ports, process, scripts, terminal_ws};
+use crate::services::{env, git, markdown, ports, process, scripts, terminal_ws, tunnel};
 use crate::state::AppState;
 use crate::ws;
 
@@ -85,7 +85,12 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
         "localhost" | "127.0.0.1" | "[::1]"
     );
 
-    if !is_localhost {
+    // When a cloudflared tunnel is active, also allow the tunnel domain.
+    // cloudflared proxies requests from its edge to localhost, so the Host header
+    // will be the tunnel domain (e.g. "abc.trycloudflare.com").
+    let is_tunnel_host = !is_localhost && host_name.ends_with(".trycloudflare.com");
+
+    if !is_localhost && !is_tunnel_host {
         tracing::warn!("Blocked request with non-localhost Host header: {host}");
         return (
             StatusCode::FORBIDDEN,
@@ -113,8 +118,9 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
             origin_host,
             "localhost" | "127.0.0.1" | "[::1]"
         );
+        let origin_is_tunnel = origin_host.ends_with(".trycloudflare.com");
 
-        if !origin_is_localhost {
+        if !origin_is_localhost && !origin_is_tunnel {
             tracing::warn!("Blocked request with non-localhost Origin: {origin}");
             return (
                 StatusCode::FORBIDDEN,
@@ -175,7 +181,7 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     // Content Security Policy: block inline scripts, allow inline styles (syntax highlighting)
     headers.insert(
         "content-security-policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:*; frame-ancestors 'none'"
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
             .parse()
             .unwrap(),
     );
@@ -235,7 +241,11 @@ pub fn build_router(state: AppState) -> Router {
         // Script chaining (feature 6)
         .route("/api/chains", get(api_chains_list).post(api_chains_create))
         .route("/api/chains/{id}", axum::routing::delete(api_chains_delete))
-        .route("/api/chains/{id}/toggle", post(api_chains_toggle));
+        .route("/api/chains/{id}/toggle", post(api_chains_toggle))
+        // Tunnel (cloudflared quick tunnel)
+        .route("/api/tunnel", get(api_tunnel_status_handler))
+        .route("/api/tunnel/start", post(api_tunnel_start_handler))
+        .route("/api/tunnel/stop", post(api_tunnel_stop_handler));
 
     Router::new()
         .route("/ws", get(ws::ws_handler))
@@ -1615,5 +1625,44 @@ async fn api_env_compare_handler(
     match env::compare_env_files_secure(&ra.absolute_path, &params.path_a, &rb.absolute_path, &params.path_b) {
         Some(diff) => Json(serde_json::json!({ "diff": diff })).into_response(),
         None => Json(serde_json::json!({ "error": "One or both files not found" })).into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tunnel handlers (cloudflared quick tunnel)
+// ---------------------------------------------------------------------------
+
+/// `GET /api/tunnel` — Get current tunnel status.
+async fn api_tunnel_status_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let url = state.tunnel_url();
+    Json(serde_json::json!({
+        "active": url.is_some(),
+        "url": url,
+    }))
+}
+
+/// `POST /api/tunnel/start` — Start a cloudflared quick tunnel.
+async fn api_tunnel_start_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let port = state.server_port();
+    match tunnel::start_tunnel(&state, port).await {
+        Ok(url) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "active": true, "url": url })),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        ).into_response(),
+    }
+}
+
+/// `POST /api/tunnel/stop` — Stop the running tunnel.
+async fn api_tunnel_stop_handler(State(state): State<AppState>) -> impl IntoResponse {
+    match tunnel::stop_tunnel(&state) {
+        Ok(()) => Json(serde_json::json!({ "active": false })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        ).into_response(),
     }
 }

@@ -41,6 +41,9 @@ pub enum ServerMessage {
     /// Git status update for workspace roots
     #[serde(rename = "git_status")]
     GitStatus { roots: Vec<crate::services::git::GitStatus> },
+    /// Tunnel status change (started/stopped)
+    #[serde(rename = "tunnel_status")]
+    TunnelStatus { active: bool, url: Option<String> },
 }
 
 /// Resource usage for a single process.

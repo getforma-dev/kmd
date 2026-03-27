@@ -1,5 +1,6 @@
-import { h, createSignal, createEffect, onCleanup } from '@getforma/core';
+import { h, createSignal, createEffect, createShow, onCleanup } from '@getforma/core';
 import { iconDocs, iconScripts, iconPorts, iconTerminal } from './icons';
+import { kmdFetch } from '../lib/security';
 
 export type Route = 'docs' | 'scripts' | 'ports' | 'terminal';
 
@@ -51,6 +52,7 @@ export function Sidebar(props: {
   workspaceName?: () => string;
   theme?: () => string;
   crashCount?: () => number;
+  tunnelUrl?: () => string | null;
   onToggleTheme?: () => void;
   onHelp?: () => void;
   onWorkspaceSettings?: () => void;
@@ -196,6 +198,100 @@ export function Sidebar(props: {
     return container;
   }
 
+  // ---------------------------------------------------------------------------
+  // Tunnel share button & status
+  // ---------------------------------------------------------------------------
+
+  const [tunnelLoading, setTunnelLoading] = createSignal(false);
+  const [tunnelCopied, setTunnelCopied] = createSignal(false);
+
+  function toggleTunnel() {
+    const url = props.tunnelUrl?.();
+    setTunnelLoading(true);
+
+    if (url) {
+      // Stop tunnel
+      kmdFetch('/api/tunnel/stop', { method: 'POST' })
+        .finally(() => setTunnelLoading(false));
+    } else {
+      // Start tunnel
+      kmdFetch('/api/tunnel/start', { method: 'POST' })
+        .then(r => r.json())
+        .then((data: { error?: string }) => {
+          if (data.error) {
+            alert(data.error);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setTunnelLoading(false));
+    }
+  }
+
+  function copyTunnelUrl() {
+    const url = props.tunnelUrl?.();
+    if (url) {
+      navigator.clipboard.writeText(url).then(() => {
+        setTunnelCopied(true);
+        setTimeout(() => setTunnelCopied(false), 2000);
+      });
+    }
+  }
+
+  function TunnelSection() {
+    return h('div', { style: 'padding: 0 12px 8px;' },
+      // Share button (toggle)
+      h('button', {
+        style: () => {
+          const active = !!props.tunnelUrl?.();
+          const loading = tunnelLoading();
+          return `
+            width: 100%; padding: 6px 10px; border: 1px solid ${active ? 'var(--gruvbox-green)' : 'var(--gruvbox-gray)'};
+            border-radius: 6px; background: ${active ? 'rgba(142,192,124,0.1)' : 'transparent'};
+            color: ${active ? 'var(--gruvbox-green)' : 'var(--gruvbox-fg2)'};
+            font-size: 11px; font-family: var(--font-code); cursor: ${loading ? 'wait' : 'pointer'};
+            display: flex; align-items: center; gap: 6px; transition: all 0.15s;
+            opacity: ${loading ? '0.6' : '1'};
+          `;
+        },
+        onClick: () => !tunnelLoading() && toggleTunnel(),
+        title: () => props.tunnelUrl?.() ? 'Stop sharing' : 'Share via public URL',
+      },
+        // Globe icon
+        h('svg', {
+          viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+          'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+          style: 'width: 14px; height: 14px; flex-shrink: 0;',
+        },
+          h('circle', { cx: '12', cy: '12', r: '10' }),
+          h('line', { x1: '2', y1: '12', x2: '22', y2: '12' }),
+          h('path', { d: 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' }),
+        ),
+        h('span', null, () => {
+          if (tunnelLoading()) return 'Connecting...';
+          return props.tunnelUrl?.() ? 'Sharing' : 'Share';
+        }),
+      ),
+      // URL display (when active)
+      createShow(
+        () => !!props.tunnelUrl?.(),
+        () => h('div', {
+          style: 'margin-top: 6px; padding: 5px 8px; background: var(--gruvbox-bg1); border-radius: 4px; font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-aqua); word-break: break-all; cursor: pointer; position: relative;',
+          onClick: copyTunnelUrl,
+          title: 'Click to copy',
+        },
+          h('span', null, () => {
+            const url = props.tunnelUrl?.() || '';
+            // Show just the domain part for brevity
+            return url.replace('https://', '');
+          }),
+          h('span', {
+            style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
+          }, 'Copied!'),
+        ),
+      ),
+    );
+  }
+
   return h('aside', { class: 'sidebar' },
     h('div', { class: 'sidebar-header' },
       h('span', { class: 'sidebar-logo' },
@@ -212,6 +308,7 @@ export function Sidebar(props: {
     ),
     GitStatusIndicator(),
     h('nav', { class: 'sidebar-nav' }, ...navItems),
+    TunnelSection(),
     h('div', { class: 'sidebar-footer' },
       h('button', {
         class: 'theme-toggle-btn',
