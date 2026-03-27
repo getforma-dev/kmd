@@ -120,7 +120,9 @@ export function DocsPage(props?: {
   onWsMessage?: (handler: (msg: WSMessage) => void) => (() => void);
   focusMode?: () => boolean;
   setFocusMode?: (v: boolean) => void;
+  readOnly?: boolean;
 }) {
+  const readOnly = props?.readOnly ?? false;
   // State signals
   const [roots, setRoots] = createSignal<RootTreeData[]>([]);
   const [selectedPath, setSelectedPath] = createSignal('');
@@ -587,7 +589,7 @@ export function DocsPage(props?: {
 
   let annotationLock = false;
   function createAnnotation(highlightText: string, note: string, color: string) {
-    if (annotationLock) return;
+    if (readOnly || annotationLock) return;
     annotationLock = true;
     const path = selectedPath();
     const root = selectedRoot();
@@ -628,6 +630,7 @@ export function DocsPage(props?: {
   }
 
   function deleteAnnotation(id: number) {
+    if (readOnly) return;
     kmdFetch(`/api/docs/annotations/${id}`, { method: 'DELETE' })
       .then(() => fetchAnnotations())
       .catch(() => {});
@@ -645,6 +648,7 @@ export function DocsPage(props?: {
   }
 
   function createBookmark(headingId: string, headingText: string) {
+    if (readOnly) return;
     const path = selectedPath();
     const root = selectedRoot();
     kmdFetch('/api/docs/bookmarks', {
@@ -657,6 +661,7 @@ export function DocsPage(props?: {
   }
 
   function deleteBookmark(id: number) {
+    if (readOnly) return;
     kmdFetch(`/api/docs/bookmarks/${id}`, { method: 'DELETE' })
       .then(() => fetchBookmarks())
       .catch(() => {});
@@ -979,8 +984,8 @@ export function DocsPage(props?: {
             onClick: () => setShowBookmarks(!showBookmarks()),
             title: 'Bookmarks',
           }, () => { const total = bookmarks().length + getStarredPaths().length; return `Bookmarks${total > 0 ? ` (${total})` : ''}`; }),
-          // Edit button
-          createShow(
+          // Edit button (hidden for tunnel visitors)
+          readOnly ? null : createShow(
             () => !!selectedPath() && !editMode(),
             () => h('button', {
               class: 'btn btn-ghost',
@@ -990,7 +995,7 @@ export function DocsPage(props?: {
             () => h('span', { style: 'display: none;' }),
           ),
           // Save / Cancel (edit mode)
-          createShow(
+          readOnly ? null : createShow(
             () => editMode(),
             () => h('div', { style: 'display: flex; gap: 4px;' },
               h('button', {

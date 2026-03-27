@@ -465,6 +465,7 @@ function App() {
         onWsMessage: (handler) => wsBus.subscribe(handler as WSMessageHandler),
         focusMode,
         setFocusMode,
+        readOnly: isTunnelVisitor,
       }),
     },
     {
