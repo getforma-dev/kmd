@@ -531,7 +531,6 @@ function App() {
           },
             h('kbd', { class: 'kbd' }, () => isMac ? '\u2318K' : 'Ctrl+K'),
           ),
-          () => h('span', { style: 'display: none;' }),
         ),
       ),
       h('div', {
@@ -550,19 +549,16 @@ function App() {
         onNavigate: handlePaletteNavigate,
         onAction: handlePaletteAction,
       }),
-      () => h('div', { style: 'display: none;' }),
     ),
     // Help panel overlay
     createShow(
       () => helpOpen(),
       () => HelpPanel({ onClose: () => setHelpOpen(false) }),
-      () => h('div', { style: 'display: none;' }),
     ),
     // Workspace settings panel overlay
     createShow(
       () => workspacePanelOpen(),
       () => WorkspacePanel({ onClose: () => setWorkspacePanelOpen(false), workspaceName }),
-      () => h('div', { style: 'display: none;' }),
     ),
   );
 }

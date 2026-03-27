@@ -78,6 +78,7 @@ fn is_allowed_for_tunnel(path: &str, method: &axum::http::Method) -> bool {
     // Docs: read-only access to documentation
     if path == "/api/docs" && matches!(*method, axum::http::Method::GET) { return true; }
     if path == "/api/docs/search" && matches!(*method, axum::http::Method::GET) { return true; }
+    if path == "/api/docs/stars" && matches!(*method, axum::http::Method::GET) { return true; }
     if path.starts_with("/api/docs/") && matches!(*method, axum::http::Method::GET) { return true; }
 
     // Workspace info: needed for docs page to resolve roots
@@ -260,6 +261,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/docs/annotations/{id}", axum::routing::delete(api_annotations_delete))
         .route("/api/docs/bookmarks", get(api_bookmarks_list).post(api_bookmarks_create))
         .route("/api/docs/bookmarks/{id}", axum::routing::delete(api_bookmarks_delete))
+        .route("/api/docs/stars", get(api_stars_list).post(api_stars_create))
+        .route("/api/docs/stars/{id}", axum::routing::delete(api_stars_delete))
         .route("/api/docs/{*path}", get(api_docs_render).put(api_docs_write).delete(api_docs_delete).patch(api_docs_patch))
         // Script routes
         .route("/api/scripts", get(api_scripts_handler))
@@ -1037,6 +1040,75 @@ async fn api_bookmarks_delete(
 ) -> impl IntoResponse {
     let conn = state.db();
     let deleted = conn.execute("DELETE FROM doc_bookmarks WHERE id = ?1", rusqlite::params![id])
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    Json(serde_json::json!({ "ok": deleted }))
+}
+
+// ---------------------------------------------------------------------------
+// Stars API (starred files, replaces localStorage-based stars)
+// ---------------------------------------------------------------------------
+
+/// `GET /api/docs/stars` — List all starred files.
+async fn api_stars_list(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let conn = state.db();
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, root, file_path, created_at FROM doc_stars ORDER BY created_at DESC"
+    ).unwrap();
+    let stars: Vec<serde_json::Value> = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "id": row.get::<_, i64>(0)?,
+            "root": row.get::<_, String>(1)?,
+            "file_path": row.get::<_, String>(2)?,
+            "created_at": row.get::<_, i64>(3)?,
+        }))
+    }).unwrap().filter_map(|r| r.ok()).collect();
+    Json(serde_json::json!({ "stars": stars }))
+}
+
+/// Body for starring a file.
+#[derive(Deserialize)]
+struct CreateStarBody {
+    root: Option<String>,
+    file_path: String,
+}
+
+/// `POST /api/docs/stars` — Star a file.
+async fn api_stars_create(
+    State(state): State<AppState>,
+    Json(body): Json<CreateStarBody>,
+) -> impl IntoResponse {
+    let root = body.root.as_deref().unwrap_or(".");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let conn = state.db();
+    match conn.execute(
+        "INSERT OR IGNORE INTO doc_stars (root, file_path, created_at) VALUES (?1, ?2, ?3)",
+        rusqlite::params![root, &body.file_path, now],
+    ) {
+        Ok(_) => {
+            let id = conn.last_insert_rowid();
+            Json(serde_json::json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(err) => {
+            tracing::error!("Failed to star file: {err}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Failed to star file" }))).into_response()
+        }
+    }
+}
+
+/// `DELETE /api/docs/stars/:id` — Unstar a file.
+async fn api_stars_delete(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = state.db();
+    let deleted = conn.execute("DELETE FROM doc_stars WHERE id = ?1", rusqlite::params![id])
         .map(|n| n > 0)
         .unwrap_or(false);
     Json(serde_json::json!({ "ok": deleted }))

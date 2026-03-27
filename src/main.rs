@@ -861,7 +861,7 @@ async fn run_ephemeral_server(
         println!("  {dim}-------------------------------{reset}");
 
         println!(
-            "  {dim}Mode{reset} {dim}······{reset} ephemeral"
+            "  {dim}Mode{reset} {dim}······{reset} ephemeral {yellow}⚠ data won't persist — use `kmd create <name>` for workspaces{reset}"
         );
         if let Some(count) = file_count {
             println!(

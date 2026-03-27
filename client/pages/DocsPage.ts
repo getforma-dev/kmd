@@ -992,7 +992,6 @@ export function DocsPage(props?: {
               style: 'padding: 2px 8px; font-size: 10px; flex-shrink: 0;',
               onClick: () => enterEditMode(),
             }, 'Edit'),
-            () => h('span', { style: 'display: none;' }),
           ),
           // Save / Cancel (edit mode)
           createShow(
@@ -1010,7 +1009,6 @@ export function DocsPage(props?: {
                 onClick: () => cancelEdit(),
               }, 'Cancel'),
             ),
-            () => h('span', { style: 'display: none;' }),
           ),
           // Delete button
           createShow(
@@ -1022,7 +1020,6 @@ export function DocsPage(props?: {
               disabled: () => deleting(),
               title: 'Delete this file',
             }, () => deleting() ? 'Deleting...' : 'Delete'),
-            () => h('span', { style: 'display: none;' }),
           ),
           // Focus button
           h('button', {

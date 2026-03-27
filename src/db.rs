@@ -154,6 +154,15 @@ CREATE TABLE IF NOT EXISTS doc_bookmarks (
     created_at INTEGER NOT NULL,
     UNIQUE(root, file_path, heading_id)
 );
+
+-- Stars: user-starred files (replaces localStorage-based stars).
+CREATE TABLE IF NOT EXISTS doc_stars (
+    id INTEGER PRIMARY KEY,
+    root TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(root, file_path)
+);
 "#;
 
 #[cfg(test)]

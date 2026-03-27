@@ -1419,7 +1419,6 @@ export function ScriptsPage(props?: ScriptsPageProps) {
             style: 'background: none; border: none; color: var(--gruvbox-gray); cursor: pointer; font-size: 11px; padding: 2px 4px;',
             onClick: () => setLogFilter(''),
           }, '✕ Clear'),
-          () => h('span', { style: 'display: none;' }),
         ),
       );
       if (filterBar instanceof Node) outputPanel.appendChild(filterBar);

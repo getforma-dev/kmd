@@ -1,46 +1,66 @@
 import { h, createSignal, createEffect } from '@getforma/core';
+import { kmdFetch } from '../lib/security';
 
 // ---------------------------------------------------------------------------
-// Stars persistence (localStorage, scoped by port)
+// Stars persistence (SQLite via API)
 // ---------------------------------------------------------------------------
 
-const STARS_KEY = `kmd:${location.port}:starredDocs`;
-
-function loadStars(): Set<string> {
-  try {
-    const raw = localStorage.getItem(STARS_KEY);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch { return new Set(); }
-}
-
-function saveStars(stars: Set<string>) {
-  try {
-    localStorage.setItem(STARS_KEY, JSON.stringify([...stars]));
-  } catch { /* ignore */ }
-}
+interface StarEntry { id: number; root: string; file_path: string; }
 
 // Module-level signal so all tree instances share star state
-const [starredPaths, setStarredPaths] = createSignal<Set<string>>(loadStars());
+const [starEntries, setStarEntries] = createSignal<StarEntry[]>([]);
 const [starVersion, setStarVersion] = createSignal(0);
 
-export function toggleStar(path: string) {
-  setStarredPaths((prev) => {
-    const next = new Set(prev);
-    if (next.has(path)) { next.delete(path); } else { next.add(path); }
-    saveStars(next);
-    return next;
-  });
-  setStarVersion((v) => v + 1);
+/** Fetch starred files from the server and populate the signal. */
+export function loadStars() {
+  fetch('/api/docs/stars')
+    .then(r => r.json())
+    .then((data: { stars: StarEntry[] }) => {
+      setStarEntries(data.stars || []);
+      setStarVersion((v) => v + 1);
+    })
+    .catch(() => {});
+}
+
+// Load on module init
+loadStars();
+
+export function toggleStar(path: string, root = '.') {
+  const existing = starEntries().find(s => s.file_path === path);
+  if (existing) {
+    // Optimistic remove
+    setStarEntries((prev) => prev.filter(s => s.id !== existing.id));
+    setStarVersion((v) => v + 1);
+    kmdFetch(`/api/docs/stars/${existing.id}`, { method: 'DELETE' }).catch(() => loadStars());
+  } else {
+    // Optimistic add
+    const temp: StarEntry = { id: -1, root, file_path: path };
+    setStarEntries((prev) => [...prev, temp]);
+    setStarVersion((v) => v + 1);
+    kmdFetch('/api/docs/stars', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root, file_path: path }),
+    })
+      .then(r => r.json())
+      .then((data: { ok: boolean; id: number }) => {
+        if (data.ok) {
+          // Replace temp entry with real id
+          setStarEntries((prev) => prev.map(s => s === temp ? { ...temp, id: data.id } : s));
+        }
+      })
+      .catch(() => loadStars());
+  }
 }
 
 export function isStarred(path: string): boolean {
   starVersion(); // subscribe
-  return starredPaths().has(path);
+  return starEntries().some(s => s.file_path === path);
 }
 
 export function getStarredPaths(): string[] {
   starVersion(); // subscribe
-  return [...starredPaths()];
+  return starEntries().map(s => s.file_path);
 }
 
 // ---------------------------------------------------------------------------
