@@ -53,11 +53,19 @@ export function Sidebar(props: {
   theme?: () => string;
   crashCount?: () => number;
   tunnelUrl?: () => string | null;
+  isTunnelVisitor?: boolean;
   onToggleTheme?: () => void;
   onHelp?: () => void;
   onWorkspaceSettings?: () => void;
 }) {
-  const navItems = (['docs', 'scripts', 'ports', 'terminal'] as const).map((key) =>
+  const isTunnel = props.isTunnelVisitor ?? false;
+
+  // Tunnel visitors only see the Docs tab
+  const visibleTabs = isTunnel
+    ? (['docs'] as const)
+    : (['docs', 'scripts', 'ports', 'terminal'] as const);
+
+  const navItems = visibleTabs.map((key) =>
     h('a', {
       class: () => `nav-item${props.route() === key ? ' active' : ''}`,
       href: `#${key}`,
@@ -328,15 +336,31 @@ export function Sidebar(props: {
     ),
     GitStatusIndicator(),
     h('nav', { class: 'sidebar-nav' }, ...navItems),
-    TunnelSection(),
+    // Tunnel section: share controls for owner, branding for visitor
+    isTunnel
+      ? h('div', { style: 'padding: 12px 16px; margin-top: auto;' },
+          h('div', { style: 'font-size: 9px; color: var(--gruvbox-gray); line-height: 1.4; text-align: center;' },
+            'Shared workspace — docs only',
+          ),
+          h('div', { style: 'font-size: 10px; text-align: center; margin-top: 8px;' },
+            'Powered by ',
+            h('span', { style: 'font-weight: 700;' },
+              'K',
+              h('span', { style: 'color: var(--gruvbox-orange);' }, '.'),
+              h('span', { style: 'color: var(--gruvbox-aqua);' }, 'md'),
+            ),
+          ),
+        )
+      : TunnelSection(),
     h('div', { class: 'sidebar-footer' },
-      h('button', {
+      // Help and settings: only for owner (localhost)
+      isTunnel ? null : h('button', {
         class: 'theme-toggle-btn',
         onClick: () => props.onHelp?.(),
         title: 'Help & shortcuts (?)',
         style: 'font-size: 12px;',
       }, '?'),
-      h('button', {
+      isTunnel ? null : h('button', {
         class: 'theme-toggle-btn',
         onClick: () => props.onWorkspaceSettings?.(),
         title: 'Workspace settings',
@@ -354,6 +378,7 @@ export function Sidebar(props: {
           h('path', { d: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z' }),
         ),
       ),
+      // Theme toggle: available to everyone (only affects their browser)
       ThemeToggle(),
     ),
   );

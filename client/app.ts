@@ -184,13 +184,19 @@ function App() {
     setTheme((t) => t === 'dark' ? 'light' : 'dark');
   }
 
-  // Listen to hash changes
-  const onHashChange = () => setRoute(parseRoute(location.hash));
+  // Listen to hash changes (tunnel visitors are locked to #docs)
+  const onHashChange = () => {
+    if (isTunnelVisitor && parseRoute(location.hash) !== 'docs') {
+      location.hash = '#docs';
+      return;
+    }
+    setRoute(parseRoute(location.hash));
+  };
   window.addEventListener('hashchange', onHashChange);
   onCleanup(() => window.removeEventListener('hashchange', onHashChange));
 
   // Set default hash if none
-  if (!location.hash) {
+  if (!location.hash || isTunnelVisitor) {
     location.hash = '#docs';
   }
 
@@ -280,7 +286,8 @@ function App() {
   // Bug 6 fix: Dynamically update window title with workspace name
   createEffect(() => {
     const name = workspaceName();
-    document.title = name && name !== 'K.md' ? `K.md \u2014 ${name}` : 'K.md';
+    const base = name && name !== 'K.md' ? `K.md \u2014 ${name}` : 'K.md';
+    document.title = isTunnelVisitor ? `${base} (shared)` : base;
   });
 
   // -------------------------------------------------------------------------
@@ -292,8 +299,8 @@ function App() {
   function handleGlobalKeydown(e: KeyboardEvent) {
     const mod = isMac ? e.metaKey : e.ctrlKey;
 
-    // Cmd+K / Ctrl+K — Toggle command palette
-    if (mod && e.key === 'k') {
+    // Cmd+K / Ctrl+K — Toggle command palette (owner only)
+    if (mod && e.key === 'k' && !isTunnelVisitor) {
       e.preventDefault();
       setPaletteOpen((open) => !open);
       return;
@@ -306,25 +313,23 @@ function App() {
       return;
     }
 
-    // Cmd+2 — Scripts
-    if (mod && e.key === '2') {
-      e.preventDefault();
-      location.hash = '#scripts';
-      return;
-    }
-
-    // Cmd+3 — Ports
-    if (mod && e.key === '3') {
-      e.preventDefault();
-      location.hash = '#ports';
-      return;
-    }
-
-    // Cmd+4 — Terminal
-    if (mod && e.key === '4') {
-      e.preventDefault();
-      location.hash = '#terminal';
-      return;
+    // Cmd+2/3/4 — Scripts/Ports/Terminal (owner only)
+    if (!isTunnelVisitor) {
+      if (mod && e.key === '2') {
+        e.preventDefault();
+        location.hash = '#scripts';
+        return;
+      }
+      if (mod && e.key === '3') {
+        e.preventDefault();
+        location.hash = '#ports';
+        return;
+      }
+      if (mod && e.key === '4') {
+        e.preventDefault();
+        location.hash = '#terminal';
+        return;
+      }
     }
 
     // Escape — close help/palette/workspace panel if open, otherwise clear search
@@ -510,13 +515,13 @@ function App() {
   }
 
   return h('div', { class: () => `layout${sidebarOpen() ? '' : ' sidebar-collapsed'}` },
-    Sidebar({ route, workspaceName, theme, crashCount, tunnelUrl, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
+    Sidebar({ route, workspaceName, theme, crashCount, tunnelUrl, isTunnelVisitor, onToggleTheme: toggleTheme, onHelp: () => setHelpOpen(true), onWorkspaceSettings: () => setWorkspacePanelOpen(true) }),
     h('div', { class: 'main' },
       h('div', { class: 'main-header' },
         HamburgerButton(),
         h('h1', null, () => PAGE_TITLES[route()]),
         h('span', { style: 'margin-left: auto;' }),
-        h('button', {
+        isTunnelVisitor ? null : h('button', {
           class: 'kbd-hints palette-trigger',
           onClick: () => setPaletteOpen(true),
           title: 'Open command palette',
