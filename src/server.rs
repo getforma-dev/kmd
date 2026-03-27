@@ -352,13 +352,15 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     // Prevent MIME-type sniffing
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-    // Content Security Policy: block inline scripts, allow inline styles (syntax highlighting)
-    headers.insert(
-        "content-security-policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
-            .parse()
-            .unwrap(),
-    );
+    // Content Security Policy — only set if not already present (gate page sets its own)
+    if !headers.contains_key("content-security-policy") {
+        headers.insert(
+            "content-security-policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://*.trycloudflare.com; frame-ancestors 'none'"
+                .parse()
+                .unwrap(),
+        );
+    }
 
     response
 }
