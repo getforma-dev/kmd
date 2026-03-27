@@ -984,46 +984,43 @@ export function DocsPage(props?: {
             onClick: () => setShowBookmarks(!showBookmarks()),
             title: 'Bookmarks',
           }, () => { const total = bookmarks().length + getStarredPaths().length; return `Bookmarks${total > 0 ? ` (${total})` : ''}`; }),
-          // Edit / Save / Cancel / Delete buttons (hidden for tunnel visitors)
-          ...(readOnly ? [] : [
-            createShow(
-              () => !!selectedPath() && !editMode(),
-              () => h('button', {
+          // Edit button (condition includes readOnly check)
+          createShow(
+            () => !readOnly && !!selectedPath() && !editMode(),
+            () => h('button', {
+              class: 'btn btn-ghost',
+              style: 'padding: 2px 8px; font-size: 10px; flex-shrink: 0;',
+              onClick: () => enterEditMode(),
+            }, 'Edit'),
+          ),
+          // Save / Cancel (edit mode — never shown for readOnly since editMode can't be entered)
+          createShow(
+            () => !readOnly && editMode(),
+            () => h('div', { style: 'display: flex; gap: 4px;' },
+              h('button', {
+                class: 'btn btn-primary',
+                style: 'padding: 2px 10px; font-size: 10px;',
+                onClick: () => saveEdit(),
+                disabled: () => saving(),
+              }, () => saving() ? 'Saving...' : 'Save'),
+              h('button', {
                 class: 'btn btn-ghost',
-                style: 'padding: 2px 8px; font-size: 10px; flex-shrink: 0;',
-                onClick: () => enterEditMode(),
-              }, 'Edit'),
-              () => h('span', { style: 'display: none;' }),
+                style: 'padding: 2px 8px; font-size: 10px;',
+                onClick: () => cancelEdit(),
+              }, 'Cancel'),
             ),
-            createShow(
-              () => editMode(),
-              () => h('div', { style: 'display: flex; gap: 4px;' },
-                h('button', {
-                  class: 'btn btn-primary',
-                  style: 'padding: 2px 10px; font-size: 10px;',
-                  onClick: () => saveEdit(),
-                  disabled: () => saving(),
-                }, () => saving() ? 'Saving...' : 'Save'),
-                h('button', {
-                  class: 'btn btn-ghost',
-                  style: 'padding: 2px 8px; font-size: 10px;',
-                  onClick: () => cancelEdit(),
-                }, 'Cancel'),
-              ),
-              () => h('span', { style: 'display: none;' }),
-            ),
-            createShow(
-              () => !!selectedPath(),
-              () => h('button', {
-                class: 'btn btn-ghost',
-                style: 'padding: 2px 8px; font-size: 10px; color: var(--gruvbox-red); flex-shrink: 0;',
-                onClick: () => deleteCurrentDoc(),
-                disabled: () => deleting(),
-                title: 'Delete this file',
-              }, () => deleting() ? 'Deleting...' : 'Delete'),
-              () => h('span', { style: 'display: none;' }),
-            ),
-          ]),
+          ),
+          // Delete button
+          createShow(
+            () => !readOnly && !!selectedPath(),
+            () => h('button', {
+              class: 'btn btn-ghost',
+              style: 'padding: 2px 8px; font-size: 10px; color: var(--gruvbox-red); flex-shrink: 0;',
+              onClick: () => deleteCurrentDoc(),
+              disabled: () => deleting(),
+              title: 'Delete this file',
+            }, () => deleting() ? 'Deleting...' : 'Delete'),
+          ),
           // Focus button
           h('button', {
             class: 'btn btn-ghost',
