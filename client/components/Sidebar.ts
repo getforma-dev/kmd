@@ -264,9 +264,15 @@ export function Sidebar(props: {
           h('line', { x1: '2', y1: '12', x2: '22', y2: '12' }),
           h('path', { d: 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' }),
         ),
+        // Green pulsing dot when live
+        h('span', {
+          style: () => props.tunnelUrl?.()
+            ? 'width: 6px; height: 6px; border-radius: 50%; background: var(--gruvbox-green); flex-shrink: 0; animation: pulse 2s ease-in-out infinite;'
+            : 'display: none;',
+        }),
         h('span', null, () => {
           if (tunnelLoading()) return 'Connecting...';
-          return props.tunnelUrl?.() ? 'Sharing' : 'Share';
+          return props.tunnelUrl?.() ? 'Live' : 'Share';
         }),
       ),
       // URL display (when active)
@@ -287,17 +293,17 @@ export function Sidebar(props: {
               style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
             }, 'Copied!'),
           ),
-          // Docs-only notice + upgrade CTA
+          // Docs-only warning + upgrade CTA
           h('div', {
-            style: 'margin-top: 6px; padding: 6px 8px; background: rgba(131,165,152,0.08); border: 1px solid rgba(131,165,152,0.15); border-radius: 4px; font-size: 9px; line-height: 1.5;',
+            style: 'margin-top: 6px; padding: 6px 8px; background: rgba(250,189,47,0.08); border: 1px solid rgba(250,189,47,0.2); border-radius: 4px; font-size: 9px; line-height: 1.5;',
           },
-            h('div', { style: 'color: var(--gruvbox-fg2);' }, 'Sharing docs only.'),
-            h('div', { style: 'color: var(--gruvbox-aqua); margin-top: 3px;' },
+            h('div', { style: 'color: var(--gruvbox-yellow); font-weight: 600;' }, 'Docs only — not authenticated'),
+            h('div', { style: 'color: var(--gruvbox-fg2); margin-top: 3px;' },
               'Unlock terminal, scripts & full remote access with ',
               h('a', {
                 href: 'https://auth.getforma.dev/platform/onboarding',
                 target: '_blank',
-                style: 'color: var(--gruvbox-aqua); text-decoration: underline;',
+                style: 'color: var(--gruvbox-yellow); text-decoration: underline; font-weight: 600;',
               }, 'GateWASM'),
             ),
           ),

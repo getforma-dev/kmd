@@ -37,9 +37,11 @@ pub enum ServerMessage {
     Notification { title: String, body: String, level: String },
     /// Resource usage update for running processes
     #[serde(rename = "resources")]
+    #[allow(dead_code)]
     Resources { processes: Vec<ProcessResources> },
     /// Git status update for workspace roots
     #[serde(rename = "git_status")]
+    #[allow(dead_code)]
     GitStatus { roots: Vec<crate::services::git::GitStatus> },
     /// Tunnel status change (started/stopped)
     #[serde(rename = "tunnel_status")]

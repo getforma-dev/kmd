@@ -716,6 +716,18 @@ code, pre, kbd {
   border-radius: var(--radius-md);
 }
 
+/* Hide duplicate alt text next to badge images ([![alt](img)](link) pattern) */
+.markdown-body a > img {
+  vertical-align: middle;
+}
+.markdown-body p > a:has(> img) {
+  font-size: 0;
+  line-height: 0;
+}
+.markdown-body p > a:has(> img) > img {
+  font-size: initial;
+}
+
 .markdown-body hr {
   border: none;
   height: 1px;
@@ -1496,4 +1508,10 @@ code, pre, kbd {
   .toc {
     display: none;
   }
+}
+
+/* --- Tunnel live indicator pulse --- */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }

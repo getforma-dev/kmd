@@ -64,6 +64,7 @@ pub fn read_env_file(root_path: &Path, relative_path: &str, reveal: bool) -> Opt
 }
 
 /// Compare two env files and show which keys differ.
+#[allow(dead_code)]
 pub fn compare_env_files(a: &[EnvVar], b: &[EnvVar]) -> EnvDiff {
     let a_map: BTreeMap<&str, &str> = a.iter().map(|v| (v.key.as_str(), v.value.as_str())).collect();
     let b_map: BTreeMap<&str, &str> = b.iter().map(|v| (v.key.as_str(), v.value.as_str())).collect();
