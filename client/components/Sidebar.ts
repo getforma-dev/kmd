@@ -245,7 +245,7 @@ export function Sidebar(props: {
 
   function TunnelSection() {
     return h('div', { style: 'padding: 0 12px 8px;' },
-      // Share button (toggle)
+      // Share button — starts tunnel. When live, becomes non-interactive status indicator.
       h('button', {
         style: () => {
           const active = !!props.tunnelUrl?.();
@@ -254,13 +254,16 @@ export function Sidebar(props: {
             width: 100%; padding: 6px 10px; border: 1px solid ${active ? 'var(--gruvbox-green)' : 'var(--gruvbox-gray)'};
             border-radius: 6px; background: ${active ? 'rgba(142,192,124,0.1)' : 'transparent'};
             color: ${active ? 'var(--gruvbox-green)' : 'var(--gruvbox-fg2)'};
-            font-size: 11px; font-family: var(--font-code); cursor: ${loading ? 'wait' : 'pointer'};
+            font-size: 11px; font-family: var(--font-code); cursor: ${active ? 'default' : loading ? 'wait' : 'pointer'};
             display: flex; align-items: center; gap: 6px; transition: all 0.15s;
             opacity: ${loading ? '0.6' : '1'};
           `;
         },
-        onClick: () => !tunnelLoading() && toggleTunnel(),
-        title: () => props.tunnelUrl?.() ? 'Stop sharing' : 'Share via public URL',
+        onClick: () => {
+          // Only clickable to START — stop is handled by the separate button below
+          if (!props.tunnelUrl?.() && !tunnelLoading()) toggleTunnel();
+        },
+        title: () => props.tunnelUrl?.() ? 'Sharing via public URL' : 'Share via public URL',
       },
         // Globe icon
         h('svg', {
@@ -301,6 +304,19 @@ export function Sidebar(props: {
               style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
             }, 'Copied!'),
           ),
+          // Stop sharing button
+          h('button', {
+            style: () => `
+              width: 100%; margin-top: 6px; padding: 5px 8px; border: 1px solid var(--gruvbox-red);
+              border-radius: 4px; background: transparent; color: var(--gruvbox-red);
+              font-size: 10px; font-family: var(--font-code); cursor: ${tunnelLoading() ? 'wait' : 'pointer'};
+              opacity: ${tunnelLoading() ? '0.5' : '0.7'}; transition: opacity 0.15s;
+            `,
+            onClick: () => !tunnelLoading() && toggleTunnel(),
+            title: 'Stop sharing and disconnect tunnel',
+            onMouseenter: (e: Event) => { (e.target as HTMLElement).style.opacity = '1'; },
+            onMouseleave: (e: Event) => { (e.target as HTMLElement).style.opacity = '0.7'; },
+          }, () => tunnelLoading() ? 'Stopping...' : 'Stop sharing'),
           // Docs-only warning + upgrade CTA
           h('div', {
             style: 'margin-top: 6px; padding: 6px 8px; background: rgba(250,189,47,0.08); border: 1px solid rgba(250,189,47,0.2); border-radius: 4px; font-size: 9px; line-height: 1.5;',
