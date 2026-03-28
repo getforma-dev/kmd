@@ -1497,12 +1497,6 @@ code, pre, kbd {
 
 /* --- Responsive --- */
 
-/* Container queries: .main-content adapts based on its own width */
-.main-content {
-  container-type: inline-size;
-  container-name: main;
-}
-
 /* Bottom tab bar: hidden on desktop, shown on mobile via body.mobile class */
 .bottom-tab-bar {
   display: none;
@@ -1548,7 +1542,8 @@ code, pre, kbd {
   display: none;
 }
 
-/* Mobile overlay base styles */
+/* Mobile overlay base styles
+   z-index layers: 150 overlays, 200 tab bar, 300 dropdown menus */
 .mobile-overlay {
   position: fixed;
   top: 0;
@@ -1556,10 +1551,11 @@ code, pre, kbd {
   width: 100%;
   z-index: 150;
   background: var(--gruvbox-bg);
-  transition: transform 0.25s ease;
+  transition: transform 0.25s ease, visibility 0.25s;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  visibility: hidden;
 }
 
 .mobile-overlay.from-left {
@@ -1574,6 +1570,7 @@ code, pre, kbd {
 
 .mobile-overlay.open {
   transform: translateX(0);
+  visibility: visible;
 }
 
 .mobile-overlay-header {
@@ -1701,29 +1698,6 @@ body.tablet .sidebar * {
 
 body.tablet .main-content {
   padding: var(--space-md);
-}
-
-/* ── Scripts page: stack vertically on phone ── */
-body.mobile .scripts-layout {
-  flex-direction: column;
-}
-
-body.mobile .scripts-layout > * {
-  width: 100% !important;
-  min-width: 0 !important;
-  max-width: none !important;
-  border-right: none !important;
-  border-bottom: 1px solid var(--gruvbox-border);
-}
-
-/* ── Ports page: horizontal scroll on phone ── */
-body.mobile .ports-table-wrapper {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-body.mobile .ports-table-wrapper table {
-  min-width: 600px;
 }
 
 /* ── General mobile tightening ── */

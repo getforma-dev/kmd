@@ -157,6 +157,7 @@ export function DocsPage(props?: {
       document.body.style.overflow = '';
     }
   });
+  onCleanup(() => { document.body.style.overflow = ''; });
 
   // Edit mode state
   const [editMode, setEditMode] = createSignal(false);
@@ -1864,7 +1865,9 @@ export function DocsPage(props?: {
   // Mobile overlays
   // -------------------------------------------------------------------------
 
-  function MobileFileTreeOverlay() {
+  // MobileFileTreeOverlay: wraps the shared leftPanelEl — on mobile, this wrapper
+  // becomes a fixed overlay via CSS. No duplicate LeftPanel() needed.
+  function MobileFileTreeOverlay(leftPanel: Node) {
     return h('div', {
       class: () => `mobile-overlay from-left${mobileFileTreeOpen() ? ' open' : ''}`,
     },
@@ -1872,7 +1875,7 @@ export function DocsPage(props?: {
         h('button', { onClick: () => setMobileFileTreeOpen(false) }, '\u2190'),
         h('h2', null, 'Files'),
       ),
-      h('div', { class: 'mobile-overlay-body' }, LeftPanel()),
+      h('div', { class: 'mobile-overlay-body' }, leftPanel),
     );
   }
 
@@ -1922,7 +1925,8 @@ export function DocsPage(props?: {
   // Full layout
   // -------------------------------------------------------------------------
 
-  // Wrap LeftPanel in a container that hides in focus mode
+  // Single LeftPanel instance — on desktop it renders inline, on mobile it lives
+  // inside MobileFileTreeOverlay (which is always in the DOM but off-screen via CSS).
   const leftPanelEl = LeftPanel();
 
   return h('div', {
@@ -1935,6 +1939,7 @@ export function DocsPage(props?: {
     ),
     // Main layout row
     h('div', { style: 'flex: 1; min-height: 0; display: flex; overflow: hidden;' },
+      // On desktop: left panel inline. On mobile: hidden here, shown via overlay below.
       h('div', {
         style: () => isMobile()
           ? 'display: none;'
@@ -1944,14 +1949,10 @@ export function DocsPage(props?: {
       }, leftPanelEl),
       RightPanel(),
     ),
-    // Mobile overlays
-    createShow(
-      () => isMobile(),
-      () => MobileFileTreeOverlay(),
-    ),
-    createShow(
-      () => isMobile(),
-      () => MobileTocOverlay(),
-    ),
+    // Mobile overlays — always in DOM (visibility controlled by CSS).
+    // File tree uses its own LeftPanel instance (DOM nodes can only have one parent;
+    // state stays in sync via shared module-level signals).
+    MobileFileTreeOverlay(LeftPanel()),
+    MobileTocOverlay(),
   );
 }
