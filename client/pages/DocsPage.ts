@@ -148,16 +148,10 @@ export function DocsPage(props?: {
   const isMobile = props?.isMobile ?? (() => false);
   const [mobileFileTreeOpen, setMobileFileTreeOpen] = createSignal(false);
   const [mobileTocOpen, setMobileTocOpen] = createSignal(false);
+  // No JS scroll lock needed — body.mobile { overflow: hidden } in CSS handles it.
 
-  // Scroll locking when overlays are open
-  createEffect(() => {
-    if (mobileFileTreeOpen() || mobileTocOpen()) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-  });
-  onCleanup(() => { document.body.style.overflow = ''; });
+  // Hover capability detection — hoisted to avoid re-querying per TOC entry per rebuild
+  const supportsHover = window.matchMedia('(hover: hover)').matches;
 
   // Edit mode state
   const [editMode, setEditMode] = createSignal(false);
@@ -957,7 +951,7 @@ export function DocsPage(props?: {
               bmBtn.textContent = isBookmarked ? '★' : '☆';
               bmBtn.title = isBookmarked ? 'Remove bookmark' : 'Bookmark this section';
               // Only add hover-reveal on devices with hover support (prevents sticky hover on touch)
-              if (window.matchMedia('(hover: hover)').matches) {
+              if (supportsHover) {
                 row.addEventListener('mouseenter', () => { if (!isBookmarked) bmBtn.style.opacity = '0.6'; });
                 row.addEventListener('mouseleave', () => { if (!isBookmarked) bmBtn.style.opacity = '0'; });
               }

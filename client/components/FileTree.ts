@@ -13,7 +13,7 @@ const [starVersion, setStarVersion] = createSignal(0);
 
 /** Fetch starred files from the server and populate the signal. */
 export function loadStars() {
-  fetch('/api/docs/stars')
+  kmdFetch('/api/docs/stars')
     .then(r => r.json())
     .then((data: { stars: StarEntry[] }) => {
       setStarEntries(data.stars || []);
@@ -45,8 +45,9 @@ export function toggleStar(path: string, root = '.') {
       .then(r => r.json())
       .then((data: { ok: boolean; id: number }) => {
         if (data.ok) {
-          // Replace temp entry with real id
           setStarEntries((prev) => prev.map(s => s === temp ? { ...temp, id: data.id } : s));
+        } else {
+          loadStars(); // server rejected — resync
         }
       })
       .catch(() => loadStars());

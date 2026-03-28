@@ -1760,7 +1760,15 @@ body.mobile .file-tree-star {
   justify-content: center;
 }
 
-/* ── Tablet tier ── */
+body.mobile .page-stub {
+  font-size: 13px;
+  padding: var(--space-md);
+}
+
+/* ── Tablet tier (481–768px width, no landscape phone) ──
+   Collapses the sidebar but retains the desktop nav pattern.
+   No bottom tab bar or overlays — tablet users have keyboard+pointer.
+   The hamburger button can re-expand the sidebar if needed. */
 body.tablet .sidebar {
   width: 0;
   min-width: 0;
@@ -1779,13 +1787,6 @@ body.tablet .main-content {
 /* ── Read-only: hide interactive elements for tunnel visitors ── */
 body.read-only .file-tree-star {
   display: none !important;
-}
-
-
-
-body.mobile .page-stub {
-  font-size: 13px;
-  padding: var(--space-md);
 }
 
 /* --- Tunnel live indicator pulse --- */

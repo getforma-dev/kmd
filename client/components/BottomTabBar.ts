@@ -50,6 +50,7 @@ export function BottomTabBar(props: {
     ...tabs.map((tab) =>
       h('button', {
         class: () => `tab-item${props.route() === tab.route ? ' active' : ''}`,
+        'aria-current': () => props.route() === tab.route ? 'page' : undefined,
         onClick: () => props.onNavigate(tab.route),
       },
         tab.icon(),
