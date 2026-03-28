@@ -1041,6 +1041,7 @@ export function DocsPage(props?: {
               menuItems.push({ label: editMode() ? 'Cancel edit' : 'Edit', action: () => { if (editMode()) cancelEdit(); else enterEditMode(); dismiss(); } });
             }
             menuItems.push({ label: showBookmarks() ? 'Hide bookmarks' : 'Bookmarks', action: () => { setShowBookmarks(!showBookmarks()); dismiss(); } });
+            menuItems.push({ label: 'Refresh', action: () => { dismiss(); location.reload(); } });
 
             return h('div', null,
               // Invisible backdrop to catch outside taps
