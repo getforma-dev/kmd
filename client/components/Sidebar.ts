@@ -244,19 +244,37 @@ export function Sidebar(props: {
   }
 
   function TunnelSection() {
+    // Track whether we're in the process of stopping (for graceful transition)
+    const [stopping, setStopping] = createSignal(false);
+
+    // Override toggleTunnel for stop to manage the transition
+    function stopTunnel() {
+      if (tunnelLoading()) return;
+      setStopping(true);
+      setTunnelLoading(true);
+      kmdFetch('/api/tunnel/stop', { method: 'POST' })
+        .finally(() => {
+          // Brief delay so the "Disconnecting" state is visible
+          setTimeout(() => {
+            setStopping(false);
+            setTunnelLoading(false);
+          }, 600);
+        });
+    }
+
     return h('div', { style: 'padding: 0 12px 8px;' },
-      // Inactive state: Share button
+      // Inactive state: Share button (no URL, not stopping)
       createShow(
-        () => !props.tunnelUrl?.() || tunnelLoading(),
+        () => !props.tunnelUrl?.() && !stopping(),
         () => h('button', {
           style: () => `
             width: 100%; padding: 6px 10px; border: 1px solid var(--gruvbox-gray);
             border-radius: 6px; background: transparent; color: var(--gruvbox-fg2);
             font-size: 11px; font-family: var(--font-code); cursor: ${tunnelLoading() ? 'wait' : 'pointer'};
-            display: flex; align-items: center; gap: 6px; transition: all 0.15s;
+            display: flex; align-items: center; gap: 6px; transition: all 0.3s;
             opacity: ${tunnelLoading() ? '0.6' : '1'};
           `,
-          onClick: () => !tunnelLoading() && !props.tunnelUrl?.() && toggleTunnel(),
+          onClick: () => !tunnelLoading() && toggleTunnel(),
           title: 'Share via public URL',
         },
           h('svg', {
@@ -271,61 +289,85 @@ export function Sidebar(props: {
           h('span', null, () => tunnelLoading() ? 'Connecting...' : 'Share'),
         ),
       ),
-      // Active state: compact card with URL, status, and stop
+      // Active + disconnecting state: card stays visible, transitions gracefully
       createShow(
-        () => !!props.tunnelUrl?.() && !tunnelLoading(),
-        () => h('div', {
-          style: 'border: 1px solid var(--gruvbox-green); border-radius: 6px; background: rgba(142,192,124,0.05); overflow: hidden;',
-        },
-          // Row 1: Live status + Stop action
-          h('div', {
-            style: 'display: flex; align-items: center; padding: 5px 8px; gap: 6px;',
+        () => !!props.tunnelUrl?.() || stopping(),
+        () => {
+          const isStopping = () => stopping();
+          return h('div', {
+            style: () => `
+              border: 1px solid ${isStopping() ? 'var(--gruvbox-gray)' : 'var(--gruvbox-green)'};
+              border-radius: 6px;
+              background: ${isStopping() ? 'rgba(168,153,132,0.05)' : 'rgba(142,192,124,0.05)'};
+              overflow: hidden;
+              transition: all 0.4s ease;
+              opacity: ${isStopping() ? '0.6' : '1'};
+            `,
           },
-            // Green dot
-            h('span', {
-              style: 'width: 6px; height: 6px; border-radius: 50%; background: var(--gruvbox-green); flex-shrink: 0; animation: pulse 2s ease-in-out infinite;',
-            }),
-            h('span', {
-              style: 'font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-green); flex: 1;',
-            }, 'Live'),
-            // Stop link
-            h('button', {
-              style: 'background: none; border: none; color: var(--gruvbox-gray); font-size: 10px; font-family: var(--font-code); cursor: pointer; padding: 2px 0; opacity: 0.7; transition: all 0.15s;',
-              onClick: () => !tunnelLoading() && toggleTunnel(),
-              title: 'Stop sharing',
-              onMouseenter: (e: Event) => { const el = e.target as HTMLElement; el.style.opacity = '1'; el.style.color = 'var(--gruvbox-red)'; },
-              onMouseleave: (e: Event) => { const el = e.target as HTMLElement; el.style.opacity = '0.7'; el.style.color = 'var(--gruvbox-gray)'; },
-            }, 'Stop'),
-          ),
-          // Row 2: URL (click to copy)
-          h('div', {
-            style: 'padding: 4px 8px 5px; background: var(--gruvbox-bg1); font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-aqua); word-break: break-all; cursor: pointer; position: relative; border-top: 1px solid rgba(142,192,124,0.15);',
-            onClick: copyTunnelUrl,
-            title: 'Click to copy URL',
-          },
-            h('span', null, () => {
-              const url = props.tunnelUrl?.() || '';
-              return url.replace('https://', '');
-            }),
-            h('span', {
-              style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
-            }, 'Copied!'),
-          ),
-          // Row 3: Docs-only warning + GateWASM CTA
-          h('div', {
-            style: 'padding: 6px 8px; font-size: 9px; line-height: 1.5; border-top: 1px solid rgba(142,192,124,0.1); background: rgba(250,189,47,0.06);',
-          },
-            h('div', { style: 'color: var(--gruvbox-yellow); font-weight: 600;' }, 'Docs only \u2014 not authenticated'),
-            h('div', { style: 'color: var(--gruvbox-fg2); margin-top: 2px;' },
-              'Unlock terminal, scripts & full remote access with ',
-              h('a', {
-                href: 'https://auth.getforma.dev/platform/onboarding',
-                target: '_blank',
-                style: 'color: var(--gruvbox-yellow); text-decoration: underline; font-weight: 600;',
-              }, 'GateWASM'),
+            // Row 1: Status + Stop action
+            h('div', {
+              style: 'display: flex; align-items: center; padding: 5px 8px; gap: 6px;',
+            },
+              // Dot: green pulsing when live, gray static when stopping
+              h('span', {
+                style: () => isStopping()
+                  ? 'width: 6px; height: 6px; border-radius: 50%; background: var(--gruvbox-gray); flex-shrink: 0; transition: background 0.3s;'
+                  : 'width: 6px; height: 6px; border-radius: 50%; background: var(--gruvbox-green); flex-shrink: 0; animation: pulse 2s ease-in-out infinite;',
+              }),
+              h('span', {
+                style: () => `font-size: 10px; font-family: var(--font-code); color: ${isStopping() ? 'var(--gruvbox-gray)' : 'var(--gruvbox-green)'}; flex: 1; transition: color 0.3s;`,
+              }, () => isStopping() ? 'Disconnecting\u2026' : 'Live'),
+              // Stop link (hidden when already stopping)
+              createShow(
+                () => !isStopping(),
+                () => h('button', {
+                  style: 'background: none; border: none; color: var(--gruvbox-gray); font-size: 10px; font-family: var(--font-code); cursor: pointer; padding: 2px 0; opacity: 0.7; transition: all 0.15s;',
+                  onClick: stopTunnel,
+                  title: 'Stop sharing',
+                  onMouseenter: (e: Event) => { const el = e.target as HTMLElement; el.style.opacity = '1'; el.style.color = 'var(--gruvbox-red)'; },
+                  onMouseleave: (e: Event) => { const el = e.target as HTMLElement; el.style.opacity = '0.7'; el.style.color = 'var(--gruvbox-gray)'; },
+                }, 'Stop'),
+              ),
             ),
-          ),
-        ),
+            // Row 2: URL (fades out when stopping)
+            h('div', {
+              style: () => `
+                padding: 4px 8px 5px; background: var(--gruvbox-bg1); font-size: 10px;
+                font-family: var(--font-code); color: var(--gruvbox-aqua); word-break: break-all;
+                cursor: ${isStopping() ? 'default' : 'pointer'}; position: relative;
+                border-top: 1px solid ${isStopping() ? 'var(--gruvbox-border)' : 'rgba(142,192,124,0.15)'};
+                opacity: ${isStopping() ? '0.4' : '1'}; transition: opacity 0.3s;
+              `,
+              onClick: () => !isStopping() && copyTunnelUrl(),
+              title: () => isStopping() ? '' : 'Click to copy URL',
+            },
+              h('span', null, () => {
+                const url = props.tunnelUrl?.() || '';
+                return url.replace('https://', '') || '\u2014';
+              }),
+              h('span', {
+                style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
+              }, 'Copied!'),
+            ),
+            // Row 3: CTA (hidden when stopping)
+            createShow(
+              () => !isStopping(),
+              () => h('div', {
+                style: 'padding: 6px 8px; font-size: 9px; line-height: 1.5; border-top: 1px solid rgba(142,192,124,0.1); background: rgba(250,189,47,0.06);',
+              },
+                h('div', { style: 'color: var(--gruvbox-yellow); font-weight: 600;' }, 'Docs only \u2014 not authenticated'),
+                h('div', { style: 'color: var(--gruvbox-fg2); margin-top: 2px;' },
+                  'Unlock terminal, scripts & full remote access with ',
+                  h('a', {
+                    href: 'https://auth.getforma.dev/platform/onboarding',
+                    target: '_blank',
+                    style: 'color: var(--gruvbox-yellow); text-decoration: underline; font-weight: 600;',
+                  }, 'GateWASM'),
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
