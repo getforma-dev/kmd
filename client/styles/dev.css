@@ -1702,6 +1702,13 @@ body.mobile .doc-content-area > * {
   min-height: 0;
 }
 
+/* Contain overscroll within the doc scroll area — prevents rubber-band
+   from bleeding through and showing the black background behind */
+body.mobile .main-content,
+body.mobile .main-content * {
+  overscroll-behavior: contain;
+}
+
 /* Hide desktop breadcrumb bar on mobile — compact header replaces it.
    !important needed to override inline style="display: flex" on the element. */
 body.mobile .doc-breadcrumb-bar {
