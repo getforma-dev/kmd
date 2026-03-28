@@ -13,3 +13,4 @@ npm/kmd-*/bin/kmd.exe
 docs/superpowers/
 docs/SECURITY-AUDIT-CHECKLIST.md
 KMD-BRAND-GUIDE.md
+.superpowers/
