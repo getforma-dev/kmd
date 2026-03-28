@@ -982,9 +982,11 @@ code, pre, kbd {
   border-left: 2px solid transparent;
 }
 
-.toc-item:hover {
-  color: var(--gruvbox-fg);
-  text-decoration: none;
+@media (hover: hover) {
+  .toc-item:hover {
+    color: var(--gruvbox-fg);
+    text-decoration: none;
+  }
 }
 
 .toc-item.active {
