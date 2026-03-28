@@ -1685,9 +1685,10 @@ body.mobile .doc-content-area > * {
   min-height: 0;
 }
 
-/* Hide desktop breadcrumb bar on mobile — compact header replaces it */
+/* Hide desktop breadcrumb bar on mobile — compact header replaces it.
+   !important needed to override inline style="display: flex" on the element. */
 body.mobile .doc-breadcrumb-bar {
-  display: none;
+  display: none !important;
 }
 
 /* Markdown body: constrain width, allow code blocks to scroll horizontally */
