@@ -262,19 +262,21 @@ export function Sidebar(props: {
         });
     }
 
+    // Derive connection state: 'idle' | 'connecting' | 'live' | 'stopping'
+    const tunnelState = () => {
+      if (stopping()) return 'stopping';
+      if (props.tunnelUrl?.()) return 'live';
+      if (tunnelLoading()) return 'connecting';
+      return 'idle';
+    };
+
     return h('div', { style: 'padding: 0 12px 8px;' },
-      // Inactive state: Share button (no URL, not stopping)
+      // Idle state: Share button
       createShow(
-        () => !props.tunnelUrl?.() && !stopping(),
+        () => tunnelState() === 'idle',
         () => h('button', {
-          style: () => `
-            width: 100%; padding: 6px 10px; border: 1px solid var(--gruvbox-gray);
-            border-radius: 6px; background: transparent; color: var(--gruvbox-fg2);
-            font-size: 11px; font-family: var(--font-code); cursor: ${tunnelLoading() ? 'wait' : 'pointer'};
-            display: flex; align-items: center; gap: 6px; transition: all 0.3s;
-            opacity: ${tunnelLoading() ? '0.6' : '1'};
-          `,
-          onClick: () => !tunnelLoading() && toggleTunnel(),
+          style: 'width: 100%; padding: 6px 10px; border: 1px solid var(--gruvbox-gray); border-radius: 6px; background: transparent; color: var(--gruvbox-fg2); font-size: 11px; font-family: var(--font-code); cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.3s;',
+          onClick: () => toggleTunnel(),
           title: 'Share via public URL',
         },
           h('svg', {
@@ -286,12 +288,26 @@ export function Sidebar(props: {
             h('line', { x1: '2', y1: '12', x2: '22', y2: '12' }),
             h('path', { d: 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' }),
           ),
-          h('span', null, () => tunnelLoading() ? 'Connecting...' : 'Share'),
+          h('span', null, 'Share'),
+        ),
+      ),
+      // Connecting state: card with pulsing gray dot
+      createShow(
+        () => tunnelState() === 'connecting',
+        () => h('div', {
+          style: 'border: 1px solid var(--gruvbox-gray); border-radius: 6px; background: rgba(168,153,132,0.05); overflow: hidden; padding: 8px 10px; display: flex; align-items: center; gap: 6px; transition: all 0.4s ease;',
+        },
+          h('span', {
+            style: 'width: 6px; height: 6px; border-radius: 50%; background: var(--gruvbox-yellow); flex-shrink: 0; animation: pulse 1.2s ease-in-out infinite;',
+          }),
+          h('span', {
+            style: 'font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-gray);',
+          }, 'Connecting\u2026'),
         ),
       ),
       // Active + disconnecting state: card stays visible, transitions gracefully
       createShow(
-        () => !!props.tunnelUrl?.() || stopping(),
+        () => tunnelState() === 'live' || tunnelState() === 'stopping',
         () => {
           const isStopping = () => stopping();
           return h('div', {

@@ -1792,5 +1792,5 @@ body.read-only .file-tree-star {
 /* --- Tunnel live indicator pulse --- */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  50% { opacity: 0.5; }
 }
