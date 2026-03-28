@@ -175,8 +175,14 @@ function App() {
   const tabletMql = window.matchMedia('(min-width: 481px) and (max-width: 768px)');
   const [isMobile, setIsMobile] = createSignal(mobileMql.matches);
   const [isTablet, setIsTablet] = createSignal(tabletMql.matches);
-  mobileMql.addEventListener('change', (e) => setIsMobile(e.matches));
-  tabletMql.addEventListener('change', (e) => setIsTablet(e.matches));
+  const onMobileChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+  const onTabletChange = (e: MediaQueryListEvent) => setIsTablet(e.matches);
+  mobileMql.addEventListener('change', onMobileChange);
+  tabletMql.addEventListener('change', onTabletChange);
+  onCleanup(() => {
+    mobileMql.removeEventListener('change', onMobileChange);
+    tabletMql.removeEventListener('change', onTabletChange);
+  });
 
   // Set body class for CSS (container queries can't target elements outside the container)
   createEffect(() => {

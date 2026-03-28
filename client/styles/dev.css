@@ -434,18 +434,10 @@ code, pre, kbd {
   font-weight: 600;
 }
 
-.btn-primary:hover {
-  background: var(--accent-bright);
-}
-
 .btn-danger {
   background: transparent;
   color: var(--gruvbox-red);
   border-color: var(--gruvbox-red);
-}
-
-.btn-danger:hover {
-  background: rgba(251, 73, 52, 0.1);
 }
 
 .btn-ghost {
@@ -454,9 +446,17 @@ code, pre, kbd {
   border-color: var(--gruvbox-border);
 }
 
-.btn-ghost:hover {
-  background: var(--hover-overlay);
-  border-color: var(--gruvbox-gray);
+@media (hover: hover) {
+  .btn-primary:hover {
+    background: var(--accent-bright);
+  }
+  .btn-danger:hover {
+    background: rgba(251, 73, 52, 0.1);
+  }
+  .btn-ghost:hover {
+    background: var(--hover-overlay);
+    border-color: var(--gruvbox-gray);
+  }
 }
 
 /* --- Status Indicators --- */
@@ -1031,10 +1031,12 @@ code, pre, kbd {
   opacity: 1;
 }
 
-.code-copy-btn:hover {
-  background: var(--gruvbox-bg-soft);
-  color: var(--gruvbox-fg);
-  border-color: var(--gruvbox-fg2);
+@media (hover: hover) {
+  .code-copy-btn:hover {
+    background: var(--gruvbox-bg-soft);
+    color: var(--gruvbox-fg);
+    border-color: var(--gruvbox-fg2);
+  }
 }
 
 .code-copy-btn.copied {
@@ -1446,8 +1448,10 @@ code, pre, kbd {
 }
 
 /* Collapsible root header in multi-root file tree */
-.file-tree-root-header:hover {
-  color: var(--gruvbox-fg1);
+@media (hover: hover) {
+  .file-tree-root-header:hover {
+    color: var(--gruvbox-fg1);
+  }
 }
 
 /* Crash badge pulse (draws eye when processes crash) */
@@ -1686,6 +1690,7 @@ body.mobile .mobile-header button:active {
 body.mobile .main-content {
   overflow: hidden;
   min-height: 0;
+  padding: var(--space-sm);
 }
 
 body.mobile .doc-content-area {
@@ -1769,10 +1774,7 @@ body.read-only .file-tree-star {
   display: none !important;
 }
 
-/* ── General mobile tightening ── */
-body.mobile .main-content {
-  padding: var(--space-sm);
-}
+
 
 body.mobile .page-stub {
   font-size: 13px;

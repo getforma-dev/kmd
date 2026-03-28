@@ -1200,7 +1200,7 @@ export function DocsPage(props?: {
                         return n.path === filePath || (n.children?.some(findPath) ?? false);
                       })
                     );
-                    handleFileSelect(filePath, matchedRoot?.root || selectedRoot());
+                    handleFileSelect(filePath, matchedRoot?.path || selectedRoot());
                     setTimeout(() => setShowBookmarks(false), 150);
                   };
                   panel.appendChild(row);
@@ -1874,8 +1874,8 @@ export function DocsPage(props?: {
   // Mobile overlays
   // -------------------------------------------------------------------------
 
-  // MobileFileTreeOverlay: wraps the shared leftPanelEl — on mobile, this wrapper
-  // becomes a fixed overlay via CSS. No duplicate LeftPanel() needed.
+  // MobileFileTreeOverlay: receives its own LeftPanel() instance (DOM nodes can only
+  // have one parent). State stays in sync via shared module-level signals.
   function MobileFileTreeOverlay(leftPanel: Node) {
     return h('div', {
       class: () => `mobile-overlay from-left${mobileFileTreeOpen() ? ' open' : ''}`,
