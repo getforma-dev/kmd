@@ -581,6 +581,7 @@ function App() {
       () => BottomTabBar({
         route,
         onNavigate: (r) => { location.hash = `#${r}`; },
+        isTunnelVisitor,
       }),
     ),
   );

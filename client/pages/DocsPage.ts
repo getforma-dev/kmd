@@ -1930,7 +1930,9 @@ export function DocsPage(props?: {
   const leftPanelEl = LeftPanel();
 
   return h('div', {
-    style: 'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
+    style: () => isMobile()
+      ? 'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-sm)); overflow: hidden;'
+      : 'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
   },
     // Mobile compact header
     createShow(

@@ -4,8 +4,9 @@ import type { Route } from './Sidebar';
 export function BottomTabBar(props: {
   route: () => Route;
   onNavigate: (route: Route) => void;
+  isTunnelVisitor?: boolean;
 }) {
-  const tabs: { route: Route; label: string; icon: () => Node }[] = [
+  const allTabs: { route: Route; label: string; icon: () => Node }[] = [
     {
       route: 'docs',
       label: 'Docs',
@@ -41,6 +42,9 @@ export function BottomTabBar(props: {
       ),
     },
   ];
+
+  // Tunnel visitors only see the Docs tab
+  const tabs = props.isTunnelVisitor ? allTabs.filter(t => t.route === 'docs') : allTabs;
 
   return h('nav', { class: 'bottom-tab-bar' },
     ...tabs.map((tab) =>

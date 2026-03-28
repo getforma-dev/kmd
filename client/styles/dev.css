@@ -1612,6 +1612,10 @@ code, pre, kbd {
 /* ── Phone tier ── */
 body.mobile {
   padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  overflow-x: hidden;
+  position: fixed;
+  width: 100%;
+  height: 100%;
 }
 
 body.mobile .sidebar {
@@ -1664,9 +1668,52 @@ body.mobile .mobile-header button:active {
   color: var(--accent, var(--gruvbox-yellow));
 }
 
-/* On mobile, DocsPage left panel becomes an overlay */
+/* On mobile, DocsPage content fills the screen and scrolls vertically */
 body.mobile .doc-content-area {
   flex-direction: column;
+  overflow: hidden;
+}
+
+body.mobile .main-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body.mobile .main-content > * {
+  height: 100%;
+}
+
+/* Markdown body needs to scroll within its container */
+body.mobile .markdown-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100% !important;
+  overflow-x: hidden;
+}
+
+/* Code blocks: horizontal scroll within the doc, not the whole page */
+body.mobile .markdown-body pre {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Images shouldn't overflow */
+body.mobile .markdown-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Tables: scroll horizontally within their container */
+body.mobile .markdown-body table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* TOC hidden on mobile (shown via overlay instead) */
+body.mobile .toc {
+  display: none;
 }
 
 /* Touch targets: file tree rows and TOC entries */
