@@ -949,24 +949,29 @@ export function DocsPage(props?: {
             });
             row.appendChild(item);
 
-            // Bookmark button
-            const isBookmarked = currentBookmarks.some((b) => b.heading_id === entry.id && b.file_path === selectedPath());
-            const bmBtn = document.createElement('button');
-            bmBtn.style.cssText = `background: none; border: none; cursor: pointer; font-size: 10px; padding: 0 2px; color: ${isBookmarked ? 'var(--accent)' : 'var(--gruvbox-gray)'}; opacity: ${isBookmarked ? '1' : '0'}; transition: opacity 0.15s;`;
-            bmBtn.textContent = isBookmarked ? '★' : '☆';
-            bmBtn.title = isBookmarked ? 'Remove bookmark' : 'Bookmark this section';
-            row.addEventListener('mouseenter', () => { if (!isBookmarked) bmBtn.style.opacity = '0.6'; });
-            row.addEventListener('mouseleave', () => { if (!isBookmarked) bmBtn.style.opacity = '0'; });
-            bmBtn.addEventListener('click', (e) => {
-              e.stopPropagation();
-              if (isBookmarked) {
-                const bm = currentBookmarks.find((b) => b.heading_id === entry.id && b.file_path === selectedPath());
-                if (bm) deleteBookmark(bm.id);
-              } else {
-                createBookmark(entry.id, entry.text);
+            // Bookmark button (hide for read-only/tunnel visitors)
+            if (!readOnly) {
+              const isBookmarked = currentBookmarks.some((b) => b.heading_id === entry.id && b.file_path === selectedPath());
+              const bmBtn = document.createElement('button');
+              bmBtn.style.cssText = `background: none; border: none; cursor: pointer; font-size: 10px; padding: 0 2px; color: ${isBookmarked ? 'var(--accent)' : 'var(--gruvbox-gray)'}; opacity: ${isBookmarked ? '1' : '0'}; transition: opacity 0.15s;`;
+              bmBtn.textContent = isBookmarked ? '★' : '☆';
+              bmBtn.title = isBookmarked ? 'Remove bookmark' : 'Bookmark this section';
+              // Only add hover-reveal on devices with hover support (prevents sticky hover on touch)
+              if (window.matchMedia('(hover: hover)').matches) {
+                row.addEventListener('mouseenter', () => { if (!isBookmarked) bmBtn.style.opacity = '0.6'; });
+                row.addEventListener('mouseleave', () => { if (!isBookmarked) bmBtn.style.opacity = '0'; });
               }
-            });
-            row.appendChild(bmBtn);
+              bmBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (isBookmarked) {
+                  const bm = currentBookmarks.find((b) => b.heading_id === entry.id && b.file_path === selectedPath());
+                  if (bm) deleteBookmark(bm.id);
+                } else {
+                  createBookmark(entry.id, entry.text);
+                }
+              });
+              row.appendChild(bmBtn);
+            }
 
             tocEl.appendChild(row);
           }

@@ -1754,6 +1754,11 @@ body.tablet .main-content {
   padding: var(--space-md);
 }
 
+/* ── Read-only: hide interactive elements for tunnel visitors ── */
+body.read-only .file-tree-star {
+  display: none !important;
+}
+
 /* ── General mobile tightening ── */
 body.mobile .main-content {
   padding: var(--space-sm);

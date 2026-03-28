@@ -183,6 +183,7 @@ function App() {
     document.body.classList.toggle('mobile', isMobile());
     document.body.classList.toggle('tablet', isTablet());
   });
+  if (isTunnelVisitor) document.body.classList.add('read-only');
 
   // Persist sidebar and focus state
   createEffect(() => {
