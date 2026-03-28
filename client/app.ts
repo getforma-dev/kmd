@@ -169,6 +169,20 @@ function App() {
   // declared early because it's used in effects, handlers, and rendering below.
   const isTunnelVisitor = location.hostname.endsWith('.trycloudflare.com');
 
+  // Mobile detection: matchMedia for responsive layout
+  const mobileMql = window.matchMedia('(max-width: 480px)');
+  const tabletMql = window.matchMedia('(min-width: 481px) and (max-width: 768px)');
+  const [isMobile, setIsMobile] = createSignal(mobileMql.matches);
+  const [isTablet, setIsTablet] = createSignal(tabletMql.matches);
+  mobileMql.addEventListener('change', (e) => setIsMobile(e.matches));
+  tabletMql.addEventListener('change', (e) => setIsTablet(e.matches));
+
+  // Set body class for CSS (container queries can't target elements outside the container)
+  createEffect(() => {
+    document.body.classList.toggle('mobile', isMobile());
+    document.body.classList.toggle('tablet', isTablet());
+  });
+
   // Persist sidebar and focus state
   createEffect(() => {
     localStorage.setItem('kmd:sidebar', sidebarOpen() ? 'open' : 'closed');
