@@ -1619,6 +1619,16 @@ body.mobile {
   overflow: hidden;
   height: 100dvh;
   width: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation;
+}
+
+/* Prevent iOS auto-zoom on inputs/selects (triggers when font-size < 16px) */
+body.mobile input,
+body.mobile select,
+body.mobile textarea {
+  font-size: 16px;
 }
 
 body.mobile .sidebar {
