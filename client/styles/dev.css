@@ -1496,18 +1496,244 @@ code, pre, kbd {
 }
 
 /* --- Responsive --- */
-@media (max-width: 768px) {
-  .sidebar {
-    display: none;
-  }
 
-  .main-content {
-    padding: var(--space-md);
-  }
+/* Container queries: .main-content adapts based on its own width */
+.main-content {
+  container-type: inline-size;
+  container-name: main;
+}
 
-  .toc {
-    display: none;
-  }
+/* Bottom tab bar: hidden on desktop, shown on mobile via body.mobile class */
+.bottom-tab-bar {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  background: var(--gruvbox-bg);
+  border-top: 1px solid var(--gruvbox-border);
+  height: calc(56px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.bottom-tab-bar .tab-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 4px;
+  min-height: 48px;
+  color: var(--gruvbox-gray);
+  font-size: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  border: none;
+  background: none;
+}
+
+.bottom-tab-bar .tab-item.active {
+  color: var(--accent, var(--gruvbox-yellow));
+}
+
+.bottom-tab-bar .tab-item svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Compact mobile header: hidden on desktop */
+.mobile-header {
+  display: none;
+}
+
+/* Mobile overlay base styles */
+.mobile-overlay {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  z-index: 150;
+  background: var(--gruvbox-bg);
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-overlay.from-left {
+  left: 0;
+  transform: translateX(-100%);
+}
+
+.mobile-overlay.from-right {
+  right: 0;
+  transform: translateX(100%);
+}
+
+.mobile-overlay.open {
+  transform: translateX(0);
+}
+
+.mobile-overlay-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--gruvbox-border);
+  flex-shrink: 0;
+}
+
+.mobile-overlay-header button {
+  background: none;
+  border: none;
+  color: var(--accent, var(--gruvbox-yellow));
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mobile-overlay-header h2 {
+  font-size: 15px;
+  font-weight: bold;
+  color: var(--gruvbox-fg);
+  margin: 0;
+}
+
+.mobile-overlay-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Phone tier ── */
+body.mobile {
+  padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+}
+
+body.mobile .sidebar {
+  display: none;
+}
+
+body.mobile .main-header {
+  display: none;
+}
+
+body.mobile .bottom-tab-bar {
+  display: flex;
+}
+
+body.mobile .mobile-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--gruvbox-bg);
+  border-bottom: 1px solid var(--gruvbox-border);
+  flex-shrink: 0;
+  min-height: 44px;
+}
+
+body.mobile .mobile-header .filename {
+  flex: 1;
+  font-size: 13px;
+  color: var(--gruvbox-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.mobile .mobile-header button {
+  background: none;
+  border: none;
+  color: var(--gruvbox-gray);
+  cursor: pointer;
+  padding: 4px;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body.mobile .mobile-header button:active {
+  color: var(--accent, var(--gruvbox-yellow));
+}
+
+/* On mobile, DocsPage left panel becomes an overlay */
+body.mobile .doc-content-area {
+  flex-direction: column;
+}
+
+/* Touch targets: file tree rows and TOC entries */
+body.mobile .file-tree-item {
+  min-height: 44px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+body.mobile .file-tree-star {
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Tablet tier ── */
+body.tablet .sidebar {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-right: none;
+}
+
+body.tablet .sidebar * {
+  visibility: hidden;
+}
+
+body.tablet .main-content {
+  padding: var(--space-md);
+}
+
+/* ── Scripts page: stack vertically on phone ── */
+body.mobile .scripts-layout {
+  flex-direction: column;
+}
+
+body.mobile .scripts-layout > * {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  border-right: none !important;
+  border-bottom: 1px solid var(--gruvbox-border);
+}
+
+/* ── Ports page: horizontal scroll on phone ── */
+body.mobile .ports-table-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+body.mobile .ports-table-wrapper table {
+  min-width: 600px;
+}
+
+/* ── General mobile tightening ── */
+body.mobile .main-content {
+  padding: var(--space-sm);
+}
+
+body.mobile .page-stub {
+  font-size: 13px;
+  padding: var(--space-md);
 }
 
 /* --- Tunnel live indicator pulse --- */
