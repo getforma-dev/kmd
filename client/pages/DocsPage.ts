@@ -1900,12 +1900,10 @@ export function DocsPage(props?: {
             const entries = tocEntries();
             container.innerHTML = '';
             for (const entry of entries) {
-              const link = document.createElement('a');
-              link.style.cssText = `display: flex; align-items: center; padding: 10px 0 10px ${(entry.level - 1) * 16}px; color: var(--gruvbox-aqua); font-size: 13px; text-decoration: none; border-bottom: 1px solid var(--gruvbox-border); min-height: 44px;`;
-              link.href = `#${entry.id}`;
+              const link = document.createElement('div');
+              link.style.cssText = `display: flex; align-items: center; padding: 10px 0 10px ${(entry.level - 1) * 16}px; color: var(--gruvbox-aqua); font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--gruvbox-border); min-height: 44px; -webkit-tap-highlight-color: transparent;`;
               link.textContent = entry.text;
               link.addEventListener('click', (e) => {
-                e.preventDefault();
                 const target = document.getElementById(entry.id);
                 if (target) {
                   const scrollContainer = target.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
