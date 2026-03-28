@@ -1669,26 +1669,29 @@ body.mobile .mobile-header button:active {
   color: var(--accent, var(--gruvbox-yellow));
 }
 
-/* On mobile, DocsPage content fills the screen and scrolls vertically */
-body.mobile .doc-content-area {
-  flex-direction: column;
-  overflow: hidden;
-}
-
+/* On mobile, fix the scroll chain so doc content scrolls vertically.
+   Every flex ancestor of the scroll container needs min-height:0 to allow shrinking. */
 body.mobile .main-content {
-  flex: 1;
-  min-height: 0;
   overflow: hidden;
+  min-height: 0;
 }
 
-body.mobile .main-content > * {
-  height: 100%;
+body.mobile .doc-content-area {
+  min-height: 0;
 }
 
-/* Markdown body needs to scroll within its container */
+/* All flex children in the doc layout need min-height: 0 for scroll to work */
+body.mobile .doc-content-area > * {
+  min-height: 0;
+}
+
+/* Hide desktop breadcrumb bar on mobile — compact header replaces it */
+body.mobile .doc-breadcrumb-bar {
+  display: none;
+}
+
+/* Markdown body: constrain width, allow code blocks to scroll horizontally */
 body.mobile .markdown-body {
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
   max-width: 100% !important;
   overflow-x: hidden;
 }

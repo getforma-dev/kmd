@@ -1071,8 +1071,9 @@ export function DocsPage(props?: {
     return h('div', { class: 'doc-content-area', style: 'flex: 1; min-width: 0; display: flex;' },
       // Main content column — flex column: breadcrumb bar + scrollable content
       h('div', { style: 'flex: 1; min-width: 0; display: flex; flex-direction: column;' },
-        // Breadcrumb bar — fixed at top with action buttons
+        // Breadcrumb bar — fixed at top with action buttons (hidden on mobile, replaced by compact header)
         h('div', {
+          class: 'doc-breadcrumb-bar',
           style: 'flex-shrink: 0; min-height: 28px; display: flex; align-items: center; padding: 0 var(--space-lg); border-bottom: 1px solid var(--gruvbox-border); background: var(--gruvbox-bg); gap: 6px;',
         },
           Breadcrumb(),
