@@ -1032,24 +1032,29 @@ export function DocsPage(props?: {
           overflowOpen,
           () => {
             const dismiss = () => setOverflowOpen(false);
-            const onClickOutside = () => setTimeout(dismiss, 0);
-            document.addEventListener('click', onClickOutside, { once: true });
 
             const menuItems: { label: string; action: () => void }[] = [];
             if (!readOnly) {
               menuItems.push({ label: editMode() ? 'Cancel edit' : 'Edit', action: () => { if (editMode()) cancelEdit(); else enterEditMode(); dismiss(); } });
             }
             menuItems.push({ label: showBookmarks() ? 'Hide bookmarks' : 'Bookmarks', action: () => { setShowBookmarks(!showBookmarks()); dismiss(); } });
-            menuItems.push({ label: focusMode() ? 'Exit focus' : 'Focus', action: () => { setFocusMode(!focusMode()); dismiss(); } });
 
-            return h('div', {
-              style: 'position: absolute; right: 0; top: 100%; background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: var(--radius-md); min-width: 140px; z-index: 300; box-shadow: 0 4px 12px rgba(0,0,0,0.3);',
-            },
-              ...menuItems.map((item) =>
-                h('button', {
-                  style: 'display: block; width: 100%; text-align: left; background: none; border: none; color: var(--gruvbox-fg); padding: 10px 14px; font-size: 13px; cursor: pointer; min-height: 44px;',
-                  onClick: item.action,
-                }, item.label)
+            return h('div', null,
+              // Invisible backdrop to catch outside taps
+              h('div', {
+                style: 'position: fixed; inset: 0; z-index: 299;',
+                onClick: dismiss,
+              }),
+              // Menu dropdown
+              h('div', {
+                style: 'position: absolute; right: 0; top: 100%; background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: var(--radius-md); min-width: 140px; z-index: 300; box-shadow: 0 4px 12px rgba(0,0,0,0.3);',
+              },
+                ...menuItems.map((item) =>
+                  h('button', {
+                    style: 'display: block; width: 100%; text-align: left; background: none; border: none; color: var(--gruvbox-fg); padding: 10px 14px; font-size: 13px; cursor: pointer; min-height: 44px;',
+                    onClick: item.action,
+                  }, item.label)
+                ),
               ),
             );
           },
