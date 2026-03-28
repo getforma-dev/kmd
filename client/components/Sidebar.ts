@@ -245,54 +245,61 @@ export function Sidebar(props: {
 
   function TunnelSection() {
     return h('div', { style: 'padding: 0 12px 8px;' },
-      // Share button — starts tunnel. When live, becomes non-interactive status indicator.
-      h('button', {
-        style: () => {
-          const active = !!props.tunnelUrl?.();
-          const loading = tunnelLoading();
-          return `
-            width: 100%; padding: 6px 10px; border: 1px solid ${active ? 'var(--gruvbox-green)' : 'var(--gruvbox-gray)'};
-            border-radius: 6px; background: ${active ? 'rgba(142,192,124,0.1)' : 'transparent'};
-            color: ${active ? 'var(--gruvbox-green)' : 'var(--gruvbox-fg2)'};
-            font-size: 11px; font-family: var(--font-code); cursor: ${active ? 'default' : loading ? 'wait' : 'pointer'};
-            display: flex; align-items: center; gap: 6px; transition: all 0.15s;
-            opacity: ${loading ? '0.6' : '1'};
-          `;
-        },
-        onClick: () => {
-          // Only clickable to START — stop is handled by the separate button below
-          if (!props.tunnelUrl?.() && !tunnelLoading()) toggleTunnel();
-        },
-        title: () => props.tunnelUrl?.() ? 'Sharing via public URL' : 'Share via public URL',
-      },
-        // Globe icon
-        h('svg', {
-          viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
-          'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
-          style: 'width: 14px; height: 14px; flex-shrink: 0;',
-        },
-          h('circle', { cx: '12', cy: '12', r: '10' }),
-          h('line', { x1: '2', y1: '12', x2: '22', y2: '12' }),
-          h('path', { d: 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' }),
-        ),
-        // Green pulsing dot when live
-        h('span', {
-          style: () => props.tunnelUrl?.()
-            ? 'width: 6px; height: 6px; border-radius: 50%; background: var(--gruvbox-green); flex-shrink: 0; animation: pulse 2s ease-in-out infinite;'
-            : 'display: none;',
-        }),
-        h('span', null, () => {
-          if (tunnelLoading()) return 'Connecting...';
-          return props.tunnelUrl?.() ? 'Live' : 'Share';
-        }),
-      ),
-      // URL display (when active)
+      // Inactive state: Share button
       createShow(
-        () => !!props.tunnelUrl?.(),
-        () => h('div', { style: 'margin-top: 6px;' },
-          // URL (click to copy)
+        () => !props.tunnelUrl?.() || tunnelLoading(),
+        () => h('button', {
+          style: () => `
+            width: 100%; padding: 6px 10px; border: 1px solid var(--gruvbox-gray);
+            border-radius: 6px; background: transparent; color: var(--gruvbox-fg2);
+            font-size: 11px; font-family: var(--font-code); cursor: ${tunnelLoading() ? 'wait' : 'pointer'};
+            display: flex; align-items: center; gap: 6px; transition: all 0.15s;
+            opacity: ${tunnelLoading() ? '0.6' : '1'};
+          `,
+          onClick: () => !tunnelLoading() && !props.tunnelUrl?.() && toggleTunnel(),
+          title: 'Share via public URL',
+        },
+          h('svg', {
+            viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+            'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+            style: 'width: 14px; height: 14px; flex-shrink: 0;',
+          },
+            h('circle', { cx: '12', cy: '12', r: '10' }),
+            h('line', { x1: '2', y1: '12', x2: '22', y2: '12' }),
+            h('path', { d: 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' }),
+          ),
+          h('span', null, () => tunnelLoading() ? 'Connecting...' : 'Share'),
+        ),
+      ),
+      // Active state: compact card with URL, status, and stop
+      createShow(
+        () => !!props.tunnelUrl?.() && !tunnelLoading(),
+        () => h('div', {
+          style: 'border: 1px solid var(--gruvbox-green); border-radius: 6px; background: rgba(142,192,124,0.05); overflow: hidden;',
+        },
+          // Row 1: Live status + Stop action
           h('div', {
-            style: 'padding: 5px 8px; background: var(--gruvbox-bg1); border-radius: 4px; font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-aqua); word-break: break-all; cursor: pointer; position: relative;',
+            style: 'display: flex; align-items: center; padding: 5px 8px; gap: 6px;',
+          },
+            // Green dot
+            h('span', {
+              style: 'width: 6px; height: 6px; border-radius: 50%; background: var(--gruvbox-green); flex-shrink: 0; animation: pulse 2s ease-in-out infinite;',
+            }),
+            h('span', {
+              style: 'font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-green); flex: 1;',
+            }, 'Live'),
+            // Stop link
+            h('button', {
+              style: 'background: none; border: none; color: var(--gruvbox-gray); font-size: 10px; font-family: var(--font-code); cursor: pointer; padding: 2px 0; opacity: 0.7; transition: all 0.15s;',
+              onClick: () => !tunnelLoading() && toggleTunnel(),
+              title: 'Stop sharing',
+              onMouseenter: (e: Event) => { const el = e.target as HTMLElement; el.style.opacity = '1'; el.style.color = 'var(--gruvbox-red)'; },
+              onMouseleave: (e: Event) => { const el = e.target as HTMLElement; el.style.opacity = '0.7'; el.style.color = 'var(--gruvbox-gray)'; },
+            }, 'Stop'),
+          ),
+          // Row 2: URL (click to copy)
+          h('div', {
+            style: 'padding: 4px 8px 5px; background: var(--gruvbox-bg1); font-size: 10px; font-family: var(--font-code); color: var(--gruvbox-aqua); word-break: break-all; cursor: pointer; position: relative; border-top: 1px solid rgba(142,192,124,0.15);',
             onClick: copyTunnelUrl,
             title: 'Click to copy URL',
           },
@@ -304,32 +311,16 @@ export function Sidebar(props: {
               style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
             }, 'Copied!'),
           ),
-          // Stop sharing button
-          h('button', {
-            style: () => `
-              width: 100%; margin-top: 6px; padding: 5px 8px; border: 1px solid var(--gruvbox-red);
-              border-radius: 4px; background: transparent; color: var(--gruvbox-red);
-              font-size: 10px; font-family: var(--font-code); cursor: ${tunnelLoading() ? 'wait' : 'pointer'};
-              opacity: ${tunnelLoading() ? '0.5' : '0.7'}; transition: opacity 0.15s;
-            `,
-            onClick: () => !tunnelLoading() && toggleTunnel(),
-            title: 'Stop sharing and disconnect tunnel',
-            onMouseenter: (e: Event) => { (e.target as HTMLElement).style.opacity = '1'; },
-            onMouseleave: (e: Event) => { (e.target as HTMLElement).style.opacity = '0.7'; },
-          }, () => tunnelLoading() ? 'Stopping...' : 'Stop sharing'),
-          // Docs-only warning + upgrade CTA
+          // Row 3: Docs-only note with upgrade link (single line)
           h('div', {
-            style: 'margin-top: 6px; padding: 6px 8px; background: rgba(250,189,47,0.08); border: 1px solid rgba(250,189,47,0.2); border-radius: 4px; font-size: 9px; line-height: 1.5;',
+            style: 'padding: 4px 8px; font-size: 9px; color: var(--gruvbox-gray); border-top: 1px solid rgba(142,192,124,0.1);',
           },
-            h('div', { style: 'color: var(--gruvbox-yellow); font-weight: 600;' }, 'Docs only — not authenticated'),
-            h('div', { style: 'color: var(--gruvbox-fg2); margin-top: 3px;' },
-              'Unlock terminal, scripts & full remote access with ',
-              h('a', {
-                href: 'https://auth.getforma.dev/platform/onboarding',
-                target: '_blank',
-                style: 'color: var(--gruvbox-yellow); text-decoration: underline; font-weight: 600;',
-              }, 'GateWASM'),
-            ),
+            'Docs only \u00B7 ',
+            h('a', {
+              href: 'https://auth.getforma.dev/platform/onboarding',
+              target: '_blank',
+              style: 'color: var(--gruvbox-yellow); text-decoration: none;',
+            }, 'Upgrade for full access'),
           ),
         ),
       ),
