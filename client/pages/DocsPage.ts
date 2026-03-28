@@ -121,6 +121,7 @@ export function DocsPage(props?: {
   focusMode?: () => boolean;
   setFocusMode?: (v: boolean) => void;
   readOnly?: boolean;
+  isMobile?: () => boolean;
 }) {
   const readOnly = props?.readOnly ?? false;
   // State signals
@@ -142,6 +143,20 @@ export function DocsPage(props?: {
   const [focusMode, setFocusMode] = props?.focusMode
     ? [props.focusMode, props.setFocusMode!]
     : createSignal(false);
+
+  // Mobile overlay state
+  const isMobile = props?.isMobile ?? (() => false);
+  const [mobileFileTreeOpen, setMobileFileTreeOpen] = createSignal(false);
+  const [mobileTocOpen, setMobileTocOpen] = createSignal(false);
+
+  // Scroll locking when overlays are open
+  createEffect(() => {
+    if (mobileFileTreeOpen() || mobileTocOpen()) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+  });
 
   // Edit mode state
   const [editMode, setEditMode] = createSignal(false);
@@ -683,6 +698,7 @@ export function DocsPage(props?: {
     setEditMode(false); // exit edit mode when switching files
     setSelectedPath(path);
     setSelectedRoot(root);
+    setMobileFileTreeOpen(false);
   }
 
   // -------------------------------------------------------------------------
@@ -960,6 +976,84 @@ export function DocsPage(props?: {
         return tocEl;
       },
       () => h('div', null) as unknown as HTMLElement,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Mobile compact header
+  // -------------------------------------------------------------------------
+
+  function MobileCompactHeader() {
+    const [overflowOpen, setOverflowOpen] = createSignal(false);
+
+    return h('div', { class: 'mobile-header' },
+      // Files button
+      h('button', {
+        onClick: () => setMobileFileTreeOpen(true),
+        title: 'Files',
+      },
+        h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', style: 'width: 18px; height: 18px;' },
+          h('path', { d: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z' }),
+        ),
+      ),
+      // Filename
+      h('span', { class: 'filename' }, () => {
+        const p = selectedPath();
+        return p ? p.split('/').pop() || p : 'No file selected';
+      }),
+      // TOC button
+      h('button', {
+        onClick: () => setMobileTocOpen(true),
+        title: 'On this page',
+      },
+        h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', style: 'width: 18px; height: 18px;' },
+          h('line', { x1: '8', y1: '6', x2: '21', y2: '6' }),
+          h('line', { x1: '8', y1: '12', x2: '21', y2: '12' }),
+          h('line', { x1: '8', y1: '18', x2: '21', y2: '18' }),
+          h('line', { x1: '3', y1: '6', x2: '3.01', y2: '6' }),
+          h('line', { x1: '3', y1: '12', x2: '3.01', y2: '12' }),
+          h('line', { x1: '3', y1: '18', x2: '3.01', y2: '18' }),
+        ),
+      ),
+      // Overflow menu
+      h('div', { style: 'position: relative;' },
+        h('button', {
+          onClick: () => setOverflowOpen(!overflowOpen()),
+          title: 'More actions',
+        },
+          h('svg', { viewBox: '0 0 24 24', fill: 'currentColor', style: 'width: 18px; height: 18px;' },
+            h('circle', { cx: '12', cy: '5', r: '1.5' }),
+            h('circle', { cx: '12', cy: '12', r: '1.5' }),
+            h('circle', { cx: '12', cy: '19', r: '1.5' }),
+          ),
+        ),
+        createShow(
+          overflowOpen,
+          () => {
+            const dismiss = () => setOverflowOpen(false);
+            const onClickOutside = () => setTimeout(dismiss, 0);
+            document.addEventListener('click', onClickOutside, { once: true });
+
+            const menuItems: { label: string; action: () => void }[] = [];
+            if (!readOnly) {
+              menuItems.push({ label: editMode() ? 'Cancel edit' : 'Edit', action: () => { if (editMode()) cancelEdit(); else enterEditMode(); dismiss(); } });
+            }
+            menuItems.push({ label: showBookmarks() ? 'Hide bookmarks' : 'Bookmarks', action: () => { setShowBookmarks(!showBookmarks()); dismiss(); } });
+            menuItems.push({ label: focusMode() ? 'Exit focus' : 'Focus', action: () => { setFocusMode(!focusMode()); dismiss(); } });
+
+            return h('div', {
+              style: 'position: absolute; right: 0; top: 100%; background: var(--gruvbox-bg-soft); border: 1px solid var(--gruvbox-border); border-radius: var(--radius-md); min-width: 140px; z-index: 300; box-shadow: 0 4px 12px rgba(0,0,0,0.3);',
+            },
+              ...menuItems.map((item) =>
+                h('button', {
+                  style: 'display: block; width: 100%; text-align: left; background: none; border: none; color: var(--gruvbox-fg); padding: 10px 14px; font-size: 13px; cursor: pointer; min-height: 44px;',
+                  onClick: item.action,
+                }, item.label)
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -1767,6 +1861,64 @@ export function DocsPage(props?: {
   }
 
   // -------------------------------------------------------------------------
+  // Mobile overlays
+  // -------------------------------------------------------------------------
+
+  function MobileFileTreeOverlay() {
+    return h('div', {
+      class: () => `mobile-overlay from-left${mobileFileTreeOpen() ? ' open' : ''}`,
+    },
+      h('div', { class: 'mobile-overlay-header' },
+        h('button', { onClick: () => setMobileFileTreeOpen(false) }, '\u2190'),
+        h('h2', null, 'Files'),
+      ),
+      h('div', { class: 'mobile-overlay-body' }, LeftPanel()),
+    );
+  }
+
+  function MobileTocOverlay() {
+    return h('div', {
+      class: () => `mobile-overlay from-right${mobileTocOpen() ? ' open' : ''}`,
+    },
+      h('div', { class: 'mobile-overlay-header' },
+        h('button', { onClick: () => setMobileTocOpen(false) }, '\u2190'),
+        h('h2', null, 'On This Page'),
+      ),
+      h('div', { class: 'mobile-overlay-body', style: 'padding: 8px 16px;' },
+        (() => {
+          const container = document.createElement('div');
+          createEffect(() => {
+            const entries = tocEntries();
+            container.innerHTML = '';
+            for (const entry of entries) {
+              const link = document.createElement('a');
+              link.style.cssText = `display: flex; align-items: center; padding: 10px 0 10px ${(entry.level - 1) * 16}px; color: var(--gruvbox-aqua); font-size: 13px; text-decoration: none; border-bottom: 1px solid var(--gruvbox-border); min-height: 44px;`;
+              link.href = `#${entry.id}`;
+              link.textContent = entry.text;
+              link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const target = document.getElementById(entry.id);
+                if (target) {
+                  const scrollContainer = target.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
+                  if (scrollContainer) {
+                    const offsetTop = target.offsetTop - scrollContainer.offsetTop;
+                    scrollContainer.scrollTo({ top: offsetTop - 16, behavior: 'smooth' });
+                  } else {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }
+                }
+                setMobileTocOpen(false);
+              });
+              container.appendChild(link);
+            }
+          });
+          return container;
+        })(),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // Full layout
   // -------------------------------------------------------------------------
 
@@ -1774,13 +1926,32 @@ export function DocsPage(props?: {
   const leftPanelEl = LeftPanel();
 
   return h('div', {
-    style: 'display: flex; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
+    style: 'display: flex; flex-direction: column; height: 100%; margin: calc(-1 * var(--space-lg)); overflow: hidden;',
   },
-    h('div', {
-      style: () => focusMode()
-        ? 'width: 0; min-width: 0; overflow: hidden; border: none;'
-        : 'display: contents;',
-    }, leftPanelEl),
-    RightPanel(),
+    // Mobile compact header
+    createShow(
+      () => isMobile(),
+      () => MobileCompactHeader(),
+    ),
+    // Main layout row
+    h('div', { style: 'flex: 1; min-height: 0; display: flex; overflow: hidden;' },
+      h('div', {
+        style: () => isMobile()
+          ? 'display: none;'
+          : focusMode()
+            ? 'width: 0; min-width: 0; overflow: hidden; border: none;'
+            : 'display: contents;',
+      }, leftPanelEl),
+      RightPanel(),
+    ),
+    // Mobile overlays
+    createShow(
+      () => isMobile(),
+      () => MobileFileTreeOverlay(),
+    ),
+    createShow(
+      () => isMobile(),
+      () => MobileTocOverlay(),
+    ),
   );
 }

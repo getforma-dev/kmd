@@ -487,6 +487,7 @@ function App() {
         focusMode,
         setFocusMode,
         readOnly: isTunnelVisitor,
+        isMobile,
       }),
     },
     {
