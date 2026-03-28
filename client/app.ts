@@ -170,18 +170,29 @@ function App() {
   // declared early because it's used in effects, handlers, and rendering below.
   const isTunnelVisitor = location.hostname.endsWith('.trycloudflare.com');
 
-  // Mobile detection: matchMedia for responsive layout
+  // Mobile detection: portrait phones (narrow) OR landscape phones (short + landscape).
+  // This ensures landscape phones get the mobile overlay layout instead of cramped desktop.
   const mobileMql = window.matchMedia('(max-width: 480px)');
+  const landscapePhoneMql = window.matchMedia('(max-height: 430px) and (orientation: landscape)');
   const tabletMql = window.matchMedia('(min-width: 481px) and (max-width: 768px)');
-  const [isMobile, setIsMobile] = createSignal(mobileMql.matches);
-  const [isTablet, setIsTablet] = createSignal(tabletMql.matches);
-  const onMobileChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-  const onTabletChange = (e: MediaQueryListEvent) => setIsTablet(e.matches);
-  mobileMql.addEventListener('change', onMobileChange);
-  tabletMql.addEventListener('change', onTabletChange);
+
+  const checkMobile = () => mobileMql.matches || landscapePhoneMql.matches;
+  const checkTablet = () => !checkMobile() && tabletMql.matches;
+
+  const [isMobile, setIsMobile] = createSignal(checkMobile());
+  const [isTablet, setIsTablet] = createSignal(checkTablet());
+
+  const onBreakpointChange = () => {
+    setIsMobile(checkMobile());
+    setIsTablet(checkTablet());
+  };
+  mobileMql.addEventListener('change', onBreakpointChange);
+  landscapePhoneMql.addEventListener('change', onBreakpointChange);
+  tabletMql.addEventListener('change', onBreakpointChange);
   onCleanup(() => {
-    mobileMql.removeEventListener('change', onMobileChange);
-    tabletMql.removeEventListener('change', onTabletChange);
+    mobileMql.removeEventListener('change', onBreakpointChange);
+    landscapePhoneMql.removeEventListener('change', onBreakpointChange);
+    tabletMql.removeEventListener('change', onBreakpointChange);
   });
 
   // Set body class for CSS (container queries can't target elements outside the container)
