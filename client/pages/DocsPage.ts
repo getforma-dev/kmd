@@ -930,13 +930,11 @@ export function DocsPage(props?: {
             const row = document.createElement('div');
             row.style.cssText = 'display: flex; align-items: center; gap: 2px;';
 
-            const item = document.createElement('a');
+            const item = document.createElement('div');
             item.className = `toc-item toc-level-${entry.level}${entry.id === activeId ? ' active' : ''}`;
-            item.style.cssText += 'flex: 1; min-width: 0;';
+            item.style.cssText += 'flex: 1; min-width: 0; cursor: pointer; -webkit-tap-highlight-color: transparent;';
             item.textContent = entry.text;
-            item.href = `#${entry.id}`;
             item.addEventListener('click', (e) => {
-              e.preventDefault();
               const target = document.getElementById(entry.id);
               if (target) {
                 const scrollContainer = target.closest('[style*="overflow-y: auto"]') as HTMLElement | null;
