@@ -3,6 +3,7 @@ import { Sidebar, type Route } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
 import { HelpPanel } from './components/HelpPanel';
 import { WorkspacePanel } from './components/WorkspacePanel';
+import { BottomTabBar } from './components/BottomTabBar';
 import { DocsPage } from './pages/DocsPage';
 import { ScriptsPage } from './pages/ScriptsPage';
 import { PortsPage } from './pages/PortsPage';
@@ -573,6 +574,13 @@ function App() {
     createShow(
       () => workspacePanelOpen(),
       () => WorkspacePanel({ onClose: () => setWorkspacePanelOpen(false), workspaceName }),
+    ),
+    createShow(
+      () => isMobile(),
+      () => BottomTabBar({
+        route,
+        onNavigate: (r) => { location.hash = `#${r}`; },
+      }),
     ),
   );
 }
