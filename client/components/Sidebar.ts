@@ -311,16 +311,19 @@ export function Sidebar(props: {
               style: () => `position: absolute; top: 2px; right: 4px; font-size: 9px; color: var(--gruvbox-green); opacity: ${tunnelCopied() ? '1' : '0'}; transition: opacity 0.2s;`,
             }, 'Copied!'),
           ),
-          // Row 3: Docs-only note with upgrade link (single line)
+          // Row 3: Docs-only warning + GateWASM CTA
           h('div', {
-            style: 'padding: 4px 8px; font-size: 9px; color: var(--gruvbox-gray); border-top: 1px solid rgba(142,192,124,0.1);',
+            style: 'padding: 6px 8px; font-size: 9px; line-height: 1.5; border-top: 1px solid rgba(142,192,124,0.1); background: rgba(250,189,47,0.06);',
           },
-            'Docs only \u00B7 ',
-            h('a', {
-              href: 'https://auth.getforma.dev/platform/onboarding',
-              target: '_blank',
-              style: 'color: var(--gruvbox-yellow); text-decoration: none;',
-            }, 'Upgrade for full access'),
+            h('div', { style: 'color: var(--gruvbox-yellow); font-weight: 600;' }, 'Docs only \u2014 not authenticated'),
+            h('div', { style: 'color: var(--gruvbox-fg2); margin-top: 2px;' },
+              'Unlock terminal, scripts & full remote access with ',
+              h('a', {
+                href: 'https://auth.getforma.dev/platform/onboarding',
+                target: '_blank',
+                style: 'color: var(--gruvbox-yellow); text-decoration: underline; font-weight: 600;',
+              }, 'GateWASM'),
+            ),
           ),
         ),
       ),
