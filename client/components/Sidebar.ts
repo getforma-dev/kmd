@@ -220,6 +220,7 @@ export function Sidebar(props: {
     if (url) {
       // Stop tunnel
       kmdFetch('/api/tunnel/stop', { method: 'POST' })
+        .catch(() => {})
         .finally(() => setTunnelLoading(false));
     } else {
       // Start tunnel
@@ -239,6 +240,9 @@ export function Sidebar(props: {
       navigator.clipboard.writeText(url).then(() => {
         setTunnelCopied(true);
         setTimeout(() => setTunnelCopied(false), 2000);
+      }).catch(() => {
+        // Clipboard write can reject (document not focused / permission denied);
+        // stay silent rather than raising an unhandled rejection.
       });
     }
   }
@@ -253,6 +257,7 @@ export function Sidebar(props: {
       setStopping(true);
       setTunnelLoading(true);
       kmdFetch('/api/tunnel/stop', { method: 'POST' })
+        .catch(() => {})
         .finally(() => {
           // Brief delay so the "Disconnecting" state is visible
           setTimeout(() => {

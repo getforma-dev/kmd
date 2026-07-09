@@ -27,43 +27,52 @@ export function kmdFetch(url: string, init?: RequestInit): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// HTML sanitization (defense-in-depth — server already sanitizes via ammonia)
+// HTML sanitization — defense-in-depth behind the server's `ammonia` sanitizer,
+// which is the authoritative allowlist. This client layer hard-strips the
+// dangerous constructs most likely to slip through or be introduced
+// client-side. It deliberately does NOT re-implement a full tag allowlist:
+// that would strip legitimate ammonia-approved markup (e.g. <figure>,
+// <section>, <kbd>). Instead it denies the specific dangerous tags,
+// attributes, and URL schemes below.
 // ---------------------------------------------------------------------------
 
-/** Tags allowed in rendered markdown output. */
-const SAFE_TAGS = new Set([
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'a', 'img', 'ul', 'ol', 'li',
-  'code', 'pre', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
-  'strong', 'em', 'del', 'br', 'hr', 'div', 'span', 'sup', 'sub', 'mark',
-  'details', 'summary', 'input', 'dl', 'dt', 'dd', 'svg', 'path', 'circle',
-  'rect', 'line', 'polyline', 'polygon', 'text', 'g', 'defs', 'use',
-  'foreignobject',
+/** Elements removed entirely, subtree included. */
+const DANGEROUS_TAGS = new Set([
+  'script', 'iframe', 'object', 'embed', 'form', 'base', 'link', 'meta', 'style',
 ]);
 
-/** Attributes safe for general use. */
-const SAFE_ATTRS = new Set([
-  'href', 'src', 'alt', 'title', 'class', 'id', 'target', 'rel',
-  'colspan', 'rowspan', 'align', 'type', 'checked', 'disabled',
-  'width', 'height', 'viewbox', 'fill', 'stroke', 'stroke-width',
-  'd', 'cx', 'cy', 'r', 'x', 'y', 'x1', 'y1', 'x2', 'y2',
-  'points', 'transform', 'style',
-]);
+/** URL-bearing attributes whose scheme must be validated. */
+const URL_ATTRS = new Set(['href', 'src', 'action']);
 
-/** Dangerous attribute prefixes (event handlers). */
+/** Event-handler and other dangerous attribute names. */
 function isDangerousAttr(name: string): boolean {
   const lower = name.toLowerCase();
-  return lower.startsWith('on') || lower === 'formaction' || lower === 'xlink:href';
-}
-
-/** Dangerous URL schemes. */
-function isDangerousUrl(value: string): boolean {
-  const trimmed = value.trim().toLowerCase();
-  return trimmed.startsWith('javascript:') || trimmed.startsWith('vbscript:');
+  // on* handlers, form hijacking, legacy xlink, and inline CSS. `style` is
+  // denied because it enables CSS injection (data-exfil via background:url(),
+  // full-page clickjacking overlays).
+  return lower.startsWith('on') || lower === 'formaction' || lower === 'xlink:href' || lower === 'style';
 }
 
 /**
- * Sanitize an HTML string by parsing it with DOMParser (no script execution)
- * and removing dangerous elements/attributes.
+ * Dangerous URL schemes. Strips the ASCII control characters (tab/newline/CR/
+ * space, code points <= 0x20) that browsers ignore inside a scheme, so
+ * obfuscated payloads like `java\tscript:` are also caught. Blocks
+ * `javascript:`, `vbscript:`, and non-image `data:` URLs.
+ */
+function isDangerousUrl(value: string): boolean {
+  let v = '';
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 0x20) v += value[i];
+  }
+  v = v.toLowerCase();
+  if (v.startsWith('javascript:') || v.startsWith('vbscript:')) return true;
+  if (v.startsWith('data:') && !v.startsWith('data:image/')) return true;
+  return false;
+}
+
+/**
+ * Sanitize an HTML string by parsing it with DOMParser (inert — no script
+ * execution) and removing dangerous elements/attributes.
  */
 export function sanitizeHtml(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -74,30 +83,28 @@ export function sanitizeHtml(html: string): string {
 function sanitizeNode(node: Node): void {
   const children = Array.from(node.childNodes);
   for (const child of children) {
-    if (child.nodeType === Node.ELEMENT_NODE) {
-      const el = child as Element;
-      const tag = el.tagName.toLowerCase();
+    if (child.nodeType !== Node.ELEMENT_NODE) continue;
+    const el = child as Element;
+    const tag = el.tagName.toLowerCase();
 
-      // Remove disallowed tags entirely
-      if (tag === 'script' || tag === 'iframe' || tag === 'object' || tag === 'embed'
-          || tag === 'form' || tag === 'base' || tag === 'link' || tag === 'meta') {
-        node.removeChild(child);
-        continue;
-      }
-
-      // Strip event handler attributes and dangerous URLs
-      const attrs = Array.from(el.attributes);
-      for (const attr of attrs) {
-        if (isDangerousAttr(attr.name)) {
-          el.removeAttribute(attr.name);
-        } else if ((attr.name === 'href' || attr.name === 'src' || attr.name === 'action') && isDangerousUrl(attr.value)) {
-          el.removeAttribute(attr.name);
-        }
-      }
-
-      // Recurse into children
-      sanitizeNode(el);
+    // Remove disallowed tags entirely (subtree included).
+    if (DANGEROUS_TAGS.has(tag)) {
+      node.removeChild(child);
+      continue;
     }
+
+    // Strip dangerous attributes and dangerous-scheme URLs.
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (isDangerousAttr(name)) {
+        el.removeAttribute(attr.name);
+      } else if (URL_ATTRS.has(name) && isDangerousUrl(attr.value)) {
+        el.removeAttribute(attr.name);
+      }
+    }
+
+    // Recurse into children.
+    sanitizeNode(el);
   }
 }
 

@@ -5,6 +5,12 @@ import { renderMermaidDiagrams } from '../lib/mermaid';
 import { sanitizeHtml, sanitizeSnippet, kmdFetch, isValidDocPath } from '../lib/security';
 import { log } from '../lib/log';
 
+// Single `beforeunload` scroll-saver for the docs view. The scroll container is
+// recreated on every doc switch / edit-mode toggle, so we keep exactly one
+// window listener and just repoint it, instead of adding a new one each time
+// (which previously leaked a handler per doc view).
+let docScrollSaveHandler: (() => void) | null = null;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -331,6 +337,13 @@ export function DocsPage(props?: {
     const root = selectedRoot();
     if (!path) {
       setDocHtml('');
+      setIsTruncated(false);
+      return;
+    }
+    // Defense-in-depth: reject path traversal / absolute paths before fetching
+    // (the server is authoritative, but `..` survives per-segment encoding).
+    if (!isValidDocPath(path)) {
+      setDocHtml('<p>Invalid document path.</p>');
       setIsTruncated(false);
       return;
     }
@@ -1260,13 +1273,19 @@ export function DocsPage(props?: {
         h('div', {
           style: 'flex: 1; overflow-y: auto; padding: var(--space-lg);',
           ref: (el: Element) => {
-            // Save scroll position before unload
+            // Save scroll position before unload. Repoint the single shared
+            // listener (remove the previous one first) so switching docs does
+            // not accumulate `beforeunload` handlers.
             const scrollEl = el as HTMLElement;
             const saveScroll = () => {
               if (selectedPath()) {
                 sessionStorage.setItem('kmd:docScroll', String(scrollEl.scrollTop));
               }
             };
+            if (docScrollSaveHandler) {
+              window.removeEventListener('beforeunload', docScrollSaveHandler);
+            }
+            docScrollSaveHandler = saveScroll;
             window.addEventListener('beforeunload', saveScroll);
 
             // Restore scroll position after content loads
