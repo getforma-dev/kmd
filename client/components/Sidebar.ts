@@ -4,6 +4,9 @@ import { kmdFetch } from '../lib/security';
 
 export type Route = 'docs' | 'scripts' | 'ports' | 'terminal';
 
+/** Injected by esbuild from package.json at build time (see build-client.sh). */
+declare const __KMD_VERSION__: string;
+
 // ---------------------------------------------------------------------------
 // Feature 4: Git status polling
 // ---------------------------------------------------------------------------
@@ -405,7 +408,7 @@ export function Sidebar(props: {
             class: 'sidebar-project-name',
             title: () => props.workspaceName!(),
           }, () => props.workspaceName!())
-        : h('span', { class: 'sidebar-version' }, 'v0.1.0'),
+        : h('span', { class: 'sidebar-version' }, `v${__KMD_VERSION__}`),
     ),
     GitStatusIndicator(),
     h('nav', { class: 'sidebar-nav' }, ...navItems),

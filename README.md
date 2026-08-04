@@ -18,8 +18,10 @@ K.md is a local-first developer dashboard for navigating, searching, and annotat
 - **Script runner** — Discover and run package.json scripts with real-time output streaming via WebSocket
 - **Port monitor** — Live scan of active ports with process info and one-click kill
 - **Terminal** — Embedded PTY terminal sessions
+- **Share** — One click publishes a read-only docs view over a Cloudflare tunnel, so you can read your docs from a phone or send a teammate a link ([details](#sharing))
+- **Mobile layout** — Phones and tablets get a dedicated layout with a bottom tab bar and slide-over file tree
 - **Multi-root workspaces** — Point kmd at a monorepo and it discovers all documentation roots
-- **Offline** — Everything runs locally. No network required after install.
+- **Offline** — Everything runs locally. No network required until you choose to share.
 
 ## Install
 
@@ -60,6 +62,30 @@ kmd --force             # Force start even if port is in use
 | `Cmd/Ctrl + K` | Focus search |
 | `Cmd/Ctrl + Shift + H` | Highlight selected text with last-used color |
 | `Escape` | Close toolbar / dismiss |
+
+## Sharing
+
+Click **Share** in the sidebar and kmd opens a [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) to your local server, giving you a public HTTPS URL like `https://four-random-words.trycloudflare.com`. Open it on your phone, or send it to someone. Click again to stop.
+
+`cloudflared` is downloaded automatically on first use to `~/.kmd/bin/` — nothing to install. If your machine can't reach GitHub's release CDN, drop the binary in that directory yourself and kmd will use it.
+
+### What visitors can and cannot see
+
+**Shared links are docs-only.** kmd is not just a docs viewer — it runs an embedded PTY, a script runner, and a port monitor. None of that is reachable through the tunnel. A server-side allowlist permits only documentation reads; every other route returns 403, and the tunnel view hides the tabs that would hit them.
+
+| Through the tunnel | |
+|---|---|
+| Docs, search, table of contents, annotations, git status | Visible |
+| Terminal, scripts, ports, processes, env files | Blocked (403) |
+| Starting or stopping the tunnel itself | Blocked — localhost only |
+
+The WebSocket feed is filtered the same way: visitors receive documentation events only, never process output or port scans.
+
+### What the URL is worth
+
+**The URL is the only secret.** There is no login. The subdomain is four random words, unguessable in practice and not enumerable by Cloudflare — but anyone who has the link can read the docs you shared, and a new URL is generated every time you start sharing. Treat a shared link like a secret gist: fine for your own phone or a trusted teammate, not for anything confidential.
+
+Authenticated sharing — stable personal URLs, login-gated access, and full remote access including the terminal — is planned via [GateWASM](https://auth.getforma.dev/platform/onboarding).
 
 ## Development
 
@@ -124,4 +150,4 @@ npm/             Platform-specific binary packages for npm distribution
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
