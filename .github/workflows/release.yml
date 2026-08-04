@@ -250,18 +250,33 @@ jobs:
             ( cd "npm/$pkg" && npm publish --access public --provenance )
           done
 
+      # A package is readable from the registry only once npm's CDN has caught
+      # up, which takes longer than the publish call returns. Querying straight
+      # away reports a false negative — that is what turned the otherwise
+      # successful 0.2.0 release red and skipped its GitHub Release. Retry
+      # before believing anything is missing.
       - name: Confirm every package is live
         run: |
-          set -euo pipefail
+          set -uo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          for pkg in kmd kmd-darwin-arm64 kmd-darwin-x64 kmd-linux-x64 kmd-linux-arm64 kmd-win32-x64; do
-            if npm view "@getforma/$pkg@$VERSION" version >/dev/null 2>&1; then
-              echo "ok  @getforma/$pkg@$VERSION"
-            else
-              echo "::error::@getforma/$pkg@$VERSION is missing from the registry"
-              exit 1
+          PKGS="kmd kmd-darwin-arm64 kmd-darwin-x64 kmd-linux-x64 kmd-linux-arm64 kmd-win32-x64"
+          for attempt in $(seq 1 10); do
+            MISSING=""
+            for pkg in $PKGS; do
+              npm view "@getforma/$pkg@$VERSION" version --prefer-online >/dev/null 2>&1 \
+                || MISSING="$MISSING $pkg"
+            done
+            if [ -z "$MISSING" ]; then
+              echo "All packages live at $VERSION."
+              exit 0
             fi
+            echo "attempt $attempt/10 — waiting on:$MISSING"
+            sleep 15
           done
+          for pkg in $MISSING; do
+            echo "::error::@getforma/$pkg@$VERSION is missing from the registry"
+          done
+          exit 1
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
