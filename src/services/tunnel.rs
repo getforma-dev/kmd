@@ -19,10 +19,7 @@ use tokio::process::Command;
 
 /// Get the path where cloudflared should be cached.
 fn cloudflared_bin_path() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE")) // Windows fallback
-        .unwrap_or_else(|_| ".".to_string());
-    let base = PathBuf::from(home).join(".kmd").join("bin");
+    let base = crate::services::workspace::home_dir().join(".kmd").join("bin");
     if let Err(e) = std::fs::create_dir_all(&base) {
         tracing::warn!("Failed to create ~/.kmd/bin/: {e}");
     }

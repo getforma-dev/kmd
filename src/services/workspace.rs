@@ -62,8 +62,16 @@ fn validate_name(name: &str) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// Return the home directory via $HOME.
-fn home_dir() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").expect("$HOME not set"))
+/// The user's home directory.
+///
+/// Windows has no `HOME`; it uses `%USERPROFILE%`. Git Bash defines `HOME`,
+/// which is why relying on it alone appeared to work during development and
+/// panicked anywhere else — PowerShell, cmd, and CI all run without it.
+pub fn home_dir() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .expect("neither $HOME nor %USERPROFILE% is set")
 }
 
 /// `~/.kmd/workspaces/`
@@ -1189,6 +1197,18 @@ mod tests {
             .map(|c| c.as_os_str().to_string_lossy().to_string())
             .collect();
         parts.windows(expected.len()).any(|w| w == expected)
+    }
+
+    #[test]
+    fn home_dir_resolves_without_home_var() {
+        // Regression: `home_dir()` used to read only $HOME, so every workspace
+        // command panicked on Windows outside Git Bash (PowerShell, cmd, CI).
+        // At least one of the two variables is always set on a real system.
+        assert!(
+            std::env::var("HOME").is_ok() || std::env::var("USERPROFILE").is_ok(),
+            "test environment has neither HOME nor USERPROFILE",
+        );
+        assert!(home_dir().is_absolute(), "home_dir() must be absolute");
     }
 
     #[test]

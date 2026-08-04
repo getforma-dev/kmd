@@ -1450,8 +1450,7 @@ async fn api_port_kill_handler(
 // ---------------------------------------------------------------------------
 
 fn ports_json_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").expect("$HOME not set");
-    std::path::PathBuf::from(home).join(".kmd").join("ports.json")
+    crate::services::workspace::home_dir().join(".kmd").join("ports.json")
 }
 
 fn read_hidden_ports() -> Vec<u16> {
