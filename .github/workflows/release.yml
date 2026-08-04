@@ -32,6 +32,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # Catches version drift across the 13 places a version lives while
+      # working on main, rather than at tag time when a release is in flight.
+      - name: Check version consistency
+        run: npm run bump:check
+
       - name: Build client
         shell: bash
         run: bash build-client.sh
@@ -88,9 +93,10 @@ jobs:
             npm-pkg: kmd-win32-x64
 
     runs-on: ${{ matrix.os }}
+    # This job only produces artifacts. Nothing here can reach npm, which is
+    # what makes a partial release impossible.
     permissions:
       contents: read
-      id-token: write  # Required for npm trusted publishing (OIDC)
 
     steps:
       - uses: actions/checkout@v4
@@ -148,20 +154,20 @@ jobs:
             exit 1
           fi
 
-      # Trusted publishing: uses OIDC for auth, no npm token needed.
-      # Provenance is generated automatically.
-      # Configure at: npmjs.com → package Settings → Trusted Publisher
-      - name: Publish platform package
-        working-directory: npm/${{ matrix.npm-pkg }}
-        run: npm publish --access public --provenance
-
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.npm-pkg }}
           path: npm/${{ matrix.npm-pkg }}/bin/
+          if-no-files-found: error
 
-  publish-meta:
+  # Every package publishes from this one job, only after all five binaries
+  # built. Previously each matrix job built *and* published, so macOS could
+  # reach npm before Linux had finished compiling — which is how 0.1.2 shipped
+  # three platforms of five, and 0.1.5 shipped all five platforms with no meta
+  # package. Those versions are unusable and unfixable; npm's unpublish window
+  # is 72 hours.
+  publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
@@ -176,14 +182,48 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Verify version matches tag
+      - name: Download all platform binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-bins
+
+      - name: Stage binaries into their packages
         run: |
-          PKG_VERSION=$(node -p "require('./npm/kmd/package.json').version")
+          set -euo pipefail
+          for pkg in kmd-darwin-arm64 kmd-darwin-x64 kmd-linux-x64 kmd-linux-arm64 kmd-win32-x64; do
+            mkdir -p "npm/$pkg/bin"
+            cp -r "dist-bins/$pkg/." "npm/$pkg/bin/"
+          done
+          # Artifact upload/download does not preserve the executable bit, and
+          # npm stores file modes in the tarball — without this the installed
+          # binary is not executable on Linux or macOS.
+          chmod +x npm/kmd-darwin-arm64/bin/kmd \
+                   npm/kmd-darwin-x64/bin/kmd \
+                   npm/kmd-linux-x64/bin/kmd \
+                   npm/kmd-linux-arm64/bin/kmd
+          ls -l npm/*/bin/
+
+      - name: Verify every package matches the tag
+        run: |
+          set -euo pipefail
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
-            exit 1
-          fi
+          FAILED=0
+          for pkg in kmd kmd-darwin-arm64 kmd-darwin-x64 kmd-linux-x64 kmd-linux-arm64 kmd-win32-x64; do
+            PKG_VERSION=$(node -p "require('./npm/$pkg/package.json').version")
+            if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+              echo "::error::$pkg is $PKG_VERSION, tag is $TAG_VERSION"
+              FAILED=1
+            fi
+          done
+          # The meta package's optionalDependencies must point at this release,
+          # or `npm i @getforma/kmd` resolves binaries from an older version.
+          for dep in $(node -p "Object.values(require('./npm/kmd/package.json').optionalDependencies).join('\n')"); do
+            if [ "$dep" != "$TAG_VERSION" ]; then
+              echo "::error::meta optionalDependencies pins $dep, tag is $TAG_VERSION"
+              FAILED=1
+            fi
+          done
+          [ "$FAILED" -eq 0 ] || exit 1
 
       - name: Copy README into npm package
         run: cp README.md npm/kmd/README.md
@@ -191,9 +231,37 @@ jobs:
       # Trusted publishing: uses OIDC for auth, no npm token needed.
       # Provenance is generated automatically.
       # Configure at: npmjs.com → package Settings → Trusted Publisher
-      - name: Publish meta package
-        working-directory: npm/kmd
-        run: npm publish --access public --provenance
+      #
+      # Publishing is idempotent: a version already on npm is skipped rather
+      # than failing with a 403. That lets a re-run finish a release that died
+      # partway instead of dead-ending, which is what forced the 0.1.5 -> 0.1.6
+      # bump. The meta package goes last, so it never advertises platform
+      # packages that are not on the registry yet.
+      - name: Publish
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          for pkg in kmd-darwin-arm64 kmd-darwin-x64 kmd-linux-x64 kmd-linux-arm64 kmd-win32-x64 kmd; do
+            if npm view "@getforma/$pkg@$VERSION" version >/dev/null 2>&1; then
+              echo "@getforma/$pkg@$VERSION already published — skipping"
+              continue
+            fi
+            echo "Publishing @getforma/$pkg@$VERSION"
+            ( cd "npm/$pkg" && npm publish --access public --provenance )
+          done
+
+      - name: Confirm every package is live
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          for pkg in kmd kmd-darwin-arm64 kmd-darwin-x64 kmd-linux-x64 kmd-linux-arm64 kmd-win32-x64; do
+            if npm view "@getforma/$pkg@$VERSION" version >/dev/null 2>&1; then
+              echo "ok  @getforma/$pkg@$VERSION"
+            else
+              echo "::error::@getforma/$pkg@$VERSION is missing from the registry"
+              exit 1
+            fi
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -8,6 +8,8 @@
     "start": "./target/release/kmd",
     "test": "npx playwright test",
     "test:headed": "npx playwright test --headed",
+    "bump": "node scripts/bump-version.mjs",
+    "bump:check": "node scripts/bump-version.mjs --check",
     "link": "mkdir -p ~/.local/bin && ln -sf $(pwd)/target/release/kmd ~/.local/bin/kmd && echo 'Linked: kmd → ~/.local/bin/kmd' && echo 'Make sure ~/.local/bin is in your PATH'",
     "unlink": "rm -f ~/.local/bin/kmd && echo 'Unlinked: ~/.local/bin/kmd removed'"
   },
