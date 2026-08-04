@@ -27,20 +27,29 @@ export const TUNNEL_HOST = 'kmd-e2e.trycloudflare.com';
 const serverCommand = (port: number) =>
   `"${BIN}" --no-open --port ${port} --force`;
 
+const CI = !!process.env.CI;
+
 export default defineConfig({
   testDir: './tests/e2e',
-  timeout: 30_000,
-  retries: 0,
+  // CI runners are slower and colder than a dev machine — the first Windows
+  // port scan pays for a PowerShell start that is already warm locally.
+  timeout: CI ? 60_000 : 30_000,
+  retries: CI ? 2 : 0,
+  // The `github` reporter emits ::error:: annotations naming the failing test
+  // and line. Without it a CI failure is just "exit code 1", and the run log
+  // is not readable without repository credentials.
+  reporter: CI ? [['github'], ['list']] : [['list']],
   use: {
     headless: true,
     screenshot: 'only-on-failure',
+    trace: CI ? 'retain-on-failure' : 'off',
   },
   webServer: [
     {
       command: serverCommand(OWNER_PORT),
       cwd: WORKSPACE,
       port: OWNER_PORT,
-      timeout: 30_000,
+      timeout: CI ? 120_000 : 30_000,
       reuseExistingServer: false,
     },
     {
@@ -50,7 +59,7 @@ export default defineConfig({
       command: serverCommand(TUNNEL_PORT),
       cwd: WORKSPACE,
       port: TUNNEL_PORT,
-      timeout: 30_000,
+      timeout: CI ? 120_000 : 30_000,
       reuseExistingServer: false,
       env: { KMD_TEST_TUNNEL_HOST: TUNNEL_HOST },
     },
