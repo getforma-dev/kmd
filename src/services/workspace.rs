@@ -1180,18 +1180,29 @@ mod tests {
     // Config path safety
     // -----------------------------------------------------------------------
 
+    /// Assert `path` contains the given consecutive components. Compares
+    /// components rather than a substring so the check holds on Windows,
+    /// where the separator is `\` and a literal ".kmd/workspaces/" never matches.
+    fn has_components(path: &std::path::Path, expected: &[&str]) -> bool {
+        let parts: Vec<String> = path
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+        parts.windows(expected.len()).any(|w| w == expected)
+    }
+
     #[test]
     fn config_path_stays_in_base() {
         // Valid name should produce a path inside ~/.kmd/workspaces/
         let path = config_path("my-project");
         assert!(path.ends_with("my-project.json"));
-        assert!(path.to_string_lossy().contains(".kmd/workspaces/"));
+        assert!(has_components(&path, &[".kmd", "workspaces"]));
     }
 
     #[test]
     fn data_dir_stays_in_base() {
         let path = data_dir("my-project");
         assert!(path.ends_with("my-project"));
-        assert!(path.to_string_lossy().contains(".kmd/data/"));
+        assert!(has_components(&path, &[".kmd", "data"]));
     }
 }

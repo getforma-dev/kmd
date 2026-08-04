@@ -1,7 +1,12 @@
 import { test, expect } from '@playwright/test';
+import { OWNER_PORT } from '../../playwright.config';
 
 // CSRF header required by kmd for all mutating requests
 const CSRF_HEADERS = { 'X-KMD-Client': '1' };
+
+// Content assertions target tests/fixtures/docs-workspace, which this repo owns.
+// `KMDFIXTURE` appears in exactly one fixture file.
+const FIXTURE_TOKEN = 'KMDFIXTURE';
 
 // ---------------------------------------------------------------------------
 // App shell: basic loading, routing, layout
@@ -152,7 +157,9 @@ test.describe('Markdown Explorer', () => {
   });
 
   test('search returns results with root field', async ({ page }) => {
-    const searchInput = page.locator('.search-input');
+    // Both the desktop sidebar and the mobile layout render a .search-input;
+    // target the visible one rather than tripping strict mode.
+    const searchInput = page.locator('.search-input').first();
     await expect(searchInput).toBeVisible();
 
     await searchInput.fill('reactive');
@@ -172,11 +179,13 @@ test.describe('Markdown Explorer', () => {
     expect(count).toBeGreaterThan(0);
   });
 
-  test('search with "FMIR" returns highlighted results', async ({ page }) => {
-    const searchInput = page.locator('.search-input');
+  test('search with a fixture-only token returns highlighted results', async ({ page }) => {
+    // Both the desktop sidebar and the mobile layout render a .search-input;
+    // target the visible one rather than tripping strict mode.
+    const searchInput = page.locator('.search-input').first();
     await expect(searchInput).toBeVisible();
 
-    await searchInput.fill('FMIR');
+    await searchInput.fill(FIXTURE_TOKEN);
 
     const response = await page.waitForResponse(
       resp => resp.url().includes('/api/docs/search') && resp.status() === 200,
@@ -188,17 +197,13 @@ test.describe('Markdown Explorer', () => {
   });
 
   test('rendered markdown contains syntax-highlighted code blocks', async ({ page }) => {
-    const response = await page.request.get(
-      '/api/docs/FormaStack/docs/architecture/TURBO-STREAMS-EVALUATION.md?root=.',
-    );
+    const response = await page.request.get('/api/docs/guide/architecture.md?root=.');
     const data = await response.json();
     expect(data.html).toContain('class="highlight');
   });
 
   test('mermaid diagrams are present in rendered output', async ({ page }) => {
-    const response = await page.request.get(
-      '/api/docs/forma-code-poc-files/FormaOld/docs/FORMA-PLATFORM-SYNOPSIS.md?root=.',
-    );
+    const response = await page.request.get('/api/docs/guide/architecture.md?root=.');
     const data = await response.json();
     expect(data.html).toContain('class="mermaid"');
   });
@@ -319,18 +324,18 @@ test.describe('Port Monitor', () => {
     await expect(page.locator('a[href*="localhost"]').first()).toBeVisible({ timeout: 5000 });
   });
 
-  test('ports API returns port 4444 with command and uptime', async ({ page }) => {
+  test('ports API returns the kmd port with command and uptime', async ({ page }) => {
     const response = await page.request.get('/api/ports');
     const data = await response.json();
     expect(Array.isArray(data.ports)).toBe(true);
     expect(data.ports.length).toBeGreaterThan(0);
 
-    const port4444 = data.ports.find((p: any) => p.port === 4444);
-    expect(port4444).toBeTruthy();
-    expect(port4444.active).toBe(true);
+    const own = data.ports.find((p: any) => p.port === OWNER_PORT);
+    expect(own).toBeTruthy();
+    expect(own.active).toBe(true);
     // New fields
-    expect(port4444.uptime_secs).toBeDefined();
-    expect(typeof port4444.uptime_secs).toBe('number');
+    expect(own.uptime_secs).toBeDefined();
+    expect(typeof own.uptime_secs).toBe('number');
   });
 
   test('WebSocket receives port scan updates', async ({ page }) => {
@@ -361,8 +366,8 @@ test.describe('Port Monitor', () => {
     );
     await page.waitForTimeout(1000);
 
-    // Port 4444 should be a clickable link with href
-    const portLink = page.locator('a[href="http://localhost:4444"]');
+    // kmd's own port should be a clickable link with href
+    const portLink = page.locator(`a[href="http://localhost:${OWNER_PORT}"]`);
     await expect(portLink).toBeVisible({ timeout: 5000 });
     expect(await portLink.getAttribute('target')).toBe('_blank');
   });
@@ -375,7 +380,7 @@ test.describe('Port Monitor', () => {
 test.describe('Security', () => {
   test('path traversal in docs API returns error', async ({ page }) => {
     const response = await page.request.get(
-      '/api/docs/FormaStack/../../../../../../etc/passwd?root=.',
+      '/api/docs/guide/../../../../../../etc/passwd?root=.',
     );
     const text = await response.text();
     expect(text).not.toContain('root:');

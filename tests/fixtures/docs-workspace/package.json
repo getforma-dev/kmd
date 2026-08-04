@@ -1,0 +1,10 @@
+{
+  "name": "kmd-e2e-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fixture package so the script-runner tests have a script to discover and run.",
+  "scripts": {
+    "idle": "node -e \"setInterval(() => {}, 1000)\"",
+    "greet": "node -e \"console.log('hello from the kmd fixture')\""
+  }
+}
