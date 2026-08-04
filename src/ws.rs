@@ -78,12 +78,21 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    // Detect if this connection is from a tunnel visitor
+    // Detect if this connection is from a tunnel visitor. Match the live
+    // tunnel's host exactly (see `AppState::tunnel_host`) — a substring test
+    // for ".trycloudflare.com" would also match a host that merely contains
+    // it, e.g. "x.trycloudflare.com.attacker.test".
     let host = headers
         .get(axum::http::header::HOST)
         .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(':')
+        .next()
         .unwrap_or("");
-    let is_tunnel = host.contains(".trycloudflare.com");
+    let is_tunnel = state
+        .tunnel_host()
+        .as_deref()
+        .is_some_and(|t| t.eq_ignore_ascii_case(host));
 
     ws.on_upgrade(move |socket| handle_socket(socket, state, is_tunnel))
 }

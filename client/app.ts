@@ -166,9 +166,12 @@ function App() {
   const [terminalToken, setTerminalToken] = createSignal('');
   const [tunnelUrl, setTunnelUrl] = createSignal<string | null>(null);
 
-  // Detect if this is a tunnel visitor (not localhost owner) — must be
-  // declared early because it's used in effects, handlers, and rendering below.
-  const isTunnelVisitor = location.hostname.endsWith('.trycloudflare.com');
+  // Whether this is a tunnel visitor rather than the localhost owner. Resolved
+  // by the server before mount (see the bootstrap at the bottom of this file) —
+  // never inferred from `location.hostname`, which would hardcode Cloudflare's
+  // domain and break on a stable named tunnel. Must be a plain value because
+  // effects, handlers, and rendering below all read it synchronously.
+  const isTunnelVisitor = bootstrap.visitor;
 
   // Mobile detection: portrait phones (narrow) OR landscape phones (short + landscape).
   // This ensures landscape phones get the mobile overlay layout instead of cramped desktop.
@@ -310,15 +313,10 @@ function App() {
       // Non-critical, keep default
     });
 
-  // Fetch initial tunnel status
-  fetch('/api/tunnel')
-    .then((r) => r.json())
-    .then((data: { active: boolean; url?: string }) => {
-      if (data.active && data.url) {
-        setTunnelUrl(data.url);
-      }
-    })
-    .catch(() => {});
+  // Initial tunnel status came from the pre-mount bootstrap fetch.
+  if (bootstrap.active && bootstrap.url) {
+    setTunnelUrl(bootstrap.url);
+  }
 
   // Bug 6 fix: Dynamically update window title with workspace name
   createEffect(() => {
@@ -606,7 +604,42 @@ function App() {
 }
 
 // ---------------------------------------------------------------------------
-// Mount
+// Bootstrap + mount
 // ---------------------------------------------------------------------------
+
+interface Bootstrap {
+  /** True when this request reached kmd over the active tunnel, not localhost. */
+  visitor: boolean;
+  active: boolean;
+  url: string | null;
+}
+
+/**
+ * Ask the server who we are before the first render.
+ *
+ * `visitor` gates read-only mode, tab visibility, and routing, so it has to be
+ * known synchronously inside `App()`. One localhost round-trip is cheap, and
+ * this replaces the per-render `/api/tunnel` fetch that used to run anyway.
+ *
+ * If the request fails we assume owner (`visitor: false`): the server enforces
+ * the docs-only allowlist regardless, so a wrong guess here can only affect
+ * which chrome is drawn, never what a visitor is allowed to reach.
+ */
+async function loadBootstrap(): Promise<Bootstrap> {
+  try {
+    const res = await kmdFetch('/api/tunnel');
+    if (!res.ok) return { visitor: false, active: false, url: null };
+    const data = await res.json();
+    return {
+      visitor: data.visitor === true,
+      active: data.active === true,
+      url: typeof data.url === 'string' ? data.url : null,
+    };
+  } catch {
+    return { visitor: false, active: false, url: null };
+  }
+}
+
+const bootstrap = await loadBootstrap();
 
 mount(() => App(), '#app');

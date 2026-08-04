@@ -228,6 +228,20 @@ impl AppState {
         *self.inner.tunnel_url.lock().expect("Tunnel URL mutex poisoned") = url;
     }
 
+    /// Hostname of the currently active tunnel, if one is running.
+    ///
+    /// This is the **only** value a request's `Host`/`Origin` may be matched
+    /// against to be treated as a tunnel visitor. Matching a hardcoded
+    /// `*.trycloudflare.com` suffix instead would accept any quick-tunnel name
+    /// even while kmd is not sharing — letting a hostile page rebind such a
+    /// name to 127.0.0.1 and read local docs, which is precisely the DNS
+    /// rebinding attack the host-validation middleware exists to stop.
+    ///
+    /// Returns `None` when no tunnel is active, so nothing is a tunnel host.
+    pub fn tunnel_host(&self) -> Option<String> {
+        parse_tunnel_host(&self.tunnel_url()?)
+    }
+
     /// Check if a tunnel process is running.
     pub fn tunnel(&self) -> std::sync::MutexGuard<'_, Option<tokio::process::Child>> {
         self.inner.tunnel_process.lock().expect("Tunnel process mutex poisoned")
@@ -276,5 +290,60 @@ impl AppState {
                 })
             })
             .collect()
+    }
+}
+
+/// Extract the bare hostname from a tunnel URL (scheme and port stripped,
+/// lowercased). Returns `None` for anything that is not an absolute http(s)
+/// URL with a non-empty host, so a malformed value can never be matched
+/// against an incoming `Host` header.
+fn parse_tunnel_host(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let host = rest.split('/').next()?.split(':').next()?;
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_ascii_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod tunnel_host_tests {
+    use super::parse_tunnel_host;
+
+    #[test]
+    fn extracts_host_from_quick_tunnel_url() {
+        assert_eq!(
+            parse_tunnel_host("https://foo-bar-baz.trycloudflare.com").as_deref(),
+            Some("foo-bar-baz.trycloudflare.com"),
+        );
+    }
+
+    #[test]
+    fn strips_port_and_path_and_lowercases() {
+        assert_eq!(
+            parse_tunnel_host("https://Foo.Trycloudflare.com:443/docs").as_deref(),
+            Some("foo.trycloudflare.com"),
+        );
+    }
+
+    #[test]
+    fn accepts_named_tunnel_host() {
+        // Stable GateWASM-tier URLs are not trycloudflare.com — the exact-match
+        // rule must keep working for them with no code change.
+        assert_eq!(
+            parse_tunnel_host("https://victor.tunnel.getforma.dev").as_deref(),
+            Some("victor.tunnel.getforma.dev"),
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_values() {
+        assert_eq!(parse_tunnel_host(""), None);
+        assert_eq!(parse_tunnel_host("foo.trycloudflare.com"), None); // no scheme
+        assert_eq!(parse_tunnel_host("https://"), None);
+        assert_eq!(parse_tunnel_host("ftp://foo.trycloudflare.com"), None);
     }
 }

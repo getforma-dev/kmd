@@ -99,7 +99,7 @@ fn is_allowed_for_tunnel(path: &str, method: &axum::http::Method) -> bool {
     false
 }
 
-async fn validate_host(req: Request<Body>, next: Next) -> Response {
+async fn validate_host(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
     // WebSocket upgrade requests also go through this middleware
     let host = req
         .headers()
@@ -115,8 +115,15 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
         "localhost" | "127.0.0.1" | "[::1]"
     );
 
-    // When a cloudflared tunnel is active, also allow the tunnel domain.
-    let is_tunnel_host = !is_localhost && host_name.ends_with(".trycloudflare.com");
+    // When a cloudflared tunnel is active, also allow *that* tunnel's domain —
+    // and only that one. See `AppState::tunnel_host` for why an exact match
+    // against the live tunnel is required rather than a `*.trycloudflare.com`
+    // suffix test: with no tunnel running, no host is a tunnel host.
+    let tunnel_host = state.tunnel_host();
+    let is_tunnel_host = !is_localhost
+        && tunnel_host
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case(host_name));
 
     if !is_localhost && !is_tunnel_host {
         tracing::warn!("Blocked request with non-localhost Host header: {host}");
@@ -169,7 +176,9 @@ async fn validate_host(req: Request<Body>, next: Next) -> Response {
             origin_host,
             "localhost" | "127.0.0.1" | "[::1]"
         );
-        let origin_is_tunnel = origin_host.ends_with(".trycloudflare.com");
+        let origin_is_tunnel = tunnel_host
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case(origin_host));
 
         if !origin_is_localhost && !origin_is_tunnel {
             tracing::warn!("Blocked request with non-localhost Origin: {origin}");
@@ -243,6 +252,18 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
 
 /// Build the full Axum router with all routes and middleware.
 pub fn build_router(state: AppState) -> Router {
+    // Test-only seam: seed a tunnel host so the e2e suite can exercise the
+    // docs-only path without running cloudflared. This is safe by
+    // construction — tunnel mode is purely a *restriction*, never a
+    // privilege, so a request that matches it can reach strictly less than a
+    // localhost request can. It cannot be used to bypass anything.
+    if let Ok(host) = std::env::var("KMD_TEST_TUNNEL_HOST") {
+        if !host.is_empty() {
+            tracing::warn!("KMD_TEST_TUNNEL_HOST set — treating {host} as an active tunnel (test mode)");
+            state.set_tunnel_url(Some(format!("https://{host}")));
+        }
+    }
+
     let api = Router::new()
         // Workspace info
         // Health check (returns nonce for lockfile integrity verification)
@@ -307,7 +328,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(api)
         .fallback(static_handler)
         // Security: validate Host header, tunnel docs-only allowlist
-        .layer(middleware::from_fn(validate_host))
+        .layer(middleware::from_fn_with_state(state.clone(), validate_host))
         // Security: add protective response headers
         .layer(middleware::from_fn(add_security_headers))
         // Compression: gzip/brotli/deflate/zstd (critical for tunnel performance)
@@ -1758,11 +1779,34 @@ async fn api_env_compare_handler(
 // ---------------------------------------------------------------------------
 
 /// `GET /api/tunnel` — Get current tunnel status.
-async fn api_tunnel_status_handler(State(state): State<AppState>) -> impl IntoResponse {
+///
+/// `visitor` reports whether *this request* arrived over the tunnel rather
+/// than over localhost. It is the authoritative answer to "am I a shared-view
+/// visitor?" — the client must not infer that from `location.hostname`, which
+/// hardcodes a Cloudflare domain and would break the moment a stable named
+/// tunnel (`slug.tunnel.getforma.dev`) is used instead.
+async fn api_tunnel_status_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
     let url = state.tunnel_url();
+
+    let request_host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    let visitor = state
+        .tunnel_host()
+        .as_deref()
+        .is_some_and(|t| t.eq_ignore_ascii_case(request_host));
+
     Json(serde_json::json!({
         "active": url.is_some(),
         "url": url,
+        "visitor": visitor,
     }))
 }
 
