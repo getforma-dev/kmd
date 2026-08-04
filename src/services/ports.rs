@@ -115,10 +115,24 @@ pub async fn scan_ports() -> Vec<PortInfo> {
 
     let mut results: Vec<PortInfo> = Vec::new();
 
+    // Resolve any still-missing uptimes in one pass. Querying per-PID meant one
+    // subprocess per listening port — on Windows a PowerShell/CIM spawn each
+    // time, which pushed a single /api/ports call past 30 seconds on a machine
+    // with ~35 listeners and blocked a tokio worker for the duration.
+    // Discovery already fills these in on Windows, so this is usually a no-op.
+    let pending: Vec<u32> = raw
+        .iter()
+        .filter(|p| p.uptime_secs.is_none())
+        .filter_map(|p| p.pid)
+        .collect();
+    let uptimes = get_process_uptimes(&pending);
+
     for mut info in raw {
         // Real uptime from the OS
-        if let Some(pid) = info.pid {
-            info.uptime_secs = get_process_uptime(pid);
+        if info.uptime_secs.is_none() {
+            if let Some(pid) = info.pid {
+                info.uptime_secs = uptimes.get(&pid).copied();
+            }
         }
 
         // Auto-categorize
@@ -134,6 +148,64 @@ pub async fn scan_ports() -> Vec<PortInfo> {
 // ---------------------------------------------------------------------------
 // Process uptime
 // ---------------------------------------------------------------------------
+
+/// Uptimes for many PIDs at once, keyed by PID. PIDs with no answer are absent.
+///
+/// Windows resolves the whole process table in a single PowerShell call; other
+/// platforms fall back to the per-PID path, which is cheap there (`ps`).
+#[cfg(target_os = "windows")]
+fn get_process_uptimes(pids: &[u32]) -> std::collections::HashMap<u32, u64> {
+    use std::collections::HashMap;
+
+    let mut map = HashMap::new();
+    if pids.is_empty() {
+        return map;
+    }
+
+    // One CIM query for every process, filtered on our side. Cheaper and far
+    // simpler than building a 35-clause -Filter string.
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "$now = Get-Date; Get-CimInstance Win32_Process | \
+             ForEach-Object { \"$($_.ProcessId)=$([int](($now - $_.CreationDate).TotalSeconds))\" }",
+        ])
+        .output();
+
+    let Ok(out) = output else { return map };
+    if !out.status.success() {
+        return map;
+    }
+
+    let wanted: std::collections::HashSet<u32> = pids.iter().copied().collect();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Some((pid, secs)) = line.trim().split_once('=') else { continue };
+        let (Ok(pid), Ok(secs)) = (pid.parse::<u32>(), secs.parse::<i64>()) else { continue };
+        if secs >= 0 && wanted.contains(&pid) {
+            map.insert(pid, secs as u64);
+        }
+    }
+
+    // If the batch query produced nothing (PowerShell missing or locked down),
+    // fall back to the per-PID path, which still has its own wmic fallback.
+    if map.is_empty() {
+        for &pid in pids {
+            if let Some(secs) = get_process_uptime(pid) {
+                map.insert(pid, secs);
+            }
+        }
+    }
+
+    map
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_process_uptimes(pids: &[u32]) -> std::collections::HashMap<u32, u64> {
+    pids.iter()
+        .filter_map(|&pid| get_process_uptime(pid).map(|secs| (pid, secs)))
+        .collect()
+}
 
 /// Get real process uptime from `ps -o etime=` (Unix).
 #[cfg(unix)]
@@ -428,6 +500,70 @@ async fn discover_ports_via_ss() -> Vec<PortInfo> {
     results.into_values().collect()
 }
 
+/// One row of the Windows process table.
+#[cfg(target_os = "windows")]
+struct WinProc {
+    name: Option<String>,
+    command: Option<String>,
+    uptime_secs: Option<u64>,
+}
+
+/// Snapshot name, command line, and uptime for every process in a single query.
+///
+/// The per-PID helpers below remain as a fallback, but calling them in a loop
+/// meant two subprocess spawns (`tasklist` + a PowerShell CIM query) for every
+/// listening port — around 70 spawns and ~18s per scan on a normal dev machine.
+/// One CIM query returns all three fields for all processes at once.
+#[cfg(target_os = "windows")]
+fn windows_process_table() -> HashMap<u32, WinProc> {
+    // `|~|` is the field separator: command lines routinely contain spaces,
+    // quotes, commas and tabs, but not this sequence.
+    const SEP: &str = "|~|";
+
+    let mut table = HashMap::new();
+
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "$now = Get-Date; Get-CimInstance Win32_Process | ForEach-Object { \
+             \"$($_.ProcessId)|~|$($_.Name)|~|$([int]((($now) - $_.CreationDate).TotalSeconds))|~|$($_.CommandLine)\" }",
+        ])
+        .output();
+
+    let Ok(out) = output else { return table };
+    if !out.status.success() {
+        return table;
+    }
+
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let fields: Vec<&str> = line.trim_end().splitn(4, SEP).collect();
+        if fields.len() < 3 {
+            continue;
+        }
+        let Ok(pid) = fields[0].trim().parse::<u32>() else { continue };
+
+        let name = fields[1].trim();
+        let name = name
+            .strip_suffix(".exe")
+            .or(Some(name))
+            .filter(|n| !n.is_empty())
+            .map(str::to_string);
+
+        let uptime_secs = fields[2].trim().parse::<i64>().ok().filter(|s| *s >= 0).map(|s| s as u64);
+
+        let command = fields
+            .get(3)
+            .map(|c| c.trim())
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_string());
+
+        table.insert(pid, WinProc { name, command, uptime_secs });
+    }
+
+    table
+}
+
 /// Discover listening ports on Windows using `netstat -ano`.
 #[cfg(target_os = "windows")]
 async fn discover_all_listening_ports() -> Vec<PortInfo> {
@@ -445,6 +581,15 @@ async fn discover_all_listening_ports() -> Vec<PortInfo> {
     };
 
     let mut results: HashMap<u16, PortInfo> = HashMap::new();
+
+    // One snapshot for every PID we are about to see. Only when the whole
+    // query fails do we fall back to the per-PID helpers: a *missing field*
+    // must not trigger a fallback, because the common reason `CommandLine` is
+    // null (reading another user's or a system process's command line needs
+    // elevation) applies equally to the per-PID query — retrying would spawn a
+    // PowerShell per process to obtain the same null.
+    let procs = windows_process_table();
+    let have_table = !procs.is_empty();
 
     // netstat -ano output:
     // Proto  Local Address    Foreign Address  State        PID
@@ -473,9 +618,14 @@ async fn discover_all_listening_ports() -> Vec<PortInfo> {
         // PID is the last column
         let pid: Option<u32> = parts.last().and_then(|s| s.parse().ok());
 
-        // Get process name via tasklist
-        let process_name = pid.and_then(get_process_name_windows);
-        let command = pid.and_then(get_process_command_sync);
+        // Prefer the batched snapshot; fall back to per-PID lookups only when
+        // the snapshot is unavailable for this process.
+        let row = pid.and_then(|p| procs.get(&p));
+        let (process_name, command) = if have_table {
+            (row.and_then(|r| r.name.clone()), row.and_then(|r| r.command.clone()))
+        } else {
+            (pid.and_then(get_process_name_windows), pid.and_then(get_process_command_sync))
+        };
 
         results.insert(port, PortInfo {
             port,
@@ -483,7 +633,7 @@ async fn discover_all_listening_ports() -> Vec<PortInfo> {
             pid,
             process_name,
             command,
-            uptime_secs: None,
+            uptime_secs: row.and_then(|r| r.uptime_secs),
             category: None,
         });
     }
