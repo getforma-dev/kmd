@@ -1,11 +1,72 @@
 name: Release
 
+# Tests run on every push to main and on pull requests, so a regression is
+# caught long before release. Building and publishing happen only for a tag,
+# and only after the tests pass.
 on:
   push:
     tags: ['v*']
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build client
+        shell: bash
+        run: bash build-client.sh
+
+      - name: Unit tests
+        run: cargo test
+
+      # The e2e suite drives the real binary, so it needs a release build.
+      - name: Build binary
+        run: cargo build --release
+
+      - name: Install Playwright browser
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            npx playwright install --with-deps chromium
+          else
+            npx playwright install chromium
+          fi
+
+      - name: End-to-end tests
+        run: npx playwright test
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results-${{ matrix.os }}
+          path: test-results/
+          retention-days: 7
+
   build:
+    # Only tags publish; pushes to main and PRs stop after `test`.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -101,6 +162,7 @@ jobs:
           path: npm/${{ matrix.npm-pkg }}/bin/
 
   publish-meta:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
