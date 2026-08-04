@@ -154,9 +154,7 @@ pub async fn scan_ports() -> Vec<PortInfo> {
 /// Windows resolves the whole process table in a single PowerShell call; other
 /// platforms fall back to the per-PID path, which is cheap there (`ps`).
 #[cfg(target_os = "windows")]
-fn get_process_uptimes(pids: &[u32]) -> std::collections::HashMap<u32, u64> {
-    use std::collections::HashMap;
-
+fn get_process_uptimes(pids: &[u32]) -> HashMap<u32, u64> {
     let mut map = HashMap::new();
     if pids.is_empty() {
         return map;
@@ -201,7 +199,7 @@ fn get_process_uptimes(pids: &[u32]) -> std::collections::HashMap<u32, u64> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn get_process_uptimes(pids: &[u32]) -> std::collections::HashMap<u32, u64> {
+fn get_process_uptimes(pids: &[u32]) -> HashMap<u32, u64> {
     pids.iter()
         .filter_map(|&pid| get_process_uptime(pid).map(|secs| (pid, secs)))
         .collect()
